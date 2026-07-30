@@ -155,8 +155,7 @@ const write = await call('POST', '/v1/organizations', {
 report('escrita depois da verificação é aceita', write.status < 300, `HTTP ${write.status}`);
 
 // 7 — senha errada
-// secret-scan:ignore — senha propositalmente errada
-const wrong = await call('POST', '/v1/auth/login', { body: { email, password: 'senha-errada-123' } });
+const wrong = await call('POST', '/v1/auth/login', { body: { email, password: 'senha-errada-123' } }); // secret-scan:ignore
 report('senha errada é recusada', wrong.status >= 400, `HTTP ${wrong.status}`);
 
 // 8 — anti-enumeração: conta inexistente responde igual
