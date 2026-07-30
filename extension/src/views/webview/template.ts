@@ -139,7 +139,7 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
     </header>
 
     <div class="popover" id="sessions-popover" role="dialog" aria-label="${label('Sessions')}" hidden>
-      <div class="segmented" role="tablist" aria-label="Chat type">
+      <div class="segmented" role="tablist" aria-label="${label('Chat type')}">
         <button class="segment" role="tab" type="button" data-chat-type="local">${ICONS.local}<span>${t('Local')}</span></button>
         <button class="segment" role="tab" type="button" data-chat-type="web">${ICONS.web}<span>${t('Web')}</span></button>
       </div>
@@ -202,7 +202,7 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
           id="composer-input"
           rows="1"
           placeholder="${label('Ask Prometheon…  (Enter to send · paste to attach an image)')}"
-          aria-label="Message"
+          aria-label="${label('Message')}"
         ></textarea>
         <div class="composer-bar">
           <button class="icon-button" type="button" id="attach-image" title="${label('Attach image')}" aria-label="${label('Attach image')}">${ICONS.attach}</button>

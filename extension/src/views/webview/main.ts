@@ -95,6 +95,17 @@ function s(english: string): string {
   return STRINGS[english] ?? english;
 }
 
+/**
+ * Texto com valores no meio: os marcadores são `{0}`, `{1}`… como no
+ * `vscode.l10n`. A tradução pode reordenar os marcadores sem tocar no código.
+ */
+function sf(english: string, ...values: readonly (string | number)[]): string {
+  return s(english).replace(/\{(\d+)\}/g, (match, index: string) => {
+    const value = values[Number(index)];
+    return value === undefined ? match : String(value);
+  });
+}
+
 /** Estado leve preservado quando a view é escondida e reconstruída. */
 interface PersistedUi {
   readonly draft: string;
@@ -513,7 +524,7 @@ function renderThumbnail(attachment: DraftAttachment): HTMLElement {
   button.type = 'button';
   button.className = 'thumb-open';
   button.title = `${attachment.name} · ${describe(attachment)}`;
-  button.setAttribute('aria-label', `Open ${attachment.name}`);
+  button.setAttribute('aria-label', sf('Open {0}', attachment.name));
   button.addEventListener('click', () => openLightbox(attachment));
 
   const image = document.createElement('img');
@@ -554,8 +565,8 @@ function renderAttachmentChip(attachment: DraftAttachment, onRemove: () => void)
   remove.type = 'button';
   remove.className = 'chip-remove';
   remove.textContent = '×';
-  remove.title = 'Remove image';
-  remove.setAttribute('aria-label', `Remove ${attachment.name}`);
+  remove.title = s('Remove image');
+  remove.setAttribute('aria-label', sf('Remove {0}', attachment.name));
   remove.addEventListener('click', onRemove);
 
   item.append(open, remove);
@@ -588,12 +599,12 @@ function renderDrafts(): void {
 function addDrafts(attachments: readonly DraftAttachment[]): void {
   const room = MAX_ATTACHMENTS_PER_MESSAGE - drafts.length;
   if (room <= 0) {
-    showNotification(`At most ${MAX_ATTACHMENTS_PER_MESSAGE} images per message.`, 'warning');
+    showNotification(sf('At most {0} images per message.', MAX_ATTACHMENTS_PER_MESSAGE), 'warning');
     return;
   }
   const accepted = attachments.slice(0, room);
   if (accepted.length < attachments.length) {
-    showNotification(`At most ${MAX_ATTACHMENTS_PER_MESSAGE} images per message.`, 'warning');
+    showNotification(sf('At most {0} images per message.', MAX_ATTACHMENTS_PER_MESSAGE), 'warning');
   }
   drafts = [...drafts, ...accepted];
   renderDrafts();
@@ -615,12 +626,12 @@ function isImageMimeType(value: string): value is ImageMimeType {
 
 async function readFileAsAttachment(file: File): Promise<DraftAttachment | null> {
   if (!isImageMimeType(file.type)) {
-    showNotification(`Unsupported image format: ${file.name || file.type}`, 'warning');
+    showNotification(sf('Unsupported image format: {0}', file.name || file.type), 'warning');
     return null;
   }
   if (file.size > MAX_ATTACHMENT_BYTES) {
     showNotification(
-      `Image is larger than ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB.`,
+      sf('Image is larger than {0} MB.', Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)),
       'warning',
     );
     return null;
@@ -673,7 +684,7 @@ let wordTimer = 0;
 let wordFadeTimer = 0;
 
 function currentWord(): string {
-  return `${WORKING_WORDS[wordIndex] ?? 'Working'}…`;
+  return `${s(WORKING_WORDS[wordIndex] ?? 'Working')}…`;
 }
 
 function startWorkingWords(): void {
@@ -1198,15 +1209,17 @@ function renderAccountsSection(): readonly Node[] {
   const providers = state?.providers ?? [];
   const blocks: Node[] = [
     sectionHeading(
-      'Accounts',
-      'Each account is a separate CLI sign-in with its own configuration directory. Signing in always happens through the official CLI flow.',
+      s('Accounts'),
+      s(
+        'Each account is a separate CLI sign-in with its own configuration directory. Signing in always happens through the official CLI flow.',
+      ),
     ),
   ];
 
   if (accounts.length === 0) {
     blocks.push(
       emptyNote(
-        'No account yet. Create one to give an agent its own CLI sign-in, isolated from the others.',
+        s('No account yet. Create one to give an agent its own CLI sign-in, isolated from the others.'),
       ),
     );
   } else {
@@ -1216,7 +1229,9 @@ function renderAccountsSection(): readonly Node[] {
   blocks.push(
     renderAccountForm(providers),
     emptyNote(
-      'Token counts are measured by Prometheon on this machine. Subscription limits live in each provider account and are not read from here.',
+      s(
+        'Token counts are measured by Prometheon on this machine. Subscription limits live in each provider account and are not read from here.',
+      ),
     ),
   );
   return blocks;
@@ -1225,10 +1240,10 @@ function renderAccountsSection(): readonly Node[] {
 function renderAccountForm(providers: PrometheonViewState['providers']): HTMLElement {
   const form = document.createElement('section');
   form.className = 'settings-form';
-  form.append(sectionHeading('New account'));
+  form.append(sectionHeading(s('New account')));
 
   if (providers.length === 0) {
-    form.append(emptyNote('No provider adapter is available yet.'));
+    form.append(emptyNote(s('No provider adapter is available yet.')));
     return form;
   }
 
@@ -1240,7 +1255,7 @@ function renderAccountForm(providers: PrometheonViewState['providers']): HTMLEle
 
   form.append(
     field(
-      'Name',
+      s('Name'),
       textInput({
         name: 'account-name',
         value: accountDraft.name,
@@ -1250,14 +1265,14 @@ function renderAccountForm(providers: PrometheonViewState['providers']): HTMLEle
           accountDraft = { ...accountDraft, name: value };
         },
       }),
-      'A name to tell this account apart from the others.',
+      s('A name to tell this account apart from the others.'),
     ),
     menuField(
-      'Provider',
+      s('Provider'),
       providers.map((provider) => ({
         value: provider.id,
         label: provider.name,
-        description: `Isolated through ${provider.configEnvironmentVariable}`,
+        description: sf('Isolated through {0}', provider.configEnvironmentVariable),
         icon: 'cloud',
       })),
       accountDraft.providerId,
@@ -1267,10 +1282,10 @@ function renderAccountForm(providers: PrometheonViewState['providers']): HTMLEle
       },
     ),
     actionRow(
-      actionButton('Create account', 'primary', () => {
+      actionButton(s('Create account'), 'primary', () => {
         const name = accountDraft.name.trim();
         if (name === '' || accountDraft.providerId === '') {
-          showNotification('Give the account a name before creating it.', 'warning');
+          showNotification(s('Give the account a name before creating it.'), 'warning');
           return;
         }
         post({ type: 'accounts.create', payload: { name, providerId: accountDraft.providerId } });
@@ -1294,31 +1309,36 @@ function renderAccount(account: PrometheonViewState['accounts'][number]): HTMLEl
   const state = document.createElement('span');
   state.className = 'account-state';
   state.textContent = account.authenticated
-    ? 'Signed in'
+    ? s('Signed in')
     : account.cliInstalled
-      ? 'Signed out'
-      : 'CLI missing';
+      ? s('Signed out')
+      : s('CLI missing');
 
   header.append(name, state);
   card.append(header);
 
   const rows: [string, string][] = [
-    ['Provider', account.cliVersion === undefined ? account.providerName : `${account.providerName} ${account.cliVersion}`],
+    [
+      s('Provider'),
+      account.cliVersion === undefined
+        ? account.providerName
+        : `${account.providerName} ${account.cliVersion}`,
+    ],
   ];
   if (account.authMethod !== undefined) {
-    rows.push(['Auth method', account.authMethod]);
+    rows.push([s('Auth method'), account.authMethod]);
   }
   if (account.accountLabel !== undefined) {
-    rows.push(['Email', account.accountLabel]);
+    rows.push([s('Email'), account.accountLabel]);
   }
   if (account.organization !== undefined) {
-    rows.push(['Organization', account.organization]);
+    rows.push([s('Organization'), account.organization]);
   }
   if (account.plan !== undefined) {
-    rows.push(['Plan', account.plan]);
+    rows.push([s('Plan'), account.plan]);
   }
   if (account.message !== undefined && !account.authenticated) {
-    rows.push(['Status', account.message]);
+    rows.push([s('Status'), account.message]);
   }
   card.append(definitionList(rows));
 
@@ -1326,13 +1346,13 @@ function renderAccount(account: PrometheonViewState['accounts'][number]): HTMLEl
   usage.className = 'usage';
   const title = document.createElement('span');
   title.className = 'usage-title';
-  title.textContent = 'Tokens measured locally';
+  title.textContent = s('Tokens measured locally');
   usage.append(title);
   usage.append(
     definitionList([
-      ['Today', tokenPair(account.usage.today)],
-      ['Last 7 days', tokenPair(account.usage.last7Days)],
-      ['All time', `${tokenPair(account.usage.total)} · ${account.usage.runs} runs`],
+      [s('Today'), tokenPair(account.usage.today)],
+      [s('Last 7 days'), tokenPair(account.usage.last7Days)],
+      [s('All time'), sf('{0} · {1} runs', tokenPair(account.usage.total), account.usage.runs)],
     ]),
   );
   card.append(usage);
@@ -1346,13 +1366,13 @@ function renderAccount(account: PrometheonViewState['accounts'][number]): HTMLEl
   const actions = document.createElement('div');
   actions.className = 'account-actions';
   actions.append(
-    accountButton(account.authenticated ? 'Sign in again' : 'Sign in', () =>
+    accountButton(account.authenticated ? s('Sign in again') : s('Sign in'), () =>
       post({ type: 'accounts.login', payload: { profileId: account.profileId } }),
     ),
-    accountButton('Sign out', () =>
+    accountButton(s('Sign out'), () =>
       post({ type: 'accounts.logout', payload: { profileId: account.profileId } }),
     ),
-    accountButton('Remove', () =>
+    accountButton(s('Remove'), () =>
       post({ type: 'accounts.remove', payload: { profileId: account.profileId } }),
     ),
   );
@@ -1410,22 +1430,24 @@ function renderAgentsSection(): readonly Node[] {
   const accounts = state?.accounts ?? [];
   const blocks: Node[] = [
     sectionHeading(
-      'Agent Profiles',
-      'Every agent runs through one account. Prometheon never falls back to another one when the bound account is unavailable.',
+      s('Agent Profiles'),
+      s(
+        'Every agent runs through one account. Prometheon never falls back to another one when the bound account is unavailable.',
+      ),
     ),
   ];
 
   if (accounts.length === 0) {
     blocks.push(
-      emptyNote('An agent profile needs an account. Create one first, then come back here.'),
-      actionRow(actionButton('Go to Accounts', 'ghost', () => selectSection('accounts'))),
+      emptyNote(s('An agent profile needs an account. Create one first, then come back here.')),
+      actionRow(actionButton(s('Go to Accounts'), 'ghost', () => selectSection('accounts'))),
     );
     return blocks;
   }
 
   blocks.push(
     profiles.length === 0
-      ? emptyNote('No agent profile yet.')
+      ? emptyNote(s('No agent profile yet.'))
       : fragment(profiles.map(renderAgentProfile)),
   );
 
@@ -1433,7 +1455,7 @@ function renderAgentsSection(): readonly Node[] {
     const firstAccount = accounts[0];
     blocks.push(
       actionRow(
-        actionButton('New agent profile', 'primary', () => {
+        actionButton(s('New agent profile'), 'primary', () => {
           agentDraft = newAgentDraft(firstAccount?.profileId ?? '');
           renderSettings();
         }),
@@ -1463,7 +1485,7 @@ function renderAgentProfile(summary: AgentProfileSummary): HTMLElement {
 
   const role = document.createElement('span');
   role.className = 'account-state';
-  role.textContent = AGENT_ROLE_LABELS[profile.role];
+  role.textContent = s(AGENT_ROLE_LABELS[profile.role]);
 
   header.append(name, role);
   card.append(header);
@@ -1472,20 +1494,20 @@ function renderAgentProfile(summary: AgentProfileSummary): HTMLElement {
   // fique escondida.
   const chain = document.createElement('p');
   chain.className = 'agent-chain';
-  chain.textContent = `${profile.name} → ${summary.providerName ?? 'unknown provider'} → ${summary.accountName ?? profile.providerProfileId}`;
+  chain.textContent = `${profile.name} → ${summary.providerName ?? s('unknown provider')} → ${summary.accountName ?? profile.providerProfileId}`;
   card.append(chain);
 
   const rows: [string, string][] = [
-    ['Model', profile.model ?? 'Chosen by the CLI'],
-    ['Autonomy', AGENT_AUTONOMY_MODE_LABELS[profile.autonomyMode]],
-    ['Context', CONTEXT_STRATEGY_LABELS[profile.contextStrategy]],
-    ['Max sessions', String(profile.maxConcurrentSessions)],
+    [s('Model'), profile.model ?? s('Chosen by the CLI')],
+    [s('Autonomy'), s(AGENT_AUTONOMY_MODE_LABELS[profile.autonomyMode])],
+    [s('Context'), s(CONTEXT_STRATEGY_LABELS[profile.contextStrategy])],
+    [s('Max sessions'), String(profile.maxConcurrentSessions)],
   ];
   if (profile.allowedTools.length > 0) {
-    rows.push(['Allowed tools', profile.allowedTools.join(', ')]);
+    rows.push([s('Allowed tools'), profile.allowedTools.join(', ')]);
   }
   if (profile.deniedTools.length > 0) {
-    rows.push(['Denied tools', profile.deniedTools.join(', ')]);
+    rows.push([s('Denied tools'), profile.deniedTools.join(', ')]);
   }
   card.append(definitionList(rows));
 
@@ -1495,17 +1517,17 @@ function renderAgentProfile(summary: AgentProfileSummary): HTMLElement {
 
   card.append(
     actionRow(
-      actionButton('Edit', 'ghost', () => {
+      actionButton(s('Edit'), 'ghost', () => {
         agentDraft = draftFromSummary(summary);
         renderSettings();
       }),
-      actionButton(profile.enabled ? 'Disable' : 'Enable', 'ghost', () =>
+      actionButton(profile.enabled ? s('Disable') : s('Enable'), 'ghost', () =>
         post({
           type: 'agentProfiles.setEnabled',
           payload: { id: profile.id, enabled: !profile.enabled },
         }),
       ),
-      actionButton('Remove', 'ghost', () =>
+      actionButton(s('Remove'), 'ghost', () =>
         post({ type: 'agentProfiles.remove', payload: { id: profile.id } }),
       ),
     ),
@@ -1519,7 +1541,7 @@ function renderAgentForm(
 ): HTMLElement {
   const form = document.createElement('section');
   form.className = 'settings-form';
-  form.append(sectionHeading(draft.id === null ? 'New agent profile' : `Edit ${draft.name}`));
+  form.append(sectionHeading(draft.id === null ? s('New agent profile') : sf('Edit {0}', draft.name)));
 
   const update = (patch: Partial<AgentDraft>, redraw = false): void => {
     agentDraft = { ...draft, ...patch };
@@ -1530,7 +1552,7 @@ function renderAgentForm(
 
   form.append(
     field(
-      'Name',
+      s('Name'),
       textInput({
         name: 'agent-name',
         value: draft.name,
@@ -1540,95 +1562,95 @@ function renderAgentForm(
       }),
     ),
     menuField(
-      'Account',
+      s('Account'),
       accounts.map((account) => ({
         value: account.profileId,
         label: account.name,
         description: account.authenticated
-          ? `${account.providerName} · signed in`
-          : `${account.providerName} · not signed in`,
+          ? sf('{0} · signed in', account.providerName)
+          : sf('{0} · not signed in', account.providerName),
         icon: 'cloud',
       })),
       draft.providerProfileId,
       (value) => update({ providerProfileId: value }, true),
-      'The account this agent runs through. It is required.',
+      s('The account this agent runs through. It is required.'),
     ),
     menuField(
-      'Role',
+      s('Role'),
       AGENT_ROLES.map((role) => ({
         value: role,
-        label: AGENT_ROLE_LABELS[role],
-        description: AGENT_ROLE_DESCRIPTIONS[role],
+        label: s(AGENT_ROLE_LABELS[role]),
+        description: s(AGENT_ROLE_DESCRIPTIONS[role]),
         icon: ROLE_ICONS[role],
       })),
       draft.role,
       (value) => update({ role: value as AgentRole }, true),
     ),
     field(
-      'Model',
+      s('Model'),
       textInput({
         name: 'agent-model',
         value: draft.model,
-        placeholder: 'Leave empty to use the CLI default',
+        placeholder: s('Leave empty to use the CLI default'),
         maxLength: MAX_MODEL_LENGTH,
         onInput: (value) => update({ model: value }),
       }),
-      'Free text: Prometheon does not list models. The CLI validates it when the agent runs.',
+      s('Free text: Prometheon does not list models. The CLI validates it when the agent runs.'),
     ),
     field(
-      'System prompt',
+      s('System prompt'),
       textArea({
         name: 'agent-prompt',
         value: draft.systemPrompt,
-        placeholder: 'How this agent should behave.',
+        placeholder: s('How this agent should behave.'),
         maxLength: MAX_SYSTEM_PROMPT_LENGTH,
         onInput: (value) => update({ systemPrompt: value }),
       }),
     ),
     menuField(
-      'Autonomy',
+      s('Autonomy'),
       AGENT_AUTONOMY_MODES.map((mode) => ({
         value: mode,
-        label: AGENT_AUTONOMY_MODE_LABELS[mode],
-        description: AGENT_AUTONOMY_MODE_DESCRIPTIONS[mode],
+        label: s(AGENT_AUTONOMY_MODE_LABELS[mode]),
+        description: s(AGENT_AUTONOMY_MODE_DESCRIPTIONS[mode]),
         icon: AGENT_AUTONOMY_ICONS[mode],
       })),
       draft.autonomyMode,
       (value) => update({ autonomyMode: value as AgentAutonomyMode }, true),
     ),
     menuField(
-      'Context strategy',
+      s('Context strategy'),
       CONTEXT_STRATEGIES.map((strategy) => ({
         value: strategy,
-        label: CONTEXT_STRATEGY_LABELS[strategy],
-        description: CONTEXT_STRATEGY_DESCRIPTIONS[strategy],
+        label: s(CONTEXT_STRATEGY_LABELS[strategy]),
+        description: s(CONTEXT_STRATEGY_DESCRIPTIONS[strategy]),
         icon: CONTEXT_ICONS[strategy],
       })),
       draft.contextStrategy,
       (value) => update({ contextStrategy: value as ContextStrategy }, true),
     ),
     field(
-      'Allowed tools',
+      s('Allowed tools'),
       textInput({
         name: 'agent-allowed',
         value: draft.allowedTools,
         placeholder: 'Read, Grep, Bash',
         onInput: (value) => update({ allowedTools: value }),
       }),
-      'Comma separated. Empty means the provider default.',
+      s('Comma separated. Empty means the provider default.'),
     ),
     field(
-      'Denied tools',
+      s('Denied tools'),
       textInput({
         name: 'agent-denied',
         value: draft.deniedTools,
         placeholder: 'Bash, Write',
         onInput: (value) => update({ deniedTools: value }),
       }),
-      'Comma separated.',
+      s('Comma separated.'),
     ),
     field(
-      'Max concurrent sessions',
+      s('Max concurrent sessions'),
       textInput({
         name: 'agent-sessions',
         value: draft.maxConcurrentSessions,
@@ -1636,14 +1658,14 @@ function renderAgentForm(
         maxLength: 2,
         onInput: (value) => update({ maxConcurrentSessions: value }),
       }),
-      `Between 1 and ${MAX_CONCURRENT_SESSIONS}.`,
+      sf('Between 1 and {0}.', MAX_CONCURRENT_SESSIONS),
     ),
-    checkboxField('Enabled', draft.enabled, (value) => update({ enabled: value })),
+    checkboxField(s('Enabled'), draft.enabled, (value) => update({ enabled: value })),
     actionRow(
-      actionButton(draft.id === null ? 'Create agent' : 'Save agent', 'primary', () =>
+      actionButton(draft.id === null ? s('Create agent') : s('Save agent'), 'primary', () =>
         submitAgentDraft(),
       ),
-      actionButton('Cancel', 'ghost', () => {
+      actionButton(s('Cancel'), 'ghost', () => {
         agentDraft = null;
         renderSettings();
       }),
@@ -1659,16 +1681,19 @@ function submitAgentDraft(): void {
   }
   const name = draft.name.trim();
   if (name === '') {
-    showNotification('Give the agent profile a name.', 'warning');
+    showNotification(s('Give the agent profile a name.'), 'warning');
     return;
   }
   if (draft.providerProfileId === '') {
-    showNotification('Pick the account this agent runs through.', 'warning');
+    showNotification(s('Pick the account this agent runs through.'), 'warning');
     return;
   }
   const sessions = Number(draft.maxConcurrentSessions);
   if (!Number.isInteger(sessions) || sessions < 1 || sessions > MAX_CONCURRENT_SESSIONS) {
-    showNotification(`Max concurrent sessions must be between 1 and ${MAX_CONCURRENT_SESSIONS}.`, 'warning');
+    showNotification(
+      sf('Max concurrent sessions must be between 1 and {0}.', MAX_CONCURRENT_SESSIONS),
+      'warning',
+    );
     return;
   }
 
@@ -1703,32 +1728,34 @@ function renderWorkspaceSection(): readonly Node[] {
   const workspace = state?.workspace;
   const blocks: Node[] = [
     sectionHeading(
-      'Workspace',
-      'The shared Prometheon workspace lives in .prometheon/ inside the open folder. Local Chat works without it.',
+      s('Workspace'),
+      s(
+        'The shared Prometheon workspace lives in .prometheon/ inside the open folder. Local Chat works without it.',
+      ),
     ),
   ];
 
   if (workspace !== undefined) {
     blocks.push(
       definitionList([
-        ['Folder', workspace.folderName ?? 'None open'],
-        ['Configured', workspace.configured ? 'Yes' : 'No'],
-        ['Git repository', workspace.hasGit ? 'Detected' : 'Not detected'],
-        ['External folder', workspace.externalFolder ?? 'None'],
-        ['Setup skipped', workspace.skipped ? 'Yes' : 'No'],
+        [s('Folder'), workspace.folderName ?? s('None open')],
+        [s('Configured'), workspace.configured ? s('Yes') : s('No')],
+        [s('Git repository'), workspace.hasGit ? s('Detected') : s('Not detected')],
+        [s('External folder'), workspace.externalFolder ?? s('None')],
+        [s('Setup skipped'), workspace.skipped ? s('Yes') : s('No')],
       ]),
     );
   }
 
   blocks.push(
     actionRow(
-      actionButton('Initialize in current workspace', 'primary', () =>
+      actionButton(s('Initialize in current workspace'), 'primary', () =>
         post({ type: 'workspace.initialize', payload: { choice: 'current' } }),
       ),
-      actionButton('Choose Prometheon workspace folder', 'ghost', () =>
+      actionButton(s('Choose Prometheon workspace folder'), 'ghost', () =>
         post({ type: 'workspace.initialize', payload: { choice: 'external' } }),
       ),
-      actionButton('Continue without shared workspace', 'link', () =>
+      actionButton(s('Continue without shared workspace'), 'link', () =>
         post({ type: 'workspace.initialize', payload: { choice: 'skip' } }),
       ),
     ),
@@ -1797,18 +1824,22 @@ function renderMcpSection(): readonly Node[] {
   const mcp = state?.mcp;
   const blocks: Node[] = [
     sectionHeading(
-      'MCP servers',
-      'Model Context Protocol servers of this project, read from .mcp.json — the same file Claude Code, Cursor and VS Code use.',
+      s('MCP servers'),
+      s(
+        'Model Context Protocol servers of this project, read from .mcp.json — the same file Claude Code, Cursor and VS Code use.',
+      ),
     ),
   ];
 
   if (mcp === undefined || !mcp.available) {
     blocks.push(
       emptyNote(
-        mcp?.message ??
-          'MCP servers are configured in .mcp.json at the root of the open folder. Open a folder to configure them.',
+        s(
+          mcp?.message ??
+            'MCP servers are configured in .mcp.json at the root of the open folder. Open a folder to configure them.',
+        ),
       ),
-      actionRow(actionButton('Go to Workspace', 'ghost', () => selectSection('workspace'))),
+      actionRow(actionButton(s('Go to Workspace'), 'ghost', () => selectSection('workspace'))),
     );
     return blocks;
   }
@@ -1816,11 +1847,11 @@ function renderMcpSection(): readonly Node[] {
   if (mcp.file !== null) {
     const path = document.createElement('code');
     path.className = 'account-directory';
-    path.textContent = mcp.exists ? mcp.file : `${mcp.file} (not created yet)`;
+    path.textContent = mcp.exists ? mcp.file : sf('{0} (not created yet)', mcp.file);
     path.title = mcp.file;
     blocks.push(path);
   }
-  blocks.push(emptyNote(MCP_SECRET_NOTE));
+  blocks.push(emptyNote(s(MCP_SECRET_NOTE)));
 
   for (const problem of mcp.problems) {
     blocks.push(warningNote(`${problem.name}: ${problem.detail}`));
@@ -1828,19 +1859,19 @@ function renderMcpSection(): readonly Node[] {
 
   blocks.push(
     mcp.servers.length === 0
-      ? emptyNote('No MCP server configured yet.')
+      ? emptyNote(s('No MCP server configured yet.'))
       : fragment(mcp.servers.map(renderMcpServer)),
   );
 
   if (mcpDraft === null) {
     blocks.push(
       actionRow(
-        actionButton('Add server', 'primary', () => {
+        actionButton(s('Add server'), 'primary', () => {
           mcpDraft = newMcpDraft();
           renderSettings();
         }),
         // A leitura do arquivo escolhido acontece na extensão: a webview só pede.
-        actionButton('Import from .mcp.json', 'ghost', () => post({ type: 'mcp.import' })),
+        actionButton(s('Import from .mcp.json'), 'ghost', () => post({ type: 'mcp.import' })),
       ),
     );
   } else {
@@ -1860,29 +1891,31 @@ function renderMcpServer(server: McpServerSummary): HTMLElement {
 
   const status = document.createElement('span');
   status.className = 'account-state';
-  status.textContent = server.enabled ? 'Enabled' : 'Disabled';
+  status.textContent = server.enabled ? s('Enabled') : s('Disabled');
 
   header.append(name, status);
   card.append(header);
 
-  const rows: [string, string][] = [['Transport', MCP_TRANSPORT_LABELS[server.transport]]];
+  const rows: [string, string][] = [
+    [s('Transport'), s(MCP_TRANSPORT_LABELS[server.transport])],
+  ];
   if (server.command !== undefined) {
-    rows.push(['Command', server.command]);
+    rows.push([s('Command'), server.command]);
   }
   if (server.args.length > 0) {
-    rows.push(['Arguments', server.args.join(' ')]);
+    rows.push([s('Arguments'), server.args.join(' ')]);
   }
   if (server.url !== undefined) {
-    rows.push(['URL', server.url]);
+    rows.push([s('URL'), server.url]);
   }
   if (server.env.length > 0) {
-    rows.push(['Environment', server.env.map((pair) => pair.key).join(', ')]);
+    rows.push([s('Environment'), server.env.map((pair) => pair.key).join(', ')]);
   }
   if (server.headers.length > 0) {
-    rows.push(['Headers', server.headers.map((pair) => pair.key).join(', ')]);
+    rows.push([s('Headers'), server.headers.map((pair) => pair.key).join(', ')]);
   }
   if (server.preservedFields.length > 0) {
-    rows.push(['Kept as is', server.preservedFields.join(', ')]);
+    rows.push([s('Kept as is'), server.preservedFields.join(', ')]);
   }
   card.append(definitionList(rows));
 
@@ -1892,14 +1925,14 @@ function renderMcpServer(server: McpServerSummary): HTMLElement {
 
   card.append(
     actionRow(
-      actionButton('Edit', 'ghost', () => {
+      actionButton(s('Edit'), 'ghost', () => {
         mcpDraft = draftFromServer(server);
         renderSettings();
       }),
-      actionButton(server.enabled ? 'Disable' : 'Enable', 'ghost', () =>
+      actionButton(server.enabled ? s('Disable') : s('Enable'), 'ghost', () =>
         post({ type: 'mcp.setEnabled', payload: { name: server.name, enabled: !server.enabled } }),
       ),
-      actionButton('Remove', 'ghost', () =>
+      actionButton(s('Remove'), 'ghost', () =>
         post({ type: 'mcp.remove', payload: { name: server.name } }),
       ),
     ),
@@ -1910,7 +1943,9 @@ function renderMcpServer(server: McpServerSummary): HTMLElement {
 function renderMcpForm(draft: McpDraft): HTMLElement {
   const form = document.createElement('section');
   form.className = 'settings-form';
-  form.append(sectionHeading(draft.original === null ? 'New MCP server' : `Edit ${draft.original}`));
+  form.append(
+    sectionHeading(draft.original === null ? s('New MCP server') : sf('Edit {0}', draft.original)),
+  );
 
   const update = (patch: Partial<McpDraft>, redraw = false): void => {
     mcpDraft = { ...draft, ...patch };
@@ -1931,18 +1966,18 @@ function renderMcpForm(draft: McpDraft): HTMLElement {
 
   form.append(
     field(
-      'Name',
+      s('Name'),
       nameInput,
       draft.original === null
-        ? 'Letters, digits, dot, dash and underscore. It is the key inside .mcp.json.'
-        : 'To rename a server, remove it and add it again.',
+        ? s('Letters, digits, dot, dash and underscore. It is the key inside .mcp.json.')
+        : s('To rename a server, remove it and add it again.'),
     ),
     menuField(
-      'Transport',
+      s('Transport'),
       MCP_TRANSPORTS.map((transport) => ({
         value: transport,
-        label: MCP_TRANSPORT_LABELS[transport],
-        description: MCP_TRANSPORT_DESCRIPTIONS[transport],
+        label: s(MCP_TRANSPORT_LABELS[transport]),
+        description: s(MCP_TRANSPORT_DESCRIPTIONS[transport]),
         icon: transport === 'stdio' ? 'plug' : 'cloud',
       })),
       draft.transport,
@@ -1953,7 +1988,7 @@ function renderMcpForm(draft: McpDraft): HTMLElement {
   if (draft.transport === 'stdio') {
     form.append(
       field(
-        'Command',
+        s('Command'),
         textInput({
           name: 'mcp-command',
           value: draft.command,
@@ -1963,7 +1998,7 @@ function renderMcpForm(draft: McpDraft): HTMLElement {
         }),
       ),
       field(
-        'Arguments',
+        s('Arguments'),
         textArea({
           name: 'mcp-args',
           value: draft.args,
@@ -1971,10 +2006,10 @@ function renderMcpForm(draft: McpDraft): HTMLElement {
           maxLength: 4_000,
           onInput: (value) => update({ args: value }),
         }),
-        'One argument per line.',
+        s('One argument per line.'),
       ),
       field(
-        'Environment',
+        s('Environment'),
         textArea({
           name: 'mcp-env',
           value: draft.env,
@@ -1982,13 +2017,13 @@ function renderMcpForm(draft: McpDraft): HTMLElement {
           maxLength: 4_000,
           onInput: (value) => update({ env: value }),
         }),
-        'KEY=value, one per line. Reference secrets by variable name, never by value.',
+        s('KEY=value, one per line. Reference secrets by variable name, never by value.'),
       ),
     );
   } else {
     form.append(
       field(
-        'URL',
+        s('URL'),
         textInput({
           name: 'mcp-url',
           value: draft.url,
@@ -1996,10 +2031,10 @@ function renderMcpForm(draft: McpDraft): HTMLElement {
           maxLength: MAX_MCP_URL_LENGTH,
           onInput: (value) => update({ url: value }),
         }),
-        'Must start with http:// or https://.',
+        s('Must start with http:// or https://.'),
       ),
       field(
-        'Headers',
+        s('Headers'),
         textArea({
           name: 'mcp-headers',
           value: draft.headers,
@@ -2007,18 +2042,18 @@ function renderMcpForm(draft: McpDraft): HTMLElement {
           maxLength: 4_000,
           onInput: (value) => update({ headers: value }),
         }),
-        'Header=value, one per line. Reference secrets by variable name, never by value.',
+        s('Header=value, one per line. Reference secrets by variable name, never by value.'),
       ),
     );
   }
 
   form.append(
-    checkboxField('Enabled', draft.enabled, (value) => update({ enabled: value })),
+    checkboxField(s('Enabled'), draft.enabled, (value) => update({ enabled: value })),
     actionRow(
-      actionButton(draft.original === null ? 'Add server' : 'Save server', 'primary', () =>
+      actionButton(draft.original === null ? s('Add server') : s('Save server'), 'primary', () =>
         submitMcpDraft(),
       ),
-      actionButton('Cancel', 'ghost', () => {
+      actionButton(s('Cancel'), 'ghost', () => {
         mcpDraft = null;
         renderSettings();
       }),
@@ -2034,7 +2069,7 @@ function submitMcpDraft(): void {
   }
   const name = draft.name.trim();
   if (name === '') {
-    showNotification('Give the MCP server a name.', 'warning');
+    showNotification(s('Give the MCP server a name.'), 'warning');
     return;
   }
 
@@ -2044,7 +2079,7 @@ function submitMcpDraft(): void {
   if (draft.transport === 'stdio') {
     const command = draft.command.trim();
     if (command === '') {
-      showNotification('A stdio server needs a command.', 'warning');
+      showNotification(s('A stdio server needs a command.'), 'warning');
       return;
     }
     server = {
@@ -2060,7 +2095,7 @@ function submitMcpDraft(): void {
   } else {
     const url = draft.url.trim();
     if (url === '') {
-      showNotification(`A ${draft.transport} server needs a URL.`, 'warning');
+      showNotification(sf('A {0} server needs a URL.', draft.transport), 'warning');
       return;
     }
     server = { ...base, args: [], env: [], url, headers: textToPairs(draft.headers) };
@@ -2531,7 +2566,7 @@ function renderStep(step: AgentStep): HTMLElement {
     item.className = 'step step-thought step-row status-done';
     const label = document.createElement('span');
     label.className = 'step-thought-label';
-    label.textContent = `Thought for ${formatElapsed(step.durationMs ?? 0)}`;
+    label.textContent = sf('Thought for {0}', formatElapsed(step.durationMs ?? 0));
     item.append(dot, label);
     return item;
   }
@@ -2709,11 +2744,11 @@ function renderAgents(agents: readonly ActiveAgentSummary[]): void {
 
       const role = document.createElement('span');
       role.className = `agent-role agent-role-${agent.role}`;
-      role.textContent = agent.role;
+      role.textContent = s(agent.role);
 
       const status = document.createElement('span');
       status.className = 'agent-status';
-      status.textContent = agent.status;
+      status.textContent = s(agent.status);
 
       const task = document.createElement('span');
       task.className = 'agent-task';
@@ -2768,7 +2803,7 @@ function render(next: PrometheonViewState): void {
     renderSessions();
   }
 
-  dom.hubBadge.textContent = HUB_STATE_LABELS[next.hub.state];
+  dom.hubBadge.textContent = s(HUB_STATE_LABELS[next.hub.state]);
   dom.hubBadge.className = `hub-badge hub-${next.hub.state}`;
   if (next.hub.detail !== undefined) {
     dom.hubBadge.title = next.hub.detail;
@@ -2796,8 +2831,8 @@ function render(next: PrometheonViewState): void {
   menus.workMode.update(
     WORK_MODES.map((mode) => ({
       value: mode,
-      label: WORK_MODE_LABELS[mode],
-      description: WORK_MODE_DESCRIPTIONS[mode],
+      label: s(WORK_MODE_LABELS[mode]),
+      description: s(WORK_MODE_DESCRIPTIONS[mode]),
       icon: mode,
     })),
     next.workMode,
@@ -2805,8 +2840,8 @@ function render(next: PrometheonViewState): void {
   menus.autonomy.update(
     AUTONOMY_LEVELS.map((level) => ({
       value: level,
-      label: AUTONOMY_LABELS[level],
-      description: AUTONOMY_DESCRIPTIONS[level],
+      label: s(AUTONOMY_LABELS[level]),
+      description: s(AUTONOMY_DESCRIPTIONS[level]),
       icon: level,
     })),
     next.autonomy,
@@ -2816,8 +2851,8 @@ function render(next: PrometheonViewState): void {
       value: agent.id,
       label: agent.displayName,
       description: agent.available
-        ? `Available · ${agent.transport}`
-        : `Unavailable · ${agent.transport}`,
+        ? sf('Available · {0}', agent.transport)
+        : sf('Unavailable · {0}', agent.transport),
       icon: 'agent',
     })),
     next.mainAgentId,
@@ -3152,7 +3187,7 @@ window.addEventListener('message', (event: MessageEvent<ExtensionToWebviewMessag
       renderAgents(message.payload);
       break;
     case 'hub.status':
-      dom.hubBadge.textContent = HUB_STATE_LABELS[message.payload.state];
+      dom.hubBadge.textContent = s(HUB_STATE_LABELS[message.payload.state]);
       dom.hubBadge.className = `hub-badge hub-${message.payload.state}`;
       break;
     case 'attachments.added':
