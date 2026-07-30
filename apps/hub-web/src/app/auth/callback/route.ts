@@ -3,6 +3,7 @@ import { hubRequestWithCookies } from '@/lib/api/client';
 import { loginResultSchema } from '@/lib/api/schemas';
 import { buildSession, writeSession } from '@/lib/auth/session';
 import { safeRedirect } from '@/lib/auth/safe-redirect';
+import { env } from '@/lib/env';
 
 /**
  * Volta do login por provedor externo.
@@ -24,7 +25,11 @@ import { safeRedirect } from '@/lib/auth/safe-redirect';
  * existe sessão.
  */
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  const origin = request.nextUrl.origin;
+  // O endereço público vem da configuração, e não de `request.nextUrl.origin`.
+  // Atrás de um proxy, o que o processo enxerga é o endereço em que ele escuta
+  // — `http://0.0.0.0:3550` dentro do container —, e mandar o navegador para lá
+  // é mandá-lo para lugar nenhum.
+  const origin = env().HUB_WEB_URL;
   const code = request.nextUrl.searchParams.get('code');
 
   if (code === null || code === '') {
