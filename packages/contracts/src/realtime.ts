@@ -11,12 +11,14 @@
 
 import { z } from 'zod';
 
+import { messageAuthorTypeSchema, messageStatusSchema } from './messages.js';
 import {
   cursorSchema,
   isoDateTimeSchema,
   shortTextSchema,
   ulidSchema,
 } from './primitives.js';
+import { taskStatusSchema } from './tasks.js';
 
 /** Versão do protocolo falada por este pacote. */
 export const REALTIME_PROTOCOL_VERSION = 1;
@@ -119,18 +121,12 @@ export const agentStoppedEventSchema = realtimeEvent(
   agentEventData.extend({ reason: shortTextSchema.nullable() }),
 );
 
+// O estado vem do próprio contrato de tarefa: duplicar o enum aqui já custou
+// um valor esquecido (`failed`), e um evento com estado fora do enum é
+// descartado pelo cliente exatamente quando mais importa.
 const taskEventData = z.object({
   taskId: ulidSchema,
-  status: z.enum([
-    'backlog',
-    'ready',
-    'claimed',
-    'in_progress',
-    'blocked',
-    'in_review',
-    'done',
-    'cancelled',
-  ]),
+  status: taskStatusSchema,
   version: z.int().nonnegative(),
   actor: actorSchema,
 });
@@ -156,8 +152,8 @@ const messageEventData = z.object({
   conversationId: ulidSchema,
   messageId: ulidSchema,
   sequence: z.int().nonnegative(),
-  authorType: z.enum(['user', 'agent', 'system']),
-  status: z.enum(['pending', 'streaming', 'complete', 'failed', 'cancelled']),
+  authorType: messageAuthorTypeSchema,
+  status: messageStatusSchema,
 });
 
 export const messageCreatedEventSchema = realtimeEvent(

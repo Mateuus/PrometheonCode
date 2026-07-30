@@ -20,6 +20,11 @@ import {
   versionSchema,
 } from './primitives.js';
 
+/**
+ * `failed` estava no `Docs/07` e faltava aqui. Ele não é sinônimo de
+ * `cancelled`: cancelada é decisão de quem coordena, falha é desfecho da
+ * execução — e só a segunda justifica uma nova tentativa.
+ */
 export const TASK_STATUSES = [
   'backlog',
   'ready',
@@ -29,6 +34,7 @@ export const TASK_STATUSES = [
   'in_review',
   'done',
   'cancelled',
+  'failed',
 ] as const;
 
 export const taskStatusSchema = z.enum(TASK_STATUSES);
@@ -136,7 +142,7 @@ export const claimTaskRequestSchema = z.object({
 export const releaseTaskRequestSchema = z.object({
   /** Estado em que a tarefa fica após ser liberada. */
   status: z
-    .enum(['ready', 'blocked', 'in_review', 'done', 'cancelled'])
+    .enum(['ready', 'blocked', 'in_review', 'done', 'cancelled', 'failed'])
     .default('ready'),
   note: longTextSchema.optional(),
 });

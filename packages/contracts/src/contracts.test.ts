@@ -13,7 +13,7 @@ import {
 } from './auth.js';
 import {
   changePlanRequestSchema,
-  FREE_PLAN,
+  planLimitViolationSchema,
   planListSchema,
   planSchema,
   subscriptionOverviewSchema,
@@ -417,8 +417,10 @@ describe('project, conversation and message contracts', () => {
         organizationId: ULID_B,
         projectId: ULID_C,
         title: 'Refatorar o parser',
-        status: 'open',
+        // Os estados são os do `Docs/07`: `active`, `archived` e `locked`.
+        status: 'active',
         origin: 'web',
+        workMode: 'plan',
         participants: [],
         lastSequence: 4,
         lastMessageAt: NOW,
@@ -559,11 +561,13 @@ describe('task and knowledge contracts', () => {
   it('validates a knowledge proposal and its review', () => {
     const proposal = createKnowledgeProposalSchema.parse({
       title: 'Usar ULID em todos os IDs',
-      kind: 'decision',
+      category: 'decision',
+      origin: 'decision',
       content: '# Decisão\n\nULID em string.',
     });
 
     expect(proposal.sources).toEqual([]);
+    expect(proposal.confidence).toBe(50);
     expect(
       knowledgeReviewRequestSchema.safeParse({ decision: 'approve', version: 1 })
         .success,
@@ -575,8 +579,36 @@ describe('task and knowledge contracts', () => {
     expect(
       createKnowledgeProposalSchema.safeParse({
         title: 'x',
-        kind: 'unknown-kind',
+        category: 'unknown-category',
+        origin: 'human',
         content: 'y',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('demands the provenance of every declared source', () => {
+    const withSource = createKnowledgeProposalSchema.parse({
+      title: 'Fila de retentativa',
+      category: 'architecture',
+      origin: 'extracted',
+      content: 'texto',
+      sources: [
+        { type: 'file', reference: 'apps/hub-worker/src/worker.ts', origin: 'extracted' },
+      ],
+    });
+
+    expect(withSource.sources[0]?.origin).toBe('extracted');
+    expect(withSource.sources[0]?.locator).toBeNull();
+
+    // Fonte sem origem declarada não passa: o `Docs/10` exige saber se a
+    // afirmação foi extraída ou inferida.
+    expect(
+      createKnowledgeProposalSchema.safeParse({
+        title: 'Fila de retentativa',
+        category: 'architecture',
+        origin: 'extracted',
+        content: 'texto',
+        sources: [{ type: 'file', reference: 'a.ts' }],
       }).success,
     ).toBe(false);
   });
@@ -631,22 +663,43 @@ describe('device and audit contracts', () => {
 });
 
 describe('plans and subscription', () => {
+  const freePlan = {
+    id: ULID_A,
+    code: 'free',
+    name: 'Free',
+    description: 'Plano único do MVP, sem cobrança.',
+    price: { amount: 0, currency: 'USD' },
+    billingPeriod: 'none',
+    limits: {
+      maxMembers: 3,
+      maxProjects: 2,
+      maxKnowledgeItems: 500,
+      maxAgentRunsPerMonth: 200,
+      maxStorageBytes: 1_073_741_824,
+      retentionDays: 30,
+    },
+    features: ['web_chat', 'knowledge_review', 'audit_log'],
+    isDefault: true,
+    isActive: true,
+  };
+
   it('ships a single free plan that already fits a multi plan catalogue', () => {
-    expect(planSchema.safeParse(FREE_PLAN).success).toBe(true);
-    expect(FREE_PLAN.price.amount).toBe(0);
-    expect(FREE_PLAN.isDefault).toBe(true);
+    expect(planSchema.safeParse(freePlan).success).toBe(true);
+    expect(freePlan.price.amount).toBe(0);
 
     const catalogue = planListSchema.parse({
       plans: [
-        FREE_PLAN,
+        freePlan,
         {
-          ...FREE_PLAN,
+          ...freePlan,
+          id: ULID_B,
           code: 'team',
           name: 'Team',
           price: { amount: 4900, currency: 'USD' },
-          limits: { ...FREE_PLAN.limits, maxMembers: null },
+          billingPeriod: 'monthly',
+          // `null` é o teto ausente: o contrato já aceita plano ilimitado.
+          limits: { ...freePlan.limits, maxMembers: null },
           isDefault: false,
-          sortOrder: 1,
         },
       ],
     });
@@ -657,7 +710,7 @@ describe('plans and subscription', () => {
 
   it('rejects a fractional price', () => {
     expect(
-      planSchema.safeParse({ ...FREE_PLAN, price: { amount: 49.9, currency: 'USD' } })
+      planSchema.safeParse({ ...freePlan, price: { amount: 49.9, currency: 'USD' } })
         .success,
     ).toBe(false);
   });
@@ -666,27 +719,19 @@ describe('plans and subscription', () => {
     expect(
       subscriptionOverviewSchema.safeParse({
         subscription: {
-          id: ULID_A,
           organizationId: ULID_B,
           planCode: 'free',
           status: 'active',
-          seats: null,
-          currentPeriodStart: NOW,
+          startedAt: NOW,
           currentPeriodEnd: null,
-          cancelAtPeriodEnd: false,
-          canceledAt: null,
-          createdAt: NOW,
-          updatedAt: NOW,
           version: 1,
         },
-        plan: FREE_PLAN,
+        plan: freePlan,
         usage: {
           members: 2,
           projects: 1,
-          devices: 3,
-          concurrentAgentRuns: 0,
-          monthlyAgentMinutes: 12,
-          storageBytes: 1024,
+          knowledgeItems: 7,
+          agentRunsThisMonth: 12,
           measuredAt: NOW,
         },
       }).success,
@@ -695,6 +740,26 @@ describe('plans and subscription', () => {
     expect(
       changePlanRequestSchema.safeParse({ planCode: 'team', version: 1 }).success,
     ).toBe(true);
+  });
+
+  it('describes which limit was hit', () => {
+    expect(
+      planLimitViolationSchema.safeParse({
+        limit: 'maxProjects',
+        planCode: 'free',
+        allowed: 2,
+        current: 2,
+      }).success,
+    ).toBe(true);
+
+    expect(
+      planLimitViolationSchema.safeParse({
+        limit: 'maxUnicorns',
+        planCode: 'free',
+        allowed: 1,
+        current: 1,
+      }).success,
+    ).toBe(false);
   });
 });
 

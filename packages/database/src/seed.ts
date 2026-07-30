@@ -44,6 +44,7 @@ const FREE_PLAN = {
   billingPeriod: 'none',
   maxMembers: 3,
   maxProjects: 2,
+  maxKnowledgeItems: 500,
   maxAgentRunsPerMonth: 200,
   maxStorageBytes: 1_073_741_824,
   retentionDays: 30,

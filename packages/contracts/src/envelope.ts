@@ -82,6 +82,10 @@ export const ERROR_CODES = [
   'KNOWLEDGE_NOT_FOUND',
   'KNOWLEDGE_ALREADY_REVIEWED',
   'KNOWLEDGE_REVIEW_CONFLICT',
+  /** Aprovação sem fonte declarada: o `Docs/10` exige procedência. */
+  'KNOWLEDGE_PROVENANCE_REQUIRED',
+  /** Não há versão aguardando revisão para este item. */
+  'KNOWLEDGE_NO_PENDING_VERSION',
 
   // Planos e assinatura
   'PLAN_NOT_FOUND',

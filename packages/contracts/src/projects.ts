@@ -39,13 +39,39 @@ export const projectRepositorySchema = z.object({
 
 export type ProjectRepository = z.infer<typeof projectRepositorySchema>;
 
+/** Modos de trabalho da extensão (`Docs/04`). */
+export const WORK_MODES = ['plan', 'edit', 'agent_team'] as const;
+
+export const workModeSchema = z.enum(WORK_MODES);
+
+export type WorkMode = z.infer<typeof workModeSchema>;
+
+/**
+ * Níveis de autonomia do `Docs/04`. `bypass` é sempre local e temporário: ele
+ * nunca é gravado como padrão de projeto, mas o enum é o mesmo em toda parte
+ * para que o valor não precise ser traduzido na fronteira.
+ */
+export const AUTONOMY_LEVELS = ['manual', 'auto', 'bypass'] as const;
+
+export const autonomyLevelSchema = z.enum(AUTONOMY_LEVELS);
+
+export type AutonomyLevel = z.infer<typeof autonomyLevelSchema>;
+
 export const projectSettingsSchema = z.object({
-  /** Autonomia padrão dos agentes deste projeto. */
-  defaultAutonomy: z.enum(['manual', 'assisted', 'supervised', 'autonomous']),
+  /** Modo de trabalho com que as conversas do projeto nascem. */
+  defaultWorkMode: workModeSchema,
+  /**
+   * Autonomia padrão dos agentes deste projeto. `bypass` está fora de
+   * propósito: o `Docs/09` diz que ele é local, temporário e nunca vira padrão
+   * permanente — permiti-lo aqui seria exatamente torná-lo permanente.
+   */
+  defaultAutonomy: z.enum(['manual', 'auto']),
   /** Exige revisão humana antes de aplicar mudança em código. */
   requireReview: z.boolean(),
   /** Permite iniciar agente remoto a partir do Hub. */
   allowRemoteAgents: z.boolean(),
+  /** Teto de contexto por conversa, em tokens. */
+  contextBudgetTokens: z.int().positive().max(10_000_000),
   /** Dias de retenção de conversa; `null` segue a política da organização. */
   conversationRetentionDays: z.int().positive().max(3650).nullable(),
 });

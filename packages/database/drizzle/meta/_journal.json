@@ -8,6 +8,20 @@
       "when": 1785404582237,
       "tag": "0000_initial_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1785421361757,
+      "tag": "0001_plan_knowledge_limit",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1785421035775,
+      "tag": "0002_task_claim_lease_and_tags",
+      "breakpoints": true
     }
   ]
 }

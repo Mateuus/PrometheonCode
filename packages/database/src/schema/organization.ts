@@ -49,6 +49,9 @@ export const plans = mysqlTable(
     billingPeriod: mysqlEnum('billing_period', planBillingPeriod).notNull().default('none'),
     maxMembers: int('max_members').notNull().default(3),
     maxProjects: int('max_projects').notNull().default(1),
+    // Itens de conhecimento por organização. O teto existe porque o cérebro
+    // coletivo é o que mais cresce sem alguém pedir (`Docs/10`).
+    maxKnowledgeItems: int('max_knowledge_items').notNull().default(500),
     maxAgentRunsPerMonth: int('max_agent_runs_per_month').notNull().default(200),
     maxStorageBytes: bigint('max_storage_bytes', { mode: 'number', unsigned: true })
       .notNull()

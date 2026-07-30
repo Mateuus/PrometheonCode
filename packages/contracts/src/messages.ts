@@ -111,12 +111,19 @@ export const messageAuthorTypeSchema = z.enum(MESSAGE_AUTHOR_TYPES);
 
 export type MessageAuthorType = z.infer<typeof messageAuthorTypeSchema>;
 
+/**
+ * `redacted` fecha o ciclo da retenção do `Docs/09`: a mensagem removida por
+ * política continua existindo como envelope, com as partes apagadas. Sem este
+ * valor no contrato, o serializador quebraria justamente na mensagem que a
+ * organização mandou apagar.
+ */
 export const MESSAGE_STATUSES = [
   'pending',
   'streaming',
   'complete',
   'failed',
   'cancelled',
+  'redacted',
 ] as const;
 
 export const messageStatusSchema = z.enum(MESSAGE_STATUSES);
@@ -174,7 +181,26 @@ export const createMessagePartSchema = z.discriminatedUnion('type', [
   errorPartSchema.omit({ index: true }),
 ]);
 
+/**
+ * Uma parte na entrada, já sem `index`.
+ *
+ * O tipo é derivado do schema em vez de montado com `Omit<MessagePart,
+ * 'index'>`: `Omit` sobre união discriminada colapsa os membros e o
+ * `switch (part.type)` deixa de estreitar o tipo.
+ */
+export type CreateMessagePart = z.infer<typeof createMessagePartSchema>;
+
 export const createMessageRequestSchema = z.object({
+  /**
+   * Quem assina a mensagem. Faltava no contrato, e sem ele o envelope de
+   * `messages.author_type` não teria como ser preenchido pela API. `system` não
+   * é aceito na entrada: mensagem de sistema é escrita pelo servidor, e deixar
+   * o cliente forjá-la apagaria a diferença entre o que o Hub afirma e o que
+   * alguém digitou.
+   */
+  authorType: z.enum(['user', 'agent']).default('user'),
+  /** Execução do agente que assina, obrigatória quando `authorType` é `agent`. */
+  authorAgentRunId: ulidSchema.optional(),
   parts: z.array(createMessagePartSchema).min(1).max(64),
   contextRefs: z.array(messageContextRefSchema).max(64).default([]),
   attachmentIds: z.array(ulidSchema).max(16).default([]),

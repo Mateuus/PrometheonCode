@@ -2,6 +2,7 @@
 // suas configurações e os perfis de agente habilitados.
 
 import {
+  bigint,
   boolean,
   index,
   int,
@@ -41,6 +42,16 @@ export const projects = mysqlTable(
     status: mysqlEnum('status', projectStatus).notNull().default('active'),
     visibility: mysqlEnum('visibility', projectVisibility).notNull().default('organization'),
     defaultBranch: varchar('default_branch', { length: 191 }).notNull().default('main'),
+    // Etiquetas livres do contrato de projeto. JSON em vez de tabela própria:
+    // elas são filtro e rótulo, nunca entidade com ciclo de vida.
+    tags: json('tags').$type<string[]>(),
+    // Último `tasks.number` entregue neste projeto. O número curto por projeto
+    // é distribuído incrementando esta coluna dentro da transação da tarefa —
+    // o mesmo mecanismo de `conversations.last_sequence`, e pela mesma razão:
+    // `MAX(number) + 1` corre com outra escrita simultânea.
+    lastTaskNumber: bigint('last_task_number', { mode: 'number', unsigned: true })
+      .notNull()
+      .default(0),
     archivedAt: utcDatetime('archived_at'),
     ...auditColumns(),
     // Projeto excluído entra em janela de recuperação antes do apagamento.

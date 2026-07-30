@@ -10,6 +10,7 @@ import { z } from 'zod';
 
 import { publicUserSchema } from './auth.js';
 import { cursorPageQuerySchema, cursorPageSchema } from './pagination.js';
+import { workModeSchema } from './projects.js';
 import {
   isoDateTimeSchema,
   longTextSchema,
@@ -18,11 +19,21 @@ import {
   versionSchema,
 } from './primitives.js';
 
-export const CONVERSATION_STATUSES = ['open', 'archived'] as const;
+/**
+ * Situação da conversa. Os três valores são os do `Docs/07`: `locked` existe
+ * para a conversa que foi encerrada por política e não aceita mais escrita,
+ * distinta de `archived`, que só sai da lista ativa.
+ */
+export const CONVERSATION_STATUSES = ['active', 'archived', 'locked'] as const;
 
 export const conversationStatusSchema = z.enum(CONVERSATION_STATUSES);
 
-export const CONVERSATION_ORIGINS = ['web', 'extension', 'agent', 'api'] as const;
+/**
+ * Origem da conversa (`Docs/07`). `local_import` é o "Copy to Web Chat" do
+ * `Docs/10` — o Local Chat não sincroniza sozinho, então a origem registra que
+ * o conteúdo veio de uma decisão explícita do usuário.
+ */
+export const CONVERSATION_ORIGINS = ['web', 'local_import', 'agent'] as const;
 
 export const conversationOriginSchema = z.enum(CONVERSATION_ORIGINS);
 
@@ -48,6 +59,7 @@ export const conversationSchema = z.object({
   title: shortTextSchema,
   status: conversationStatusSchema,
   origin: conversationOriginSchema,
+  workMode: workModeSchema,
   participants: z.array(conversationParticipantSchema),
   /** Sequência da última mensagem; serve de cursor de retomada. */
   lastSequence: z.int().nonnegative(),
@@ -64,11 +76,17 @@ export type Conversation = z.infer<typeof conversationSchema>;
 export const createConversationRequestSchema = z.object({
   title: shortTextSchema.optional(),
   origin: conversationOriginSchema.default('web'),
+  /** Modo de trabalho da conversa; sem ele vale o padrão do projeto. */
+  workMode: workModeSchema.optional(),
   /** Perfis de agente que já entram na conversa. */
   agentProfileIds: z.array(ulidSchema).max(10).default([]),
   /** Primeira mensagem, quando a conversa já nasce com conteúdo. */
   initialMessage: longTextSchema.optional(),
 });
+
+export type CreateConversationRequest = z.infer<
+  typeof createConversationRequestSchema
+>;
 
 export const updateConversationRequestSchema = z.object({
   title: shortTextSchema.optional(),

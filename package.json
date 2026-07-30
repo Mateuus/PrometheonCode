@@ -43,7 +43,8 @@
     "hub:lint:fix": "eslint apps packages --fix",
     "hub:smoke": "node scripts/hub-smoke.mjs",
     "hub:clean-test-data": "node scripts/hub-clean-test-data.mjs",
-    "hub:check-device-flow": "node scripts/hub-device-flow-check.mjs"
+    "hub:check-device-flow": "node scripts/hub-device-flow-check.mjs",
+    "hub:smoke:domain": "node scripts/hub-smoke-domain.mjs"
   },
   "packageManager": "pnpm@11.18.0",
   "devDependencies": {

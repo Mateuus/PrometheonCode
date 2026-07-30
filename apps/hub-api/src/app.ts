@@ -38,12 +38,27 @@ import {
 import { getConfig, PAYLOAD_LIMITS, runtimeSettings, type AppConfig } from './config/index.js';
 import { createMailService } from './mail/index.js';
 import type { MailService } from './mail/types.js';
+import { createGovernanceQueues } from './modules/audit/queue.js';
 import { auditRoutes } from './modules/audit/routes.js';
+import { AuditService } from './modules/audit/service.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { AuthService } from './modules/auth/service.js';
+import { billingRoutes } from './modules/billing/routes.js';
+import { BillingService } from './modules/billing/service.js';
 import { healthRoutes } from './modules/health/routes.js';
+import { knowledgeRoutes } from './modules/knowledge/routes.js';
+import { KnowledgeService } from './modules/knowledge/service.js';
 import { organizationRoutes } from './modules/organizations/routes.js';
 import { OrganizationService } from './modules/organizations/service.js';
+
+import { conversationRoutes } from './modules/conversations/routes.js';
+import { ConversationService } from './modules/conversations/service.js';
+import { messageRoutes } from './modules/messages/routes.js';
+import { MessageService } from './modules/messages/service.js';
+import { projectRoutes } from './modules/projects/routes.js';
+import { ProjectService } from './modules/projects/service.js';
+import { taskRoutes } from './modules/tasks/routes.js';
+import { TaskService } from './modules/tasks/service.js';
 import { registerAuth } from './plugins/auth.js';
 import { registerDatabase, type DatabaseHandles } from './plugins/database.js';
 import { registerErrorHandler } from './plugins/error-handler.js';
@@ -146,6 +161,25 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<BuiltApp>
     authService,
   });
 
+  const knowledgeService = new KnowledgeService(app.db);
+  const billingService = new BillingService(app.db);
+
+  // As filas de governança usam conexão própria: o BullMQ administra o próprio
+  // prefixo de chave e exige `maxRetriesPerRequest: null`, o que o `app.redis`
+  // não pode ter.
+  const governanceQueues = createGovernanceQueues(config);
+
+  app.addHook('onClose', async () => {
+    await governanceQueues.close();
+  });
+
+  const auditService = new AuditService(app.db, governanceQueues);
+
+  const projectService = new ProjectService({ db: app.db });
+  const conversationService = new ConversationService({ db: app.db });
+  const messageService = new MessageService({ db: app.db });
+  const taskService = new TaskService({ db: app.db });
+
   // Health fica fora do prefixo: descreve o processo, não a v1 da API.
   await app.register(healthRoutes);
 
@@ -153,7 +187,20 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<BuiltApp>
     async (scope) => {
       await scope.register(authRoutes, { service: authService });
       await scope.register(organizationRoutes, { service: organizationService });
-      await scope.register(auditRoutes);
+      await scope.register(knowledgeRoutes, { service: knowledgeService });
+      await scope.register(billingRoutes, { service: billingService });
+      await scope.register(auditRoutes, { service: auditService });
+
+      await scope.register(projectRoutes, { service: projectService });
+      await scope.register(conversationRoutes, {
+        service: conversationService,
+        messages: messageService,
+      });
+      await scope.register(messageRoutes, {
+        service: messageService,
+        conversations: conversationService,
+      });
+      await scope.register(taskRoutes, { service: taskService });
     },
     { prefix: API_PREFIX },
   );

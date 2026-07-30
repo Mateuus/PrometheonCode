@@ -71,6 +71,8 @@ export const tasks = mysqlTable(
     // Escopo reservado pela tarefa (arquivos/diretórios), base dos eventos
     // `scope.reserved` e `scope.conflict` do `Docs/08`.
     scope: json('scope').$type<Record<string, unknown>>(),
+    // Etiquetas livres do contrato de tarefa, como em `projects.tags`.
+    tags: json('tags').$type<string[]>(),
     branchName: varchar('branch_name', { length: 255 }),
     claimedByDeviceId: ulidColumn('claimed_by_device_id').references(() => devices.id, {
       onDelete: 'set null',
@@ -79,6 +81,11 @@ export const tasks = mysqlTable(
       onDelete: 'set null',
     }),
     claimedAt: utcDatetime('claimed_at'),
+    // Prazo da reivindicação. Sem ele, quem reivindica e some trava a tarefa
+    // para sempre; com ele, a reivindicação vencida é indistinguível de
+    // nenhuma reivindicação, e outra pessoa consegue assumir.
+    claimExpiresAt: utcDatetime('claim_expires_at'),
+    claimedByAgentRunId: ulidColumn('claimed_by_agent_run_id'),
     startedAt: utcDatetime('started_at'),
     completedAt: utcDatetime('completed_at'),
     dueAt: utcDatetime('due_at'),
@@ -88,8 +95,12 @@ export const tasks = mysqlTable(
   (table) => [
     uniqueIndex('uq_tasks_project_number').on(table.projectId, table.number),
     index('idx_tasks_project_status_updated_at').on(table.projectId, table.status, table.updatedAt),
+    index('idx_tasks_project_created_at').on(table.projectId, table.createdAt),
     index('idx_tasks_org_created_at').on(table.organizationId, table.createdAt),
     index('idx_tasks_parent').on(table.parentTaskId),
+    // Varredura das reivindicações vencidas: o filtro é sempre
+    // `status = 'claimed' AND claim_expires_at <= now`.
+    index('idx_tasks_claim_expires_at').on(table.status, table.claimExpiresAt),
   ],
 );
 

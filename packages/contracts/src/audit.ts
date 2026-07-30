@@ -10,7 +10,6 @@ import { z } from 'zod';
 import { publicUserSchema } from './auth.js';
 import { cursorPageQuerySchema, cursorPageSchema } from './pagination.js';
 import {
-  isoDateSchema,
   isoDateTimeSchema,
   metadataSchema,
   shortTextSchema,
@@ -76,38 +75,142 @@ export type AuditListQuery = z.infer<typeof auditListQuerySchema>;
 
 export const auditPageSchema = cursorPageSchema(auditLogSchema);
 
-/** Evento de segurança: falha de login, token inválido, limite estourado. */
+export const SECURITY_SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
+
+export const securitySeveritySchema = z.enum(SECURITY_SEVERITIES);
+
+/**
+ * Evento de segurança: falha de login, reuso de refresh token, permissão negada.
+ *
+ * `type` é texto livre, não enum: a coluna é `varchar` justamente para que um
+ * tipo novo não exija migração, e um enum fechado aqui derrubaria a listagem
+ * assim que outra parte do sistema gravasse algo que este contrato não conhece.
+ */
 export const securityEventSchema = z.object({
   id: ulidSchema,
+  /** Nulo em evento anterior à identificação do tenant (login falho). */
   organizationId: ulidSchema.nullable(),
-  kind: z.enum([
-    'login_failed',
-    'token_rejected',
-    'permission_denied',
-    'rate_limited',
-    'suspicious_payload',
-    'device_revoked',
-  ]),
-  severity: z.enum(['low', 'medium', 'high', 'critical']),
+  userId: ulidSchema.nullable(),
+  type: shortTextSchema,
+  severity: securitySeveritySchema,
   ipAddress: z.string().max(45).nullable(),
-  detail: shortTextSchema,
+  userAgent: z.string().max(512).nullable(),
+  /** Contexto já redigido; nunca token, senha ou credencial. */
+  details: metadataSchema.nullable(),
   occurredAt: isoDateTimeSchema,
+  resolvedAt: isoDateTimeSchema.nullable(),
+});
+
+export type SecurityEvent = z.infer<typeof securityEventSchema>;
+
+export const securityEventListQuerySchema = cursorPageQuerySchema.extend({
+  type: shortTextSchema.optional(),
+  severity: securitySeveritySchema.optional(),
+  userId: ulidSchema.optional(),
+  from: isoDateTimeSchema.optional(),
+  to: isoDateTimeSchema.optional(),
+  /** `true` traz só o que ainda não foi tratado. */
+  unresolved: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .transform((value) => value === true || value === 'true')
+    .optional(),
 });
 
 export const securityEventPageSchema = cursorPageSchema(securityEventSchema);
 
-/** Pedido de exportação ou de exclusão de dados (`Docs/09`, privacidade). */
-export const dataJobSchema = z.object({
+/** Estados de `data_export_jobs` e `deletion_jobs`. */
+export const DATA_JOB_STATUSES = [
+  'pending',
+  'scheduled',
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+] as const;
+
+export const dataJobStatusSchema = z.enum(DATA_JOB_STATUSES);
+
+export type DataJobStatus = z.infer<typeof dataJobStatusSchema>;
+
+export const EXPORT_SCOPES = [
+  'organization',
+  'project',
+  'conversation',
+  'user',
+] as const;
+
+export const exportScopeSchema = z.enum(EXPORT_SCOPES);
+
+export const EXPORT_FORMATS = ['json', 'zip'] as const;
+
+export const exportFormatSchema = z.enum(EXPORT_FORMATS);
+
+/** Pedido de exportação de dados (`Docs/09`, privacidade). */
+export const dataExportJobSchema = z.object({
   id: ulidSchema,
   organizationId: ulidSchema,
-  kind: z.enum(['export', 'deletion']),
-  status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']),
-  requestedBy: publicUserSchema,
+  scope: exportScopeSchema,
+  scopeId: ulidSchema.nullable(),
+  format: exportFormatSchema,
+  status: dataJobStatusSchema,
+  requestedBy: publicUserSchema.nullable(),
   requestedAt: isoDateTimeSchema,
   completedAt: isoDateTimeSchema.nullable(),
-  /** Disponível por tempo limitado, apenas para exportação concluída. */
-  downloadUrl: z.url().nullable(),
-  expiresOn: isoDateSchema.nullable(),
+  sizeBytes: z.int().nonnegative().nullable(),
+  /** Só depois de concluído, e por tempo limitado. */
+  downloadExpiresAt: isoDateTimeSchema.nullable(),
+  errorMessage: z.string().max(2_000).nullable(),
 });
 
-export type DataJob = z.infer<typeof dataJobSchema>;
+export type DataExportJob = z.infer<typeof dataExportJobSchema>;
+
+export const createDataExportRequestSchema = z.object({
+  scope: exportScopeSchema.default('organization'),
+  /** Obrigatório quando o escopo não é a organização inteira. */
+  scopeId: ulidSchema.optional(),
+  format: exportFormatSchema.default('json'),
+});
+
+export const DELETION_TARGETS = [
+  'organization',
+  'project',
+  'conversation',
+  'user',
+  'knowledge_item',
+] as const;
+
+export const deletionTargetSchema = z.enum(DELETION_TARGETS);
+
+/** Pedido de exclusão de dados (`Docs/09`, privacidade). */
+export const deletionJobSchema = z.object({
+  id: ulidSchema,
+  organizationId: ulidSchema,
+  targetType: deletionTargetSchema,
+  targetId: ulidSchema,
+  status: dataJobStatusSchema,
+  /** Quando o apagamento definitivo acontece: a janela de arrependimento. */
+  scheduledFor: isoDateTimeSchema,
+  reason: z.string().max(512).nullable(),
+  requestedBy: publicUserSchema.nullable(),
+  requestedAt: isoDateTimeSchema,
+  completedAt: isoDateTimeSchema.nullable(),
+  cancelledAt: isoDateTimeSchema.nullable(),
+  errorMessage: z.string().max(2_000).nullable(),
+});
+
+export type DeletionJob = z.infer<typeof deletionJobSchema>;
+
+export const createDeletionRequestSchema = z.object({
+  targetType: deletionTargetSchema,
+  targetId: ulidSchema,
+  reason: z.string().trim().max(512).optional(),
+  /** Dias de espera antes do apagamento. O padrão é a janela de recuperação. */
+  graceDays: z.int().min(0).max(90).optional(),
+});
+
+export const dataJobListQuerySchema = cursorPageQuerySchema.extend({
+  status: dataJobStatusSchema.optional(),
+});
+
+export const dataExportPageSchema = cursorPageSchema(dataExportJobSchema);
+export const deletionJobPageSchema = cursorPageSchema(deletionJobSchema);
