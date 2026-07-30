@@ -1,88 +1,33 @@
 'use client';
 
-import { createContext, useContext, useMemo, useSyncExternalStore, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import { CloudOff, RefreshCw, Wifi } from 'lucide-react';
 import { useTranslate } from '@/i18n/provider';
 import { cn } from '@/lib/cn';
+import {
+  connect,
+  disconnect,
+  getServerStatusSnapshot,
+  getStatusSnapshot,
+  subscribeToStatus,
+  type ConnectionStatus,
+  type ConnectionValue,
+} from '@/lib/realtime/client';
+
+export type { ConnectionStatus } from '@/lib/realtime/client';
 
 /**
  * Estado 6 de 7 — reconectando —, mais o offline do ponto de vista do canal ao
  * vivo.
  *
- * PROVISÓRIO na origem do sinal: hoje ele vem dos eventos `online`/`offline` do
- * navegador. Quando o WebSocket versionado do `Docs/05` existir, é esta store
- * que passa a refletir o socket; nenhuma tela muda, porque todas leem daqui.
- *
- * A conexão é um sistema externo ao React, então ela vive numa store lida por
- * `useSyncExternalStore`. Não é preciosismo: `setState` dentro de efeito para
- * espelhar `navigator.onLine` gera renderização em cascata e, no servidor, um
- * primeiro quadro que discorda do cliente.
+ * O sinal vem do WebSocket de verdade (`@/lib/realtime/client`), não mais dos
+ * eventos `online`/`offline` do navegador: "reconectando" agora quer dizer que
+ * há uma tentativa em curso, com recuo exponencial, e "offline" quer dizer que
+ * várias falharam seguidas. Nenhuma tela mudou por causa disso, porque todas
+ * leem daqui.
  */
 
-export type ConnectionStatus = 'online' | 'offline' | 'reconnecting';
-
-interface ConnectionValue {
-  status: ConnectionStatus;
-  attempt: number;
-}
-
-/** Tempo que a interface passa em "reconectando" ao voltar de um corte. */
-const RECONNECT_SETTLE_MS = 1_500;
-
 const SERVER_SNAPSHOT: ConnectionValue = { status: 'online', attempt: 0 };
-
-let snapshot: ConnectionValue = SERVER_SNAPSHOT;
-const listeners = new Set<() => void>();
-let settleTimer: ReturnType<typeof setTimeout> | undefined;
-
-function publish(next: ConnectionValue): void {
-  snapshot = next;
-  for (const listener of listeners) {
-    listener();
-  }
-}
-
-function handleOffline(): void {
-  if (settleTimer) {
-    clearTimeout(settleTimer);
-    settleTimer = undefined;
-  }
-  publish({ status: 'offline', attempt: 0 });
-}
-
-function handleOnline(): void {
-  publish({ status: 'reconnecting', attempt: snapshot.attempt + 1 });
-  settleTimer = setTimeout(() => publish({ status: 'online', attempt: 0 }), RECONNECT_SETTLE_MS);
-}
-
-function subscribe(listener: () => void): () => void {
-  const first = listeners.size === 0;
-  listeners.add(listener);
-
-  if (first) {
-    window.addEventListener('offline', handleOffline);
-    window.addEventListener('online', handleOnline);
-    if (!navigator.onLine) {
-      publish({ status: 'offline', attempt: 0 });
-    }
-  }
-
-  return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) {
-      window.removeEventListener('offline', handleOffline);
-      window.removeEventListener('online', handleOnline);
-    }
-  };
-}
-
-function getSnapshot(): ConnectionValue {
-  return snapshot;
-}
-
-function getServerSnapshot(): ConnectionValue {
-  return SERVER_SNAPSHOT;
-}
 
 const ConnectionContext = createContext<ConnectionValue>(SERVER_SNAPSHOT);
 
@@ -94,13 +39,32 @@ export function ConnectionProvider({
   /** Estado imposto pela URL, para revisar a tela sem derrubar a rede. */
   forced?: ConnectionStatus | undefined;
 }) {
-  const live = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const live = useSyncExternalStore(subscribeToStatus, getStatusSnapshot, getServerStatusSnapshot);
   const value = useMemo<ConnectionValue>(
     () => (forced ? { status: forced, attempt: forced === 'reconnecting' ? 1 : 0 } : live),
     [forced, live],
   );
 
   return <ConnectionContext.Provider value={value}>{children}</ConnectionContext.Provider>;
+}
+
+/**
+ * Abre o canal para uma organização. Fica no layout autenticado, porque é ali
+ * que a organização já foi resolvida — e sai de cena junto com ele.
+ */
+export function RealtimeConnection({
+  organizationId,
+  projectId = null,
+}: {
+  organizationId: string;
+  projectId?: string | null;
+}) {
+  useEffect(() => {
+    connect({ organizationId, projectId, eventTypes: [] });
+    return () => disconnect();
+  }, [organizationId, projectId]);
+
+  return null;
 }
 
 export function useConnection(): ConnectionValue {

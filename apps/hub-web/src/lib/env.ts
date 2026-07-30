@@ -11,14 +11,6 @@ const schema = z.object({
   HUB_WEB_PORT: z.coerce.number().int().positive().default(3550),
   HUB_WEB_URL: z.string().url().default('http://127.0.0.1:3550'),
   HUB_API_URL: z.string().url().default('http://127.0.0.1:3551'),
-  /**
-   * Enquanto a Hub API não existe, as telas se alimentam de dados de exemplo.
-   * Desligar este flag faz o app falar HTTP de verdade com `HUB_API_URL`.
-   */
-  HUB_WEB_SAMPLE_DATA: z
-    .enum(['true', 'false'])
-    .default('true')
-    .transform((value) => value === 'true'),
 });
 
 let cached: z.infer<typeof schema> | undefined;
@@ -36,4 +28,13 @@ export function env(): z.infer<typeof schema> {
 
 export function isProduction(): boolean {
   return env().NODE_ENV === 'production';
+}
+
+/**
+ * Endereço do WebSocket de tempo real, derivado da URL da API.
+ * O bilhete de conexão vem de `/api/realtime/ticket`; aqui só mora o host.
+ */
+export function realtimeOrigin(): string {
+  const api = new URL(env().HUB_API_URL);
+  return `${api.protocol === 'https:' ? 'wss:' : 'ws:'}//${api.host}`;
 }

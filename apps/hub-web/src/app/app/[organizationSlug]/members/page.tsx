@@ -1,22 +1,21 @@
 import type { Metadata } from 'next';
-import { ShieldCheck, UserPlus } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 import { getLocale, getTranslate } from '@/i18n/server';
 import { PageHeader } from '@/components/ui/page';
-import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { DataView } from '@/components/states/data-view';
-import { SampleDataNotice } from '@/components/layout/sample-data-notice';
+import { ForcedStateNotice } from '@/components/states/forced-state-notice';
+import { InviteMemberForm } from '@/components/forms/member-forms';
 import { getOrganizationBySlug, listMembers } from '@/lib/api/queries';
-import { applyForcedState, readForcedState } from '@/lib/api/state-override';
-import { env } from '@/lib/env';
+import { applyForcedState, devForcedState } from '@/lib/api/state-override';
 import { relativeTime } from '@/lib/format';
 import { roleLabel, viewerCan } from '@/lib/roles';
-import type { Member } from '@/lib/api/types';
+import type { OrganizationMember } from '@/lib/api/types';
 import type { Translate } from '@/i18n/dictionary';
 
 export const metadata: Metadata = { title: 'Members' };
 
-function memberStatusLabel(status: Member['status'], t: Translate): string {
+function memberStatusLabel(status: OrganizationMember['status'], t: Translate): string {
   return {
     active: t('members.status.active'),
     invited: t('members.status.invited'),
@@ -39,34 +38,30 @@ export default async function MembersPage({
   ]);
 
   const base = `/app/${organizationSlug}`;
-  const forced = readForcedState(query, env().HUB_WEB_SAMPLE_DATA);
+  const forced = devForcedState(query);
 
   const organization = await getOrganizationBySlug(organizationSlug);
   const members = await applyForcedState(
     forced,
-    organization.ok ? await listMembers(organization.data.id) : { ok: false, kind: 'not-found' },
+    organization.ok ? await listMembers(organization.data.id) : organization,
     [],
   );
 
-  const canInvite = organization.ok && viewerCan(organization.data.viewerRole, 'members.invite');
+  const canInvite =
+    organization.ok &&
+    viewerCan(
+      { role: organization.data.role, permissions: organization.data.permissions },
+      'members.invite',
+    );
 
   return (
     <div className="space-y-6">
-      <SampleDataNotice />
+      <ForcedStateNotice forced={forced} />
 
       <PageHeader
         title={t('members.title')}
         description={t('members.subtitle')}
-        {...(canInvite
-          ? {
-              actions: (
-                <Button size="sm">
-                  <UserPlus aria-hidden />
-                  {t('action.invite')}
-                </Button>
-              ),
-            }
-          : {})}
+        {...(canInvite ? { actions: <InviteMemberForm organizationSlug={organizationSlug} /> } : {})}
       />
 
       <DataView
@@ -92,7 +87,7 @@ export default async function MembersPage({
                     {t('audit.column.when')}
                   </th>
                   <th scope="col" className="px-4 py-2 font-medium">
-                    {t('connection.status')}
+                    {t('members.membershipStatus')}
                   </th>
                 </tr>
               </thead>
@@ -100,8 +95,8 @@ export default async function MembersPage({
                 {items.map((member) => (
                   <tr key={member.id} className="border-b border-line last:border-0 bg-surface">
                     <td className="px-4 py-3">
-                      <span className="block font-medium text-foreground">{member.name}</span>
-                      <span className="block text-xs text-muted">{member.email}</span>
+                      <span className="block font-medium text-foreground">{member.user.name}</span>
+                      <span className="block text-xs text-muted">{member.user.email}</span>
                     </td>
                     <td className="px-4 py-3">
                       <StatusBadge tone="accent" icon={ShieldCheck}>
@@ -109,25 +104,24 @@ export default async function MembersPage({
                       </StatusBadge>
                     </td>
                     <td className="px-4 py-3 text-muted">
-                      {member.lastSeenAt
-                        ? t('members.lastSeen', {
-                            relativeTime: relativeTime(member.lastSeenAt, locale),
-                          })
-                        : t('members.joined', {
+                      {member.joinedAt
+                        ? t('members.joined', {
                             relativeTime: relativeTime(member.joinedAt, locale),
-                          })}
+                          })
+                        : t('members.notJoinedYet')}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <StatusBadge tone={member.online ? 'activity' : 'neutral'}>
-                          {member.online ? t('members.online') : t('members.offline')}
-                        </StatusBadge>
-                        {member.status !== 'active' ? (
-                          <StatusBadge tone={member.status === 'suspended' ? 'danger' : 'alert'}>
-                            {memberStatusLabel(member.status, t)}
-                          </StatusBadge>
-                        ) : null}
-                      </div>
+                      <StatusBadge
+                        tone={
+                          member.status === 'active'
+                            ? 'success'
+                            : member.status === 'suspended'
+                              ? 'danger'
+                              : 'alert'
+                        }
+                      >
+                        {memberStatusLabel(member.status, t)}
+                      </StatusBadge>
                     </td>
                   </tr>
                 ))}

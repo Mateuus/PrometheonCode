@@ -1,4 +1,4 @@
-import { CloudOff, Inbox, Lock, RotateCcw, ShieldAlert, TriangleAlert } from 'lucide-react';
+import { CloudOff, Inbox, Lock, MailWarning, RotateCcw, ShieldAlert, TriangleAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { getTranslate } from '@/i18n/server';
@@ -123,6 +123,30 @@ export async function UnauthorizedState({ loginHref = '/login' }: { loginHref?: 
       actions={
         <Button asChild size="sm">
           <Link href={loginHref}>{t('action.signIn')}</Link>
+        </Button>
+      }
+    />
+  );
+}
+
+/**
+ * E-mail não confirmado.
+ *
+ * A API deixa entrar sem confirmação, mas recusa qualquer escrita com
+ * `EMAIL_NOT_VERIFIED`. Mostrar "algo deu errado" aqui seria esconder a única
+ * informação útil, que é o que fazer a seguir.
+ */
+export async function EmailUnverifiedState() {
+  const t = await getTranslate();
+  return (
+    <StateBlock
+      icon={MailWarning}
+      tone="alert"
+      title={t('auth.verify.requiredToWrite')}
+      description={t('auth.verify.description')}
+      actions={
+        <Button asChild size="sm">
+          <Link href="/verify-email">{t('auth.verify.action')}</Link>
         </Button>
       }
     />

@@ -1,20 +1,22 @@
 import type { Metadata } from 'next';
 import { getTranslate } from '@/i18n/server';
 import { PageHeader, SectionTitle } from '@/components/ui/page';
-import { Button } from '@/components/ui/button';
-import { StatusBadge } from '@/components/ui/status-badge';
+import { Badge, StatusBadge } from '@/components/ui/status-badge';
 import { DataView } from '@/components/states/data-view';
-import { SampleDataNotice } from '@/components/layout/sample-data-notice';
+import { ForcedStateNotice } from '@/components/states/forced-state-notice';
+import { LiveRegion } from '@/components/realtime/live-region';
 import { listKnowledge } from '@/lib/api/queries';
-import { applyForcedState, readForcedState } from '@/lib/api/state-override';
-import { env } from '@/lib/env';
+import { applyForcedState, devForcedState } from '@/lib/api/state-override';
 import { knowledgeStatusBadge } from '@/lib/status-badges';
-import type { KnowledgeEntry } from '@/lib/api/types';
+import type { KnowledgeItemSummary } from '@/lib/api/types';
 import type { Translate } from '@/i18n/dictionary';
 
 export const metadata: Metadata = { title: 'Brain' };
 
-function KnowledgeList({ entries, t }: { entries: KnowledgeEntry[]; t: Translate }) {
+/** Estados que ainda esperam uma decisão humana. */
+const PENDING: KnowledgeItemSummary['status'][] = ['draft', 'proposed'];
+
+function KnowledgeList({ entries, t }: { entries: KnowledgeItemSummary[]; t: Translate }) {
   return (
     <ul className="space-y-2">
       {entries.map((entry) => {
@@ -30,15 +32,18 @@ function KnowledgeList({ entries, t }: { entries: KnowledgeEntry[]; t: Translate
                 {badge.label}
               </StatusBadge>
             </div>
-            <p className="mt-1 text-sm text-muted">{entry.summary}</p>
-            <div className="mt-3 flex items-center justify-between gap-2">
-              <p className="text-xs text-muted">{t('brain.proposedBy', { author: entry.authorName })}</p>
-              {entry.status === 'proposed' ? (
-                <Button size="sm" variant="secondary">
-                  {t('brain.review')}
-                </Button>
-              ) : null}
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <Badge>{entry.category}</Badge>
+              <Badge>{t('brain.confidence', { value: entry.confidence })}</Badge>
+              {entry.tags.map((tag) => (
+                <Badge key={tag}>{tag}</Badge>
+              ))}
             </div>
+            <p className="mt-2 text-xs text-muted">
+              {entry.proposedBy
+                ? t('brain.proposedBy', { author: entry.proposedBy.name })
+                : t('brain.proposedByAgent')}
+            </p>
           </li>
         );
       })}
@@ -60,12 +65,14 @@ export default async function ProjectBrainPage({
   ]);
 
   const base = `/app/${organizationSlug}/projects/${projectId}`;
-  const forced = readForcedState(query, env().HUB_WEB_SAMPLE_DATA);
+  const forced = devForcedState(query);
   const knowledge = await applyForcedState(forced, await listKnowledge(projectId), []);
 
   return (
     <div className="space-y-5">
-      <SampleDataNotice />
+      <ForcedStateNotice forced={forced} />
+
+      <LiveRegion eventTypes={['knowledge.proposed', 'knowledge.reviewed']} projectId={projectId} />
 
       <PageHeader title={t('brain.title')} description={t('brain.subtitle')} />
 
@@ -77,24 +84,30 @@ export default async function ProjectBrainPage({
         backHref={base}
       >
         {(items) => {
-          const proposed = items.filter((entry) => entry.status === 'proposed');
-          const settled = items.filter((entry) => entry.status !== 'proposed');
+          const pending = items.filter((entry) => PENDING.includes(entry.status));
+          const settled = items.filter((entry) => !PENDING.includes(entry.status));
           return (
             <div className="space-y-6">
               <section>
                 <SectionTitle>{t('brain.proposals')}</SectionTitle>
-                {proposed.length === 0 ? (
+                {pending.length === 0 ? (
                   <p className="rounded-[var(--radius-prom)] border border-dashed border-line p-6 text-center text-sm text-muted">
                     {t('dashboard.empty.proposals')}
                   </p>
                 ) : (
-                  <KnowledgeList entries={proposed} t={t} />
+                  <KnowledgeList entries={pending} t={t} />
                 )}
               </section>
 
               <section>
                 <SectionTitle>{t('brain.approved')}</SectionTitle>
-                <KnowledgeList entries={settled} t={t} />
+                {settled.length === 0 ? (
+                  <p className="rounded-[var(--radius-prom)] border border-dashed border-line p-6 text-center text-sm text-muted">
+                    {t('brain.empty')}
+                  </p>
+                ) : (
+                  <KnowledgeList entries={settled} t={t} />
+                )}
               </section>
             </div>
           );

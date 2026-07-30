@@ -16,6 +16,12 @@ export type ApiFailureKind =
   | 'forbidden'
   /** Sem sessão válida; a tela manda para o login. */
   | 'unauthorized'
+  /**
+   * A conta existe e entrou, mas o e-mail não foi confirmado. A API responde
+   * `EMAIL_NOT_VERIFIED` — 401 em `POST /v1/organizations` e 403 nas rotas com
+   * permissão —, então o código é que discrimina, não o status.
+   */
+  | 'email-unverified'
   /** O recurso pedido não existe. */
   | 'not-found';
 
@@ -58,4 +64,13 @@ export function failure(kind: ApiFailureKind, details?: Omit<ApiFailure, 'ok' | 
 /** Aplica uma transformação sem perder os metadados de frescor. */
 export function mapResult<T, U>(result: ApiResult<T>, transform: (value: T) => U): ApiResult<U> {
   return result.ok ? { ...result, data: transform(result.data) } : result;
+}
+
+/**
+ * Junta um resultado a um valor derivado de outra leitura.
+ * O primeiro fracasso vence — uma tela composta não mostra meia verdade.
+ */
+export function firstFailure(...results: { ok: boolean }[]): ApiFailure | undefined {
+  const failed = results.find((result) => !result.ok);
+  return failed as ApiFailure | undefined;
 }

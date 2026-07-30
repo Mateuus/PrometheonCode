@@ -1,25 +1,28 @@
 import type { LucideIcon } from 'lucide-react';
-import { AlertTriangle, CircleAlert, Info } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CircleAlert, Info } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
-export type AlertTone = 'info' | 'alert' | 'danger';
+export type AlertTone = 'info' | 'alert' | 'danger' | 'success';
 
 const toneClasses: Record<AlertTone, string> = {
   info: 'border-line bg-surface-raised text-foreground',
   alert: 'border-alert/50 bg-alert/10 text-foreground',
   danger: 'border-danger/40 bg-danger/10 text-foreground',
+  success: 'border-success/40 bg-success/10 text-foreground',
 };
 
 const toneIcons: Record<AlertTone, LucideIcon> = {
   info: Info,
   alert: AlertTriangle,
   danger: CircleAlert,
+  success: CheckCircle2,
 };
 
 const toneIconClasses: Record<AlertTone, string> = {
   info: 'text-activity',
   alert: 'text-alert',
   danger: 'text-danger',
+  success: 'text-success',
 };
 
 /**

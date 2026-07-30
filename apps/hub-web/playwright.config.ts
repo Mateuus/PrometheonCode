@@ -15,8 +15,8 @@ export default defineConfig({
   },
   // Usa o Edge já instalado na máquina em vez de baixar um Chromium próprio.
   projects: [{ name: 'edge', use: { ...devices['Desktop Edge'], channel: 'msedge' } }],
-  // Sobe o próprio dev server. Enquanto a Hub API não existe, o app roda em modo
-  // de dados de exemplo (ver `src/lib/api/README-provisorio` no código).
+  // Sobe o próprio dev server. Estes testes cobrem só o que não depende de
+  // conta — o caminho autenticado exige Hub API, worker e banco no ar.
   webServer: {
     command: 'pnpm dev',
     url: baseURL,

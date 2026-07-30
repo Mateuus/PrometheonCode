@@ -8,8 +8,8 @@ import type { MessageKey } from '@/i18n/catalog';
  * não precisa saber em que língua o usuário está.
  */
 export interface FormState {
-  status: 'idle' | 'error';
-  /** Erro geral do formulário. */
+  status: 'idle' | 'error' | 'success';
+  /** Mensagem geral do formulário — erro ou confirmação. */
   messageKey?: MessageKey;
   /** Erro por campo, indexado pelo `name` do input. */
   fieldErrors?: Partial<Record<string, MessageKey>>;
@@ -22,4 +22,8 @@ export function formError(
   fieldErrors?: Partial<Record<string, MessageKey>>,
 ): FormState {
   return { status: 'error', messageKey, ...(fieldErrors ? { fieldErrors } : {}) };
+}
+
+export function formSuccess(messageKey: MessageKey): FormState {
+  return { status: 'success', messageKey };
 }

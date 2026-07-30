@@ -1,5 +1,6 @@
 'use client';
 
+import { useRef } from 'react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import Link from 'next/link';
 import { ChevronDown, KeyRound, LogOut, Shield, UserRound } from 'lucide-react';
@@ -12,6 +13,7 @@ const itemClass =
 /** Menu da conta. O Radix cuida do foco, do Escape e do anúncio do menu. */
 export function UserMenu({ name, email }: { name: string; email: string }) {
   const t = useTranslate();
+  const signOutForm = useRef<HTMLFormElement>(null);
   const initials = name
     .split(' ')
     .slice(0, 2)
@@ -64,14 +66,27 @@ export function UserMenu({ name, email }: { name: string; email: string }) {
           </DropdownMenu.Item>
 
           <DropdownMenu.Separator className="my-1 h-px bg-line" />
-          <DropdownMenu.Item asChild>
-            <form action={logoutAction}>
-              <button type="submit" className={itemClass}>
-                <LogOut aria-hidden className="size-4 text-muted" />
-                {t('action.signOut')}
-              </button>
-            </form>
-          </DropdownMenu.Item>
+          {/*
+            Sair é o único item que não é um link.
+
+            O menu fecha ao selecionar, e fechar desmonta o conteúdo antes de o
+            clique nativo chegar ao `<button>` — o formulário nunca seria
+            enviado. Por isso o envio é explícito: `onSelect` segura o
+            fechamento e pede o submit. O `<form>` fica por fora do item para
+            que o papel de `menuitem` caia em quem se ativa, e não no formulário.
+          */}
+          <form ref={signOutForm} action={logoutAction}>
+            <DropdownMenu.Item
+              className={itemClass}
+              onSelect={(event) => {
+                event.preventDefault();
+                signOutForm.current?.requestSubmit();
+              }}
+            >
+              <LogOut aria-hidden className="size-4 text-muted" />
+              {t('action.signOut')}
+            </DropdownMenu.Item>
+          </form>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

@@ -1,16 +1,16 @@
 import type { Metadata } from 'next';
-import { getTranslate } from '@/i18n/server';
+import { getLocale, getTranslate } from '@/i18n/server';
 import { PageHeader } from '@/components/ui/page';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input, Textarea } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/status-badge';
 import { DataView } from '@/components/states/data-view';
-import { SampleDataNotice } from '@/components/layout/sample-data-notice';
-import { getProject } from '@/lib/api/queries';
-import { applyForcedState, readForcedState } from '@/lib/api/state-override';
-import { env } from '@/lib/env';
+import { ForcedStateNotice } from '@/components/states/forced-state-notice';
+import { UpdateProjectForm } from '@/components/forms/project-settings-form';
+import { getOrganizationBySlug, getProject } from '@/lib/api/queries';
+import { applyForcedState, devForcedState } from '@/lib/api/state-override';
+import { absoluteDateTime } from '@/lib/format';
+import { viewerCan } from '@/lib/roles';
 
 export const metadata: Metadata = { title: 'Project settings' };
 
@@ -21,80 +21,92 @@ export default async function ProjectSettingsPage({
   params: Promise<{ organizationSlug: string; projectId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const [{ organizationSlug, projectId }, query, t] = await Promise.all([
+  const [{ organizationSlug, projectId }, query, t, locale] = await Promise.all([
     params,
     searchParams,
     getTranslate(),
+    getLocale(),
   ]);
 
   const base = `/app/${organizationSlug}/projects/${projectId}`;
-  const forced = readForcedState(query, env().HUB_WEB_SAMPLE_DATA);
-  const project = await applyForcedState(forced, await getProject(projectId));
+  const forced = devForcedState(query);
+  const [projectResult, organization] = await Promise.all([
+    getProject(projectId),
+    getOrganizationBySlug(organizationSlug),
+  ]);
+  const project = await applyForcedState(forced, projectResult);
+
+  const canConfigure =
+    organization.ok &&
+    viewerCan(
+      { role: organization.data.role, permissions: organization.data.permissions },
+      'project.configure',
+    );
 
   return (
     <div className="space-y-5">
-      <SampleDataNotice />
+      <ForcedStateNotice forced={forced} />
 
       <PageHeader title={t('projectSettings.title')} />
 
       <DataView result={project} retryHref={`${base}/settings`} backHref={base}>
         {(data) => (
           <div className="max-w-2xl space-y-5">
+            {canConfigure ? (
+              <UpdateProjectForm
+                projectId={data.id}
+                name={data.name}
+                description={data.description ?? ''}
+                version={data.version}
+                returnTo={`${base}/settings`}
+              />
+            ) : (
+              <Alert title={t('projectSettings.readOnly')} />
+            )}
+
             <Card>
               <CardHeader>
-                <CardTitle>{t('projectSettings.general')}</CardTitle>
+                <CardTitle>{t('projects.repository')}</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="project-name">{t('projectSettings.name')}</Label>
-                  <Input id="project-name" name="name" defaultValue={data.name} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="project-description">{t('projectSettings.description')}</Label>
-                  <Textarea
-                    id="project-description"
-                    name="description"
-                    defaultValue={data.description}
-                  />
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="project-repository">{t('projectSettings.repositoryUrl')}</Label>
-                    <Input
-                      id="project-repository"
-                      name="repositoryUrl"
-                      defaultValue={data.repositoryUrl}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="project-branch">{t('projectSettings.defaultBranch')}</Label>
-                    <Input
-                      id="project-branch"
-                      name="defaultBranch"
-                      defaultValue={data.defaultBranch}
-                    />
-                  </div>
-                </div>
+              <CardContent className="space-y-2 text-sm">
+                {data.repositories.length === 0 ? (
+                  // A API não tem rota para conectar repositório; dizer isso é
+                  // melhor que oferecer um campo que não salva em lugar nenhum.
+                  <p className="text-muted">{t('projectSettings.repositoryUnavailable')}</p>
+                ) : (
+                  data.repositories.map((repository) => (
+                    <p key={repository.id} className="break-all font-mono text-xs text-link">
+                      {repository.remoteUrl}
+                    </p>
+                  ))
+                )}
               </CardContent>
-              <CardFooter>
-                <Button size="sm">{t('action.save')}</Button>
-              </CardFooter>
             </Card>
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-danger">{t('projectSettings.dangerZone')}</CardTitle>
+                <CardTitle>{t('projectSettings.metadata')}</CardTitle>
               </CardHeader>
               <CardContent>
-                <Alert tone="alert" title={t('projectSettings.archive')}>
-                  {t('projectSettings.archiveHint')}
-                </Alert>
+                <dl className="divide-y divide-line text-sm">
+                  <div className="flex items-center justify-between gap-2 py-1.5">
+                    <dt className="text-muted">{t('projectSettings.slug')}</dt>
+                    <dd>
+                      <Badge>{data.slug}</Badge>
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 py-1.5">
+                    <dt className="text-muted">{t('projects.createdAt')}</dt>
+                    <dd className="font-medium text-foreground">
+                      {absoluteDateTime(data.createdAt, locale)}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 py-1.5">
+                    <dt className="text-muted">{t('projectSettings.version')}</dt>
+                    <dd className="font-medium text-foreground">{data.version}</dd>
+                  </div>
+                </dl>
               </CardContent>
-              <CardFooter>
-                <Button size="sm" variant="danger">
-                  {t('projectSettings.archive')}
-                </Button>
-              </CardFooter>
             </Card>
           </div>
         )}

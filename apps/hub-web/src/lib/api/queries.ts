@@ -1,190 +1,321 @@
 import 'server-only';
-import { z } from 'zod';
-import { env } from '@/lib/env';
+import type { z } from 'zod';
 import { accessToken } from '@/lib/auth/session';
-import { hubRequest } from './client';
+import { hubRequest, type HubRequestOptions } from './client';
 import { failure, success, type ApiResult } from './result';
 import {
-  agentSchema,
-  auditEventSchema,
-  authSessionSchema,
-  conversationSchema,
-  dashboardSummarySchema,
-  invitationSchema,
-  knowledgeEntrySchema,
-  memberSchema,
-  messageSchema,
-  organizationSchema,
-  planSchema,
+  activeAgentListSchema,
+  auditPageSchema,
+  conversationPageSchema,
+  knowledgePageSchema,
+  memberPageSchema,
+  meResponseSchema,
+  messagePageSchema,
+  organizationPageSchema,
+  organizationWithAccessSchema,
+  planListSchema,
+  presenceListSchema,
+  projectPageSchema,
   projectSchema,
-  taskSchema,
-  userSchema,
+  subscriptionOverviewSchema,
+  taskPageSchema,
 } from './schemas';
 import type {
-  Agent,
-  AuditEvent,
-  AuthSession,
+  ActiveAgent,
+  AuditLog,
   Conversation,
   DashboardSummary,
-  Invitation,
-  KnowledgeEntry,
-  Member,
+  KnowledgeItemSummary,
   Message,
-  Organization,
+  OrganizationMember,
+  OrganizationRole,
+  OrganizationWithAccess,
+  Page,
   Plan,
+  PresenceEntry,
   Project,
+  SubscriptionOverview,
   Task,
-  User,
 } from './types';
 
 /**
- * Leituras do domínio.
+ * Leituras do domínio, contra a Hub API de verdade.
  *
- * Cada função tem dois caminhos: a chamada HTTP definitiva, escrita contra os
- * endpoints do `Docs/06`, e o ramo de dados de exemplo que vale enquanto a Hub
- * API não sobe. O flag é `HUB_WEB_SAMPLE_DATA`; nenhuma tela sabe qual dos dois
- * respondeu.
+ * Duas coisas valem para tudo aqui:
+ *
+ * - **A organização é resolvida por ULID.** A API não aceita slug em rota
+ *   nenhuma (`organizationParamsSchema` exige ULID). O slug que está na URL do
+ *   Hub Web vira id por `GET /v1/me`, que já lista as organizações do usuário
+ *   com slug e papel — uma chamada barata que também serve de autorização
+ *   preliminar.
+ * - **Listagem é paginada por cursor.** `data` vem como
+ *   `{ items, pageInfo }`; as funções abaixo entregam `items` já desempacotado,
+ *   e devolvem a página inteira só onde a tela realmente pagina.
  */
 
-function sampleDataEnabled(): boolean {
-  return env().HUB_WEB_SAMPLE_DATA;
+/** Tamanho de página das listagens que a tela mostra por inteiro. */
+const PAGE_LIMIT = 100;
+
+async function get<T>(
+  path: string,
+  schema: z.ZodType<T>,
+  options?: Omit<HubRequestOptions, 'accessToken' | 'method'>,
+): Promise<ApiResult<T>> {
+  const token = await accessToken();
+  if (!token) {
+    return failure('unauthorized', { code: 'SESSION_EXPIRED' });
+  }
+  return hubRequest(path, schema, { ...options, accessToken: token });
 }
 
-/** Importa os dados de exemplo só quando o flag pede — provisório. */
-async function samples() {
-  return import('./sample-data');
-}
-
-async function get<T>(path: string, schema: z.ZodType<T>): Promise<ApiResult<T>> {
-  return hubRequest(path, schema, { accessToken: await accessToken() });
+/** Desembrulha `{ items, pageInfo }` quando a tela só quer a lista. */
+function items<T>(result: ApiResult<{ items: T[] }>): ApiResult<T[]> {
+  return result.ok ? { ...result, data: result.data.items } : result;
 }
 
 // ---------------------------------------------------------------- identidade
 
-export async function getCurrentUser(): Promise<ApiResult<User>> {
-  if (sampleDataEnabled()) {
-    return success((await samples()).sampleUser);
-  }
-  return get('/v1/me', userSchema);
+export interface Viewer {
+  user: { id: string; name: string; email: string; emailVerified: boolean; avatarUrl: string | null };
+  organizations: { id: string; name: string; slug: string; role: OrganizationRole }[];
+  activeOrganizationId: string | null;
 }
 
-export async function listOrganizations(): Promise<ApiResult<Organization[]>> {
-  if (sampleDataEnabled()) {
-    return success((await samples()).sampleOrganizations);
-  }
-  return get('/v1/organizations', z.array(organizationSchema));
+export async function getViewer(): Promise<ApiResult<Viewer>> {
+  const result = await get('/v1/me', meResponseSchema);
+  return result.ok
+    ? {
+        ...result,
+        data: {
+          user: {
+            id: result.data.user.id,
+            name: result.data.user.name,
+            email: result.data.user.email,
+            emailVerified: result.data.user.emailVerified,
+            avatarUrl: result.data.user.avatarUrl,
+          },
+          organizations: [...result.data.organizations],
+          activeOrganizationId: result.data.activeOrganizationId,
+        },
+      }
+    : result;
 }
 
-export async function getOrganizationBySlug(slug: string): Promise<ApiResult<Organization>> {
-  if (sampleDataEnabled()) {
-    const found = (await samples()).sampleOrganizations.find((org) => org.slug === slug);
-    return found ? success(found) : failure('not-found');
-  }
-  // A API resolve por id; o slug vira id numa busca prévia quando ela existir.
-  return get(`/v1/organizations/${encodeURIComponent(slug)}`, organizationSchema);
+export async function listOrganizations(): Promise<ApiResult<OrganizationWithAccess[]>> {
+  return items(await get('/v1/organizations', organizationPageSchema, { query: { limit: PAGE_LIMIT } }));
 }
 
-export async function listMembers(organizationId: string): Promise<ApiResult<Member[]>> {
-  if (sampleDataEnabled()) {
-    return success((await samples()).sampleMembers);
+/**
+ * Traduz o slug da URL no ULID que a API entende.
+ * Slug desconhecido é `not-found`, não `forbidden`: quem não é membro não
+ * precisa saber se a organização existe.
+ */
+export async function resolveOrganizationId(slug: string): Promise<ApiResult<string>> {
+  const viewer = await getViewer();
+  if (!viewer.ok) {
+    return viewer;
   }
-  return get(`/v1/organizations/${encodeURIComponent(organizationId)}/members`, z.array(memberSchema));
+  const found = viewer.data.organizations.find((organization) => organization.slug === slug);
+  return found ? { ...viewer, data: found.id } : failure('not-found', { code: 'ORGANIZATION_NOT_FOUND' });
 }
 
-export async function listSessions(): Promise<ApiResult<AuthSession[]>> {
-  if (sampleDataEnabled()) {
-    return success((await samples()).sampleSessions);
-  }
-  return get('/v1/me/sessions', z.array(authSessionSchema));
+export async function getOrganizationBySlug(slug: string): Promise<ApiResult<OrganizationWithAccess>> {
+  const id = await resolveOrganizationId(slug);
+  return id.ok
+    ? get(`/v1/organizations/${encodeURIComponent(id.data)}`, organizationWithAccessSchema)
+    : id;
 }
 
-export async function getInvitation(token: string): Promise<ApiResult<Invitation>> {
-  if (sampleDataEnabled()) {
-    const sample = (await samples()).sampleInvitation;
-    // Um token qualquer serve para ver a tela válida; `invalid` mostra a outra.
-    return token === 'invalid' ? failure('not-found') : success({ ...sample, token });
-  }
-  return get(`/v1/invitations/${encodeURIComponent(token)}`, invitationSchema);
+export async function listMembers(organizationId: string): Promise<ApiResult<OrganizationMember[]>> {
+  return items(
+    await get(`/v1/organizations/${encodeURIComponent(organizationId)}/members`, memberPageSchema, {
+      query: { limit: PAGE_LIMIT },
+    }),
+  );
+}
+
+export async function getSubscription(
+  organizationId: string,
+): Promise<ApiResult<SubscriptionOverview>> {
+  return get(
+    `/v1/organizations/${encodeURIComponent(organizationId)}/subscription`,
+    subscriptionOverviewSchema,
+  );
 }
 
 // ------------------------------------------------------------------ projetos
 
 export async function listProjects(organizationId: string): Promise<ApiResult<Project[]>> {
-  if (sampleDataEnabled()) {
-    return success((await samples()).sampleProjects);
-  }
-  return get(`/v1/organizations/${encodeURIComponent(organizationId)}/projects`, z.array(projectSchema));
+  return items(
+    await get(`/v1/organizations/${encodeURIComponent(organizationId)}/projects`, projectPageSchema, {
+      query: { limit: PAGE_LIMIT },
+    }),
+  );
 }
 
 export async function getProject(projectId: string): Promise<ApiResult<Project>> {
-  if (sampleDataEnabled()) {
-    const found = (await samples()).sampleProjects.find((project) => project.id === projectId);
-    return found ? success(found) : failure('not-found');
-  }
   return get(`/v1/projects/${encodeURIComponent(projectId)}`, projectSchema);
 }
 
 export async function listConversations(projectId: string): Promise<ApiResult<Conversation[]>> {
-  if (sampleDataEnabled()) {
-    const all = (await samples()).sampleConversations;
-    return success(all.filter((item) => item.projectId === projectId));
-  }
-  return get(`/v1/projects/${encodeURIComponent(projectId)}/conversations`, z.array(conversationSchema));
+  return items(
+    await get(`/v1/projects/${encodeURIComponent(projectId)}/conversations`, conversationPageSchema, {
+      query: { limit: PAGE_LIMIT },
+    }),
+  );
 }
 
+/**
+ * Mensagens de uma conversa, na ordem em que se lê.
+ * Sem `afterSequence` a API responde da mais nova para a mais velha; a tela
+ * quer o contrário, então a inversão acontece aqui e não em cada componente.
+ */
 export async function listMessages(conversationId: string): Promise<ApiResult<Message[]>> {
-  if (sampleDataEnabled()) {
-    const all = (await samples()).sampleMessages;
-    return success(all.filter((item) => item.conversationId === conversationId));
-  }
-  return get(`/v1/conversations/${encodeURIComponent(conversationId)}/messages`, z.array(messageSchema));
+  const result = await get(
+    `/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
+    messagePageSchema,
+    { query: { limit: PAGE_LIMIT } },
+  );
+  return result.ok
+    ? { ...result, data: [...result.data.items].sort((a, b) => a.sequence - b.sequence) }
+    : result;
 }
 
 export async function listTasks(projectId: string): Promise<ApiResult<Task[]>> {
-  if (sampleDataEnabled()) {
-    const all = (await samples()).sampleTasks;
-    return success(all.filter((item) => item.projectId === projectId));
-  }
-  return get(`/v1/projects/${encodeURIComponent(projectId)}/tasks`, z.array(taskSchema));
+  return items(
+    await get(`/v1/projects/${encodeURIComponent(projectId)}/tasks`, taskPageSchema, {
+      query: { limit: PAGE_LIMIT },
+    }),
+  );
 }
 
-export async function listAgents(projectId: string): Promise<ApiResult<Agent[]>> {
-  if (sampleDataEnabled()) {
-    const all = (await samples()).sampleAgents;
-    return success(all.filter((item) => item.projectId === projectId));
-  }
-  return get(`/v1/projects/${encodeURIComponent(projectId)}/agents/active`, z.array(agentSchema));
+export async function listActiveAgents(projectId: string): Promise<ApiResult<ActiveAgent[]>> {
+  const result = await get(
+    `/v1/projects/${encodeURIComponent(projectId)}/agents/active`,
+    activeAgentListSchema,
+  );
+  return result.ok ? { ...result, data: result.data.agents } : result;
 }
 
-export async function listKnowledge(projectId: string): Promise<ApiResult<KnowledgeEntry[]>> {
-  if (sampleDataEnabled()) {
-    const all = (await samples()).sampleKnowledge;
-    return success(all.filter((item) => item.projectId === projectId));
-  }
-  return get(`/v1/projects/${encodeURIComponent(projectId)}/knowledge`, z.array(knowledgeEntrySchema));
+export async function listPresence(projectId: string): Promise<ApiResult<PresenceEntry[]>> {
+  const result = await get(`/v1/projects/${encodeURIComponent(projectId)}/presence`, presenceListSchema);
+  return result.ok ? { ...result, data: [...result.data.entries] } : result;
 }
 
-// --------------------------------------------------------- painel e auditoria
-
-export async function getDashboard(organizationId: string): Promise<ApiResult<DashboardSummary>> {
-  if (sampleDataEnabled()) {
-    return success((await samples()).sampleDashboard());
-  }
-  return get(`/v1/organizations/${encodeURIComponent(organizationId)}/dashboard`, dashboardSummarySchema);
+export async function listKnowledge(projectId: string): Promise<ApiResult<KnowledgeItemSummary[]>> {
+  return items(
+    await get(`/v1/projects/${encodeURIComponent(projectId)}/knowledge`, knowledgePageSchema, {
+      query: { limit: PAGE_LIMIT },
+    }),
+  );
 }
 
-export async function listAuditEvents(organizationId: string): Promise<ApiResult<AuditEvent[]>> {
-  if (sampleDataEnabled()) {
-    return success((await samples()).sampleAuditEvents);
-  }
-  return get(`/v1/audit?organizationId=${encodeURIComponent(organizationId)}`, z.array(auditEventSchema));
+// --------------------------------------------------------------- auditoria
+
+/**
+ * Registro de auditoria.
+ *
+ * A API resolve a organização pelo **token**, não pela URL: `GET /v1/audit` não
+ * aceita `organizationId`. Quem estiver vendo uma organização que não é a ativa
+ * da sessão precisa saber disso — a tela avisa em vez de mostrar a lista errada.
+ */
+export async function listAuditEvents(cursor?: string): Promise<ApiResult<Page<AuditLog>>> {
+  const result = await get('/v1/audit', auditPageSchema, {
+    query: { limit: 50, ...(cursor ? { cursor } : {}) },
+  });
+  return result.ok
+    ? { ...result, data: { items: [...result.data.items], pageInfo: result.data.pageInfo } }
+    : result;
 }
 
 // -------------------------------------------------------------------- planos
 
 export async function listPlans(): Promise<ApiResult<Plan[]>> {
-  if (sampleDataEnabled()) {
-    return success((await samples()).samplePlans);
+  const result = await get('/v1/admin/plans', planListSchema);
+  return result.ok ? { ...result, data: [...result.data.plans] } : result;
+}
+
+// ----------------------------------------------------------------- dashboard
+
+/** Projetos que entram na agregação do painel. Mais que isso é conta demais. */
+const DASHBOARD_PROJECT_FANOUT = 6;
+
+const ACTIVE_TASK_STATUSES = new Set(['claimed', 'in_progress']);
+const PENDING_KNOWLEDGE_STATUSES = new Set(['proposed', 'draft']);
+
+/**
+ * Painel da organização.
+ *
+ * **A Hub API não tem endpoint de dashboard.** O que existe é a assinatura
+ * (que já traz uso e limites), a lista de projetos e, por projeto, tarefas,
+ * conhecimento e agentes. O painel é composto aqui, em paralelo e com um teto
+ * de projetos — um leque sem limite viraria uma tela que fica mais lenta a cada
+ * projeto novo.
+ *
+ * Quando um projeto não responde, o painel continua de pé e marca `partial`:
+ * a tela diz que os números são um piso, em vez de fingir precisão.
+ */
+export async function getDashboard(organizationId: string): Promise<ApiResult<DashboardSummary>> {
+  const [organization, projects, subscription, activity] = await Promise.all([
+    get(`/v1/organizations/${encodeURIComponent(organizationId)}`, organizationWithAccessSchema),
+    listProjects(organizationId),
+    getSubscription(organizationId),
+    listAuditEvents(),
+  ]);
+
+  if (!organization.ok) {
+    return organization;
   }
-  return get('/v1/admin/plans', z.array(planSchema));
+  if (!projects.ok) {
+    return projects;
+  }
+
+  const recentProjects = [...projects.data]
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .slice(0, DASHBOARD_PROJECT_FANOUT);
+
+  const perProject = await Promise.all(
+    recentProjects.map(async (project) => ({
+      tasks: await listTasks(project.id),
+      knowledge: await listKnowledge(project.id),
+      agents: await listActiveAgents(project.id),
+    })),
+  );
+
+  let partial = false;
+  const tasks: Task[] = [];
+  const knowledge: KnowledgeItemSummary[] = [];
+  const agents: ActiveAgent[] = [];
+
+  for (const bundle of perProject) {
+    if (bundle.tasks.ok) {
+      tasks.push(...bundle.tasks.data);
+    } else {
+      partial = true;
+    }
+    if (bundle.knowledge.ok) {
+      knowledge.push(...bundle.knowledge.data);
+    } else {
+      partial = true;
+    }
+    if (bundle.agents.ok) {
+      agents.push(...bundle.agents.data);
+    } else {
+      partial = true;
+    }
+  }
+
+  return success({
+    organization: organization.data,
+    recentProjects,
+    projectCount: projects.data.length,
+    activeTasks: tasks.filter((task) => ACTIVE_TASK_STATUSES.has(task.status)),
+    blockedTasks: tasks.filter((task) => task.status === 'blocked'),
+    pendingReviews: tasks.filter((task) => task.status === 'in_review'),
+    knowledgeProposals: knowledge.filter((entry) => PENDING_KNOWLEDGE_STATUSES.has(entry.status)),
+    activeAgents: agents,
+    subscription: subscription.ok ? subscription.data : null,
+    recentActivity: activity.ok ? activity.data.items.slice(0, 8) : [],
+    partial,
+  });
 }

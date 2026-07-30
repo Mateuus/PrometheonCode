@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { ApiResult } from '@/lib/api/result';
 import type { MessageKey } from '@/i18n/catalog';
 import {
+  EmailUnverifiedState,
   EmptyState,
   ErrorState,
   ForbiddenState,
@@ -53,6 +54,8 @@ export async function DataView<T>({
         return <ForbiddenState {...(backHref ? { backHref } : {})} />;
       case 'unauthorized':
         return <UnauthorizedState />;
+      case 'email-unverified':
+        return <EmailUnverifiedState />;
       case 'not-found':
         return <NotFoundState {...(backHref ? { backHref } : {})} />;
       case 'error':

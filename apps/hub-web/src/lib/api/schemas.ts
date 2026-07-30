@@ -1,193 +1,121 @@
 import { z } from 'zod';
-import { ROLES } from '@prometheon/permissions';
-import type {
-  Agent,
-  AuditEvent,
-  AuthSession,
-  Conversation,
-  DashboardSummary,
-  Invitation,
-  KnowledgeEntry,
-  Member,
-  Message,
-  Organization,
-  Plan,
-  Project,
-  Task,
-  User,
-} from './types';
+import {
+  auditLogSchema,
+  conversationSchema,
+  cursorPageSchema,
+  knowledgeItemSummarySchema,
+  messageSchema,
+  meResponseSchema,
+  organizationMemberSchema,
+  organizationWithAccessSchema,
+  planSchema,
+  presenceEntrySchema,
+  projectSchema,
+  subscriptionOverviewSchema,
+  taskSchema,
+} from '@prometheon/contracts';
 
 /**
  * Validação de runtime da fronteira com a Hub API.
  *
  * "Toda fronteira valida runtime" é regra do `Docs/03`: o que chega da rede é
- * desconhecido até passar por aqui. Os schemas acompanham `types.ts` e trocam
- * junto com ele quando `@prometheon/contracts` publicar os oficiais.
+ * desconhecido até passar por aqui. A maior parte dos schemas vem pronta de
+ * `@prometheon/contracts` — o mesmo pacote que a API usa para se validar.
+ *
+ * Este arquivo só declara o que **não** está lá, e existe justamente para dar um
+ * lugar único aos pontos em que a API real e o contrato publicado divergem:
+ *
+ * - `POST /v1/auth/register` responde `{ email, verificationEmailSent }`, e não
+ *   o usuário criado — para o cadastro não virar oráculo de enumeração.
+ * - `GET /v1/realtime/token` responde mais campos que `realtimeTokenResponseSchema`.
+ * - `GET /v1/projects/:id/agents/active` usa um schema interno da hub-api.
+ *
+ * Nenhum schema usa `.strict()`: campo a mais na resposta é evolução da API, não
+ * motivo para a tela quebrar. O servidor manda `aggregate` nos eventos ao vivo,
+ * por exemplo, e o contrato público ainda não o descreve.
  */
 
-const iso = z.string().datetime({ offset: true }).or(z.string());
-const role = z.enum(ROLES);
+// --------------------------------------------------------------- identidade
 
-export const userSchema = z.object({
-  id: z.string(),
-  name: z.string(),
+export { meResponseSchema, organizationWithAccessSchema };
+
+export const organizationPageSchema = cursorPageSchema(organizationWithAccessSchema);
+export const memberPageSchema = cursorPageSchema(organizationMemberSchema);
+
+export const registerAcceptedSchema = z.object({
   email: z.string(),
-  createdAt: iso,
-}) satisfies z.ZodType<User>;
-
-export const organizationSchema = z.object({
-  id: z.string(),
-  slug: z.string(),
-  name: z.string(),
-  viewerRole: role,
-  memberCount: z.number().int().nonnegative(),
-  projectCount: z.number().int().nonnegative(),
-  planId: z.string(),
-}) satisfies z.ZodType<Organization>;
-
-export const memberSchema = z.object({
-  id: z.string(),
-  userId: z.string(),
-  name: z.string(),
-  email: z.string(),
-  role,
-  status: z.enum(['active', 'invited', 'suspended']),
-  joinedAt: iso,
-  lastSeenAt: iso.nullable(),
-  online: z.boolean(),
-}) satisfies z.ZodType<Member>;
-
-export const invitationSchema = z.object({
-  token: z.string(),
-  organizationName: z.string(),
-  organizationSlug: z.string(),
-  role,
-  invitedEmail: z.string(),
-  expiresAt: iso,
-}) satisfies z.ZodType<Invitation>;
-
-export const authSessionSchema = z.object({
-  id: z.string(),
-  deviceLabel: z.string(),
-  ipAddress: z.string(),
-  createdAt: iso,
-  lastActiveAt: iso,
-  current: z.boolean(),
-}) satisfies z.ZodType<AuthSession>;
-
-export const projectSchema = z.object({
-  id: z.string(),
-  organizationId: z.string(),
-  name: z.string(),
-  description: z.string(),
-  repositoryUrl: z.string(),
-  defaultBranch: z.string(),
-  openTaskCount: z.number().int().nonnegative(),
-  activeAgentCount: z.number().int().nonnegative(),
-  lastActivityAt: iso,
-}) satisfies z.ZodType<Project>;
-
-export const conversationSchema = z.object({
-  id: z.string(),
-  projectId: z.string(),
-  title: z.string(),
-  messageCount: z.number().int().nonnegative(),
-  updatedAt: iso,
-}) satisfies z.ZodType<Conversation>;
-
-export const messageSchema = z.object({
-  id: z.string(),
-  conversationId: z.string(),
-  authorType: z.enum(['user', 'agent', 'system']),
-  authorName: z.string(),
-  body: z.string(),
-  createdAt: iso,
-}) satisfies z.ZodType<Message>;
-
-export const taskSchema = z.object({
-  id: z.string(),
-  projectId: z.string(),
-  title: z.string(),
-  status: z.enum(['backlog', 'running', 'blocked', 'review', 'done']),
-  assigneeName: z.string().nullable(),
-  blockedReason: z.string().nullable(),
-  updatedAt: iso,
-}) satisfies z.ZodType<Task>;
-
-export const agentSchema = z.object({
-  id: z.string(),
-  projectId: z.string(),
-  name: z.string(),
-  role: z.enum(['main', 'worker']),
-  status: z.enum(['idle', 'working', 'offline', 'paused']),
-  deviceLabel: z.string(),
-  currentTaskTitle: z.string().nullable(),
-  lastHeartbeatAt: iso.nullable(),
-}) satisfies z.ZodType<Agent>;
-
-export const knowledgeEntrySchema = z.object({
-  id: z.string(),
-  projectId: z.string(),
-  title: z.string(),
-  summary: z.string(),
-  status: z.enum(['proposed', 'approved', 'rejected']),
-  authorName: z.string(),
-  updatedAt: iso,
-}) satisfies z.ZodType<KnowledgeEntry>;
-
-export const auditEventSchema = z.object({
-  id: z.string(),
-  occurredAt: iso,
-  actorName: z.string(),
-  action: z.string(),
-  target: z.string(),
-  ipAddress: z.string(),
-}) satisfies z.ZodType<AuditEvent>;
-
-const usageMetricSchema = z.object({
-  used: z.number(),
-  limit: z.number().nullable(),
-  unit: z.enum(['count', 'megabytes']),
+  verificationEmailSent: z.boolean(),
 });
 
-export const dashboardSummarySchema = z.object({
-  recentProjects: z.array(projectSchema),
-  membersOnline: z.array(memberSchema),
-  agentsWorking: z.array(agentSchema),
-  blockedTasks: z.array(taskSchema),
-  pendingReviews: z.array(taskSchema),
-  knowledgeProposals: z.array(knowledgeEntrySchema),
-  usage: z.object({
-    messages: usageMetricSchema,
-    tasks: usageMetricSchema,
-    storage: usageMetricSchema,
+/** `POST /v1/auth/login`. O refresh some do corpo quando vai para o cookie. */
+export const loginResultSchema = z.object({
+  user: meResponseSchema.shape.user,
+  tokens: z.object({
+    tokenType: z.literal('Bearer'),
+    accessToken: z.string().min(1),
+    expiresIn: z.number().int().positive(),
+    refreshToken: z.string().optional(),
+    refreshExpiresIn: z.number().int().positive().optional(),
   }),
-  syncIncidents: z.array(
-    z.object({
-      id: z.string(),
-      projectName: z.string(),
-      summary: z.string(),
-      occurredAt: iso,
-      severity: z.enum(['warning', 'error']),
-    }),
-  ),
-}) satisfies z.ZodType<DashboardSummary>;
+  sessionId: z.string(),
+});
 
-export const planSchema = z.object({
-  id: z.string(),
-  slug: z.string(),
-  name: z.string(),
-  priceCents: z.number().int().nonnegative(),
-  currency: z.string(),
-  isDefault: z.boolean(),
-  visible: z.boolean(),
-  limits: z.object({
-    membersPerOrganization: z.number().int().nullable(),
-    projectsPerOrganization: z.number().int().nullable(),
-    concurrentAgents: z.number().int().nullable(),
-    messagesPerMonth: z.number().int().nullable(),
-    knowledgeStorageMb: z.number().int().nullable(),
-    auditRetentionDays: z.number().int().nullable(),
+/** `POST /v1/auth/refresh`. */
+export const refreshResultSchema = z.object({
+  tokens: loginResultSchema.shape.tokens,
+});
+
+/** `POST /v1/auth/verify-email`. */
+export const verifyEmailResultSchema = z.object({ user: meResponseSchema.shape.user });
+
+/** Respostas que só confirmam o comando (`{}`). */
+export const emptyResultSchema = z.object({}).loose();
+
+// ------------------------------------------------------------------ domínio
+
+export const projectPageSchema = cursorPageSchema(projectSchema);
+export const conversationPageSchema = cursorPageSchema(conversationSchema);
+export const messagePageSchema = cursorPageSchema(messageSchema);
+export const taskPageSchema = cursorPageSchema(taskSchema);
+export const knowledgePageSchema = cursorPageSchema(knowledgeItemSummarySchema);
+export const auditPageSchema = cursorPageSchema(auditLogSchema);
+
+export { projectSchema, conversationSchema, messageSchema, taskSchema, subscriptionOverviewSchema };
+
+export const presenceListSchema = z.object({ entries: z.array(presenceEntrySchema) });
+
+/** `GET /v1/projects/:id/agents/active` — schema interno da hub-api. */
+export const activeAgentSchema = z.object({
+  deviceId: z.string(),
+  deviceName: z.string(),
+  kind: z.enum(['vscode', 'cli', 'ci', 'other']),
+  platform: z.string().nullable(),
+  clientVersion: z.string().nullable(),
+  status: z.enum(['online', 'idle']),
+  owner: z.object({
+    id: z.string(),
+    name: z.string(),
+    email: z.string(),
+    avatarUrl: z.string().nullable(),
   }),
-  organizationCount: z.number().int().nonnegative(),
-}) satisfies z.ZodType<Plan>;
+  activeAgentRunIds: z.array(z.string()),
+  lastSeenAt: z.string(),
+});
+
+export const activeAgentListSchema = z.object({ agents: z.array(activeAgentSchema) });
+
+/** `GET /v1/admin/plans` — objeto com a lista dentro, não a lista solta. */
+export const planListSchema = z.object({ plans: z.array(planSchema) });
+
+// ------------------------------------------------------------------ realtime
+
+/** `GET /v1/realtime/token`, no formato que a API realmente devolve. */
+export const realtimeTicketSchema = z.object({
+  token: z.string(),
+  tokenType: z.literal('Bearer'),
+  expiresIn: z.number().int().positive(),
+  expiresAt: z.string(),
+  url: z.string(),
+  protocolVersion: z.number().int().positive(),
+  heartbeatIntervalMs: z.number().int().positive(),
+});

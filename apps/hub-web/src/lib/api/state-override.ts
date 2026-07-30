@@ -1,15 +1,16 @@
 import { failure, success, type ApiResult } from './result';
 
 /**
- * PROVISÓRIO — forçar um estado de tela pela URL.
+ * FERRAMENTA DE DESENVOLVIMENTO — forçar um estado de tela pela URL.
  *
- * Os sete estados do `Docs/05` precisam ser vistos e revisados antes de a Hub
- * API existir, e vários deles (offline, sem permissão, stale) não acontecem
- * quando se quer. Com os dados de exemplo ligados, `?state=offline` faz a
- * camada de dados devolver aquele estado.
+ * Os sete estados do `Docs/05` precisam ser revisados de tempos em tempos, e
+ * vários deles (offline, sem permissão, stale) não acontecem quando se quer.
+ * Com o app fora de produção, `?state=offline` faz a camada de dados devolver
+ * aquele estado — sem derrubar a rede nem mexer no banco.
  *
- * Só funciona quando `HUB_WEB_SAMPLE_DATA` está ligado. Com a API de verdade,
- * `readForcedState` devolve `undefined` e nada disso participa da execução.
+ * **Em produção o parâmetro é ignorado**: `readForcedState` devolve `undefined`
+ * e nada disto participa da execução. Isso não é um recurso do produto; é uma
+ * lupa para quem está desenvolvendo a interface.
  */
 
 export const FORCED_STATES = [
@@ -32,14 +33,21 @@ export function isForcedState(value: unknown): value is ForcedState {
 /** Lê `?state=` de um `searchParams` já resolvido. */
 export function readForcedState(
   searchParams: Record<string, string | string[] | undefined> | undefined,
-  sampleDataEnabled: boolean,
+  enabled: boolean,
 ): ForcedState | undefined {
-  if (!sampleDataEnabled || !searchParams) {
+  if (!enabled || !searchParams) {
     return undefined;
   }
   const raw = searchParams.state;
   const value = Array.isArray(raw) ? raw[0] : raw;
   return isForcedState(value) ? value : undefined;
+}
+
+/** Atalho das telas: só vale fora de produção. */
+export function devForcedState(
+  searchParams: Record<string, string | string[] | undefined> | undefined,
+): ForcedState | undefined {
+  return readForcedState(searchParams, process.env.NODE_ENV !== 'production');
 }
 
 /**
@@ -62,8 +70,8 @@ export async function applyForcedState<T>(
       return emptyValue === undefined ? result : success(emptyValue);
     case 'error':
       return failure('error', {
-        code: 'HUB_INTERNAL_ERROR',
-        message: 'Sample failure requested by the URL.',
+        code: 'INTERNAL_ERROR',
+        message: 'Estado forçado pela URL, em desenvolvimento.',
         requestId: '01JB7Q4X2NREQUESTIDSAMPLE',
       });
     case 'offline':

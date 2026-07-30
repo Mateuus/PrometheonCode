@@ -12,13 +12,7 @@ import type { Translate, TranslationValues } from './dictionary';
  */
 
 /** Chaves que existem em par: a plural e a `.one`. */
-export type CountableKey =
-  | 'organizations.memberCount'
-  | 'organizations.projectCount'
-  | 'projects.openTasks'
-  | 'projects.activeAgents'
-  | 'admin.plans.days'
-  | 'admin.plans.organizationsOnPlan';
+export type CountableKey = 'admin.plans.days' | 'agents.runningCount';
 
 export function plural(
   t: Translate,

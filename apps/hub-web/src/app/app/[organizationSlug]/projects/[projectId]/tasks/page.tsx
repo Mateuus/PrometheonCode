@@ -1,22 +1,47 @@
 import type { Metadata } from 'next';
-import { Plus, UserRound } from 'lucide-react';
+import { UserRound } from 'lucide-react';
 import { getLocale, getTranslate } from '@/i18n/server';
-import { Button } from '@/components/ui/button';
 import { SectionTitle } from '@/components/ui/page';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { DataView } from '@/components/states/data-view';
-import { SampleDataNotice } from '@/components/layout/sample-data-notice';
-import { listTasks } from '@/lib/api/queries';
-import { applyForcedState, readForcedState } from '@/lib/api/state-override';
-import { env } from '@/lib/env';
+import { ForcedStateNotice } from '@/components/states/forced-state-notice';
+import { LiveRegion } from '@/components/realtime/live-region';
+import { CreateTaskForm, TaskStatusControl } from '@/components/forms/task-forms';
+import { getOrganizationBySlug, listTasks } from '@/lib/api/queries';
+import { applyForcedState, devForcedState } from '@/lib/api/state-override';
 import { relativeTime } from '@/lib/format';
-import { taskStatusBadge } from '@/lib/status-badges';
+import { taskPriorityLabel, taskStatusBadge } from '@/lib/status-badges';
+import { viewerCan } from '@/lib/roles';
+import type { MessageKey } from '@/i18n/catalog';
 import type { TaskStatus } from '@/lib/api/types';
 
 export const metadata: Metadata = { title: 'Tasks' };
 
-/** Ordem das colunas do quadro; o mesmo eixo do ciclo de vida da tarefa. */
-const COLUMNS: TaskStatus[] = ['backlog', 'running', 'blocked', 'review', 'done'];
+/**
+ * Colunas do quadro.
+ *
+ * A API tem nove estados de tarefa; nove colunas seriam ilegíveis. O quadro
+ * agrupa por fase do ciclo de vida e o crachá dentro do cartão continua
+ * mostrando o estado exato — nada de informação se perde no agrupamento.
+ */
+const COLUMNS: { key: string; labelKey: MessageKey; statuses: TaskStatus[] }[] = [
+  { key: 'backlog', labelKey: 'tasks.column.backlog', statuses: ['backlog', 'ready'] },
+  { key: 'running', labelKey: 'tasks.column.running', statuses: ['claimed', 'in_progress'] },
+  { key: 'blocked', labelKey: 'tasks.column.blocked', statuses: ['blocked'] },
+  { key: 'review', labelKey: 'tasks.column.review', statuses: ['in_review'] },
+  { key: 'closed', labelKey: 'tasks.column.closed', statuses: ['done', 'cancelled', 'failed'] },
+];
+
+/** Estados que uma pessoa move pela interface. Reivindicar é coisa de agente. */
+const MANUAL_STATUSES: TaskStatus[] = [
+  'backlog',
+  'ready',
+  'in_progress',
+  'blocked',
+  'in_review',
+  'done',
+  'cancelled',
+];
 
 export default async function ProjectTasksPage({
   params,
@@ -33,19 +58,32 @@ export default async function ProjectTasksPage({
   ]);
 
   const base = `/app/${organizationSlug}/projects/${projectId}`;
-  const forced = readForcedState(query, env().HUB_WEB_SAMPLE_DATA);
-  const tasks = await applyForcedState(forced, await listTasks(projectId), []);
+  const forced = devForcedState(query);
+  const [tasksResult, organization] = await Promise.all([
+    listTasks(projectId),
+    getOrganizationBySlug(organizationSlug),
+  ]);
+  const tasks = await applyForcedState(forced, tasksResult, []);
+
+  const canManage =
+    organization.ok &&
+    viewerCan(
+      { role: organization.data.role, permissions: organization.data.permissions },
+      'task.create',
+    );
 
   return (
     <div className="space-y-4">
-      <SampleDataNotice />
+      <ForcedStateNotice forced={forced} />
 
-      <div className="flex items-center justify-between">
+      <LiveRegion
+        eventTypes={['task.created', 'task.updated', 'task.claimed', 'task.released']}
+        projectId={projectId}
+      />
+
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <h2 className="text-sm font-semibold text-foreground">{t('tasks.title')}</h2>
-        <Button size="sm">
-          <Plus aria-hidden />
-          {t('tasks.create')}
-        </Button>
+        {canManage ? <CreateTaskForm projectId={projectId} returnTo={`${base}/tasks`} /> : null}
       </div>
 
       <DataView
@@ -57,47 +95,59 @@ export default async function ProjectTasksPage({
       >
         {(items) => (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-            {COLUMNS.map((status) => {
-              const badge = taskStatusBadge(status, t);
-              const column = items.filter((task) => task.status === status);
+            {COLUMNS.map((column) => {
+              const cards = items.filter((task) => column.statuses.includes(task.status));
               return (
-                <section key={status} aria-label={badge.label}>
+                <section key={column.key} aria-label={t(column.labelKey)}>
                   <SectionTitle
-                    action={<span className="text-xs text-muted">{column.length}</span>}
+                    action={<span className="text-xs text-muted">{cards.length}</span>}
                   >
-                    <StatusBadge tone={badge.tone} icon={badge.icon}>
-                      {badge.label}
-                    </StatusBadge>
+                    {t(column.labelKey)}
                   </SectionTitle>
 
-                  {column.length === 0 ? (
+                  {cards.length === 0 ? (
                     <p className="rounded-[var(--radius-prom)] border border-dashed border-line px-3 py-6 text-center text-xs text-muted">
                       {t('state.empty.title')}
                     </p>
                   ) : (
                     <ul className="space-y-2">
-                      {column.map((task) => (
-                        <li
-                          key={task.id}
-                          className="rounded-[var(--radius-prom)] border border-line bg-surface p-3"
-                        >
-                          <p className="text-sm text-foreground">{task.title}</p>
-                          {task.blockedReason ? (
-                            <p className="mt-1 text-xs text-alert">
-                              {t('tasks.blockedReason', { reason: task.blockedReason })}
+                      {cards.map((task) => {
+                        const badge = taskStatusBadge(task.status, t);
+                        return (
+                          <li
+                            key={task.id}
+                            className="rounded-[var(--radius-prom)] border border-line bg-surface p-3"
+                          >
+                            <p className="text-sm text-foreground">{task.title}</p>
+                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                              <StatusBadge tone={badge.tone} icon={badge.icon}>
+                                {badge.label}
+                              </StatusBadge>
+                              <span className="text-xs text-muted">
+                                {taskPriorityLabel(task.priority, t)}
+                              </span>
+                            </div>
+                            <p className="mt-2 flex items-center gap-1.5 text-xs text-muted">
+                              <UserRound aria-hidden className="size-3" />
+                              {task.assignee?.name ?? t('tasks.unassigned')}
                             </p>
-                          ) : null}
-                          <p className="mt-2 flex items-center gap-1.5 text-xs text-muted">
-                            <UserRound aria-hidden className="size-3" />
-                            {task.assigneeName ?? t('tasks.unassigned')}
-                          </p>
-                          <p className="mt-0.5 text-xs text-muted">
-                            {t('tasks.updated', {
-                              relativeTime: relativeTime(task.updatedAt, locale),
-                            })}
-                          </p>
-                        </li>
-                      ))}
+                            <p className="mt-0.5 text-xs text-muted">
+                              {t('tasks.updated', {
+                                relativeTime: relativeTime(task.updatedAt, locale),
+                              })}
+                            </p>
+                            {canManage ? (
+                              <TaskStatusControl
+                                taskId={task.id}
+                                status={task.status}
+                                version={task.version}
+                                returnTo={`${base}/tasks`}
+                                options={MANUAL_STATUSES}
+                              />
+                            ) : null}
+                          </li>
+                        );
+                      })}
                     </ul>
                   )}
                 </section>

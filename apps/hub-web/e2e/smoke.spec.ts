@@ -1,39 +1,43 @@
 import { expect, test } from '@playwright/test';
 
 /**
- * Fumaça: login → painel.
+ * Fumaça do que não depende de conta.
  *
- * Enquanto a Hub API não existe, o app roda com dados de exemplo e o login grava
- * uma sessão local — o suficiente para provar que a rota privada abre, que o
- * middleware devolve quem não tem sessão ao login, e que o painel renderiza.
- *
- * Quando a API subir, este arquivo continua valendo: só o que o `HUB_WEB_SAMPLE_DATA`
- * decide muda.
+ * O caminho completo — cadastro, confirmação de e-mail, login, projeto,
+ * conversa e mensagem ao vivo — precisa de Hub API, worker e banco no ar, e é
+ * exercitado por `scripts/hub-smoke*.mjs` e pela navegação manual. Aqui ficam as
+ * garantias que valem só com o Hub Web de pé: a portaria das rotas privadas, o
+ * filtro de open redirect e as telas públicas de autenticação.
  */
 
-test.describe('login e painel', () => {
+test.describe('portaria e telas públicas', () => {
   test('quem não tem sessão é levado ao login com o destino preservado', async ({ page }) => {
     await page.goto('/app/prometheon/projects');
     await expect(page).toHaveURL(/\/login\?next=%2Fapp%2Fprometheon%2Fprojects/);
-    await expect(page.getByRole('heading', { level: 3 })).toBeVisible();
-  });
-
-  test('login abre o painel da organização', async ({ page }) => {
-    await page.goto('/login');
-
-    await page.getByLabel(/e-?mail/i).fill('mateus@prometheoncode.xyz');
-    await page.getByLabel(/senha|password|contraseña/i).fill('uma-senha-bem-longa');
-    await page.getByRole('button', { name: /entrar|sign in|iniciar/i }).click();
-
-    await expect(page).toHaveURL(/\/app$/);
-    await page.getByRole('link', { name: 'Prometheon', exact: true }).first().click();
-
-    await expect(page.getByRole('main')).toBeVisible();
+    await expect(page.getByRole('button', { name: /entrar|sign in|iniciar/i })).toBeVisible();
   });
 
   test('o parâmetro next não leva para fora do Hub', async ({ page }) => {
     await page.goto('/login?next=https://evil.example');
-    const hidden = page.locator('input[name="next"]');
-    await expect(hidden).toHaveValue('/app');
+    await expect(page.locator('input[name="next"]')).toHaveValue('/app');
+  });
+
+  test('o cadastro oferece nomear a organização', async ({ page }) => {
+    await page.goto('/register');
+    await expect(page.locator('#register-organization')).toBeVisible();
+  });
+
+  test('o convite encaminha para o cadastro carregando o token', async ({ page }) => {
+    await page.goto('/invite/token-de-teste-com-tamanho-suficiente');
+    const accept = page.getByRole('link', { name: /aceitar|accept|aceptar/i });
+    await expect(accept).toHaveAttribute(
+      'href',
+      /\/register\?invitation=token-de-teste-com-tamanho-suficiente/,
+    );
+  });
+
+  test('a recuperação de senha sem token explica o que fazer', async ({ page }) => {
+    await page.goto('/reset-password');
+    await expect(page.getByRole('link', { name: /recupera|recovery|recuperación/i })).toBeVisible();
   });
 });

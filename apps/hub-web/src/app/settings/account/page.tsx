@@ -1,16 +1,16 @@
+import Link from 'next/link';
 import type { Metadata } from 'next';
-import { getTranslate } from '@/i18n/server';
+import { getLocale, getTranslate } from '@/i18n/server';
 import { PageHeader } from '@/components/ui/page';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Alert } from '@/components/ui/alert';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { DataView } from '@/components/states/data-view';
-import { SampleDataNotice } from '@/components/layout/sample-data-notice';
-import { getCurrentUser } from '@/lib/api/queries';
-import { applyForcedState, readForcedState } from '@/lib/api/state-override';
-import { env } from '@/lib/env';
+import { ForcedStateNotice } from '@/components/states/forced-state-notice';
+import { getViewer } from '@/lib/api/queries';
+import { applyForcedState, devForcedState } from '@/lib/api/state-override';
+import { roleLabel } from '@/lib/roles';
 
 export const metadata: Metadata = { title: 'Account' };
 
@@ -20,80 +20,90 @@ export default async function AccountPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const [query, t] = await Promise.all([searchParams, getTranslate()]);
-  const forced = readForcedState(query, env().HUB_WEB_SAMPLE_DATA);
-  const user = await applyForcedState(forced, await getCurrentUser());
+  await getLocale();
+  const forced = devForcedState(query);
+  const viewer = await applyForcedState(forced, await getViewer());
 
   return (
     <div className="space-y-5">
-      <SampleDataNotice />
+      <ForcedStateNotice forced={forced} />
       <PageHeader title={t('account.title')} description={t('account.subtitle')} />
 
-      <DataView result={user} retryHref="/settings/account" backHref="/app">
+      <DataView result={viewer} retryHref="/settings/account" backHref="/app">
         {(data) => (
           <div className="max-w-2xl space-y-5">
             <Card>
               <CardHeader>
                 <CardTitle>{t('account.profile')}</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="account-name">{t('auth.field.name')}</Label>
-                  <Input id="account-name" name="name" defaultValue={data.name} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="account-email">{t('auth.field.email')}</Label>
-                  <Input id="account-email" name="email" type="email" defaultValue={data.email} />
-                </div>
+              <CardContent>
+                <dl className="divide-y divide-line text-sm">
+                  <div className="flex items-center justify-between gap-2 py-2">
+                    <dt className="text-muted">{t('auth.field.name')}</dt>
+                    <dd className="font-medium text-foreground">{data.user.name}</dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 py-2">
+                    <dt className="text-muted">{t('auth.field.email')}</dt>
+                    <dd className="flex items-center gap-2 font-medium text-foreground">
+                      {data.user.email}
+                      <StatusBadge tone={data.user.emailVerified ? 'success' : 'alert'}>
+                        {data.user.emailVerified
+                          ? t('account.emailVerified')
+                          : t('account.emailUnverified')}
+                      </StatusBadge>
+                    </dd>
+                  </div>
+                </dl>
+                {/* A Hub API não expõe atualização de perfil; um formulário aqui
+                    seria um campo que não salva em lugar nenhum. */}
+                <p className="mt-3 text-xs text-muted">{t('account.profileReadOnly')}</p>
               </CardContent>
-              <CardFooter>
-                <Button size="sm">{t('action.save')}</Button>
-              </CardFooter>
+              {data.user.emailVerified ? null : (
+                <CardFooter>
+                  <Button asChild size="sm">
+                    <Link href="/verify-email">{t('auth.verify.action')}</Link>
+                  </Button>
+                </CardFooter>
+              )}
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>{t('nav.organization')}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-2 text-sm">
+                  {data.organizations.map((organization) => (
+                    <li key={organization.id} className="flex items-center gap-2">
+                      <Link
+                        href={`/app/${organization.slug}`}
+                        className="min-w-0 flex-1 truncate text-link hover:underline"
+                      >
+                        {organization.name}
+                      </Link>
+                      <StatusBadge tone="accent">{roleLabel(organization.role, t)}</StatusBadge>
+                      {organization.id === data.activeOrganizationId ? (
+                        <StatusBadge tone="activity">{t('account.activeOrganization')}</StatusBadge>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
             </Card>
 
             <Card>
               <CardHeader>
                 <CardTitle>{t('account.security')}</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="account-current-password">{t('account.currentPassword')}</Label>
-                  <Input
-                    id="account-current-password"
-                    name="currentPassword"
-                    type="password"
-                    autoComplete="current-password"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="account-new-password">{t('account.newPassword')}</Label>
-                  <Input
-                    id="account-new-password"
-                    name="newPassword"
-                    type="password"
-                    autoComplete="new-password"
-                  />
-                  <p className="text-xs text-muted">{t('auth.field.passwordHint')}</p>
-                </div>
+              <CardContent className="space-y-3">
+                {/* Trocar a senha logado ainda não tem rota na API; o caminho
+                    honesto é o mesmo da recuperação, que existe e funciona. */}
+                <p className="text-sm text-muted">{t('account.changePasswordHint')}</p>
+                <Alert title={t('account.changePasswordViaEmail')} />
               </CardContent>
               <CardFooter>
-                <Button size="sm" variant="secondary">
-                  {t('account.changePassword')}
-                </Button>
-              </CardFooter>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-danger">{t('account.dangerZone')}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Alert tone="danger" title={t('account.deleteAccount')}>
-                  {t('account.deleteHint')}
-                </Alert>
-              </CardContent>
-              <CardFooter>
-                <Button size="sm" variant="danger">
-                  {t('account.deleteAccount')}
+                <Button asChild size="sm" variant="secondary">
+                  <Link href="/forgot-password">{t('account.changePassword')}</Link>
                 </Button>
               </CardFooter>
             </Card>

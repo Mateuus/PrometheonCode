@@ -1,211 +1,118 @@
-import type { Role } from '@prometheon/permissions';
-
 /**
  * FRONTEIRA DE TIPOS DO DOMÍNIO — ponto único de troca.
  *
- * Tudo que o Hub Web sabe sobre o formato dos dados da Hub API está neste
- * arquivo, e só nele. Quando `@prometheon/contracts` publicar os tipos e os
- * schemas Zod (`Docs/06`), este módulo vira um re-export:
+ * Os tipos e os schemas Zod da Hub API moram em `@prometheon/contracts`, que é
+ * o mesmo pacote que a API usa para validar o que responde. Este módulo é o
+ * re-export: nenhuma tela importa `@prometheon/contracts` diretamente, para que
+ * uma divergência entre o contrato publicado e o que a API realmente devolve
+ * tenha um único lugar para ser costurada (ver `schemas.ts`).
  *
- * ```ts
- * export type { Project, Task, ... } from '@prometheon/contracts';
- * ```
- *
- * Nenhuma tela, componente ou action declara forma de dado por conta própria —
- * assim a troca é uma edição neste arquivo, não uma caçada pelo `src/`.
- *
- * Convenções do `Docs/03`: id é UUID/ULID em string, data é ISO 8601 em UTC e
- * dinheiro é inteiro na menor unidade.
+ * Convenções do `Docs/03`: id é ULID em string, data é ISO 8601 em UTC e
+ * dinheiro é inteiro na menor unidade da moeda.
  */
 
 export type { Role } from '@prometheon/permissions';
 
+import type {
+  AuditLog as AuditLogType,
+  KnowledgeItemSummary as KnowledgeItemSummaryType,
+  OrganizationWithAccess as OrganizationWithAccessType,
+  Project as ProjectType,
+  SubscriptionOverview as SubscriptionOverviewType,
+  Task as TaskType,
+} from '@prometheon/contracts';
+
+export type {
+  AuditLog,
+  Conversation,
+  ConversationParticipant,
+  CurrentUser,
+  Invitation,
+  KnowledgeItemSummary,
+  KnowledgeStatus,
+  Message,
+  MessagePart,
+  MessageAuthorType,
+  Organization,
+  OrganizationMember,
+  OrganizationRole,
+  OrganizationWithAccess,
+  PageInfo,
+  Permission,
+  Plan,
+  PlanLimits,
+  PresenceEntry,
+  Project,
+  ProjectSettings,
+  PublicUser,
+  RealtimeEvent,
+  RealtimeEventType,
+  Subscription,
+  SubscriptionOverview,
+  Task,
+  TaskPriority,
+  TaskStatus,
+  Usage,
+  WorkMode,
+} from '@prometheon/contracts';
+
 export type Iso8601 = string;
 
-// --------------------------------------------------------------- identidade
-
-export interface User {
-  id: string;
-  name: string;
-  email: string;
-  createdAt: Iso8601;
-}
-
-export interface Organization {
-  id: string;
-  slug: string;
-  name: string;
-  /** Papel de quem está pedindo — a API resolve pelo token. */
-  viewerRole: Role;
-  memberCount: number;
-  projectCount: number;
-  planId: string;
-}
-
-export interface Member {
-  id: string;
-  userId: string;
-  name: string;
-  email: string;
-  role: Role;
-  status: 'active' | 'invited' | 'suspended';
-  joinedAt: Iso8601;
-  lastSeenAt: Iso8601 | null;
-  online: boolean;
-}
-
-export interface Invitation {
-  token: string;
-  organizationName: string;
-  organizationSlug: string;
-  role: Role;
-  invitedEmail: string;
-  expiresAt: Iso8601;
-}
-
-export interface AuthSession {
-  id: string;
-  deviceLabel: string;
-  ipAddress: string;
-  createdAt: Iso8601;
-  lastActiveAt: Iso8601;
-  current: boolean;
-}
-
-// ----------------------------------------------------------------- projetos
-
-export interface Project {
-  id: string;
-  organizationId: string;
-  name: string;
-  description: string;
-  repositoryUrl: string;
-  defaultBranch: string;
-  openTaskCount: number;
-  activeAgentCount: number;
-  lastActivityAt: Iso8601;
-}
-
-export interface Conversation {
-  id: string;
-  projectId: string;
-  title: string;
-  messageCount: number;
-  updatedAt: Iso8601;
-}
-
-export interface Message {
-  id: string;
-  conversationId: string;
-  authorType: 'user' | 'agent' | 'system';
-  authorName: string;
-  body: string;
-  createdAt: Iso8601;
-}
-
-export type TaskStatus = 'backlog' | 'running' | 'blocked' | 'review' | 'done';
-
-export interface Task {
-  id: string;
-  projectId: string;
-  title: string;
-  status: TaskStatus;
-  assigneeName: string | null;
-  blockedReason: string | null;
-  updatedAt: Iso8601;
-}
-
-export type AgentStatus = 'idle' | 'working' | 'offline' | 'paused';
-
-export interface Agent {
-  id: string;
-  projectId: string;
-  name: string;
-  role: 'main' | 'worker';
-  status: AgentStatus;
-  deviceLabel: string;
-  currentTaskTitle: string | null;
-  lastHeartbeatAt: Iso8601 | null;
-}
-
-export type KnowledgeStatus = 'proposed' | 'approved' | 'rejected';
-
-export interface KnowledgeEntry {
-  id: string;
-  projectId: string;
-  title: string;
-  summary: string;
-  status: KnowledgeStatus;
-  authorName: string;
-  updatedAt: Iso8601;
-}
-
-// --------------------------------------------------------------- auditoria
-
-export interface AuditEvent {
-  id: string;
-  occurredAt: Iso8601;
-  actorName: string;
-  action: string;
-  target: string;
-  ipAddress: string;
-}
-
-// --------------------------------------------------------------- dashboard
-
-export interface UsageMetric {
-  used: number;
-  /** `null` significa sem limite no plano. */
-  limit: number | null;
-  unit: 'count' | 'megabytes';
-}
-
-export interface SyncIncident {
-  id: string;
-  projectName: string;
-  summary: string;
-  occurredAt: Iso8601;
-  severity: 'warning' | 'error';
-}
-
-export interface DashboardSummary {
-  recentProjects: Project[];
-  membersOnline: Member[];
-  agentsWorking: Agent[];
-  blockedTasks: Task[];
-  pendingReviews: Task[];
-  knowledgeProposals: KnowledgeEntry[];
-  usage: {
-    messages: UsageMetric;
-    tasks: UsageMetric;
-    storage: UsageMetric;
+/** Uma página de resultados; toda listagem da API responde neste formato. */
+export interface Page<T> {
+  items: T[];
+  pageInfo: {
+    nextCursor: string | null;
+    previousCursor: string | null;
+    hasMore: boolean;
   };
-  syncIncidents: SyncIncident[];
 }
 
-// ------------------------------------------------------------------- planos
-
-/** `null` em qualquer limite significa ilimitado. */
-export interface PlanLimits {
-  membersPerOrganization: number | null;
-  projectsPerOrganization: number | null;
-  concurrentAgents: number | null;
-  messagesPerMonth: number | null;
-  knowledgeStorageMb: number | null;
-  auditRetentionDays: number | null;
+/**
+ * Dispositivo com agente ativo num projeto.
+ *
+ * A API responde com um schema próprio do módulo de dispositivos, que não está
+ * em `@prometheon/contracts` — daí a declaração local.
+ * Fonte: `apps/hub-api/src/modules/devices/schemas.ts`.
+ */
+export interface ActiveAgent {
+  deviceId: string;
+  deviceName: string;
+  kind: 'vscode' | 'cli' | 'ci' | 'other';
+  platform: string | null;
+  clientVersion: string | null;
+  status: 'online' | 'idle';
+  owner: { id: string; name: string; email: string; avatarUrl: string | null };
+  activeAgentRunIds: string[];
+  lastSeenAt: Iso8601;
 }
 
-export interface Plan {
-  id: string;
-  slug: string;
-  name: string;
-  /** Inteiro na menor unidade da moeda; `0` é o plano gratuito. */
-  priceCents: number;
-  currency: string;
-  /** Plano atribuído a organizações novas. */
-  isDefault: boolean;
-  /** Plano fora do catálogo público continua valendo para quem já o tem. */
-  visible: boolean;
-  limits: PlanLimits;
-  organizationCount: number;
+/** Bilhete de conexão do canal ao vivo, emitido por `/api/realtime/ticket`. */
+export interface RealtimeTicket {
+  token: string;
+  url: string;
+  protocolVersion: number;
+  heartbeatIntervalMs: number;
+}
+
+/**
+ * Painel da organização.
+ *
+ * A Hub API **não tem** um endpoint de dashboard: este objeto é composto no
+ * servidor do Hub Web a partir de leituras reais (`queries.ts`). O tipo existe
+ * para que a tela não precise saber de quantas chamadas ele nasceu.
+ */
+export interface DashboardSummary {
+  organization: OrganizationWithAccessType;
+  recentProjects: ProjectType[];
+  projectCount: number;
+  activeTasks: TaskType[];
+  blockedTasks: TaskType[];
+  pendingReviews: TaskType[];
+  knowledgeProposals: KnowledgeItemSummaryType[];
+  activeAgents: ActiveAgent[];
+  subscription: SubscriptionOverviewType | null;
+  recentActivity: AuditLogType[];
+  /** `true` quando algum projeto não respondeu — os números são um piso. */
+  partial: boolean;
 }

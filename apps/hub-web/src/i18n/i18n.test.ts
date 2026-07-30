@@ -76,14 +76,7 @@ describe('localização', () => {
 });
 
 describe('plural', () => {
-  const countable: CountableKey[] = [
-    'organizations.memberCount',
-    'organizations.projectCount',
-    'projects.openTasks',
-    'projects.activeAgents',
-    'admin.plans.days',
-    'admin.plans.organizationsOnPlan',
-  ];
+  const countable: CountableKey[] = ['admin.plans.days', 'agents.runningCount'];
 
   it('toda chave contável tem a forma singular ao lado da plural', () => {
     for (const key of countable) {
@@ -98,8 +91,8 @@ describe('plural', () => {
   it('escolhe singular para 1 e plural para o resto, em cada idioma', () => {
     for (const locale of ['en', ...TRANSLATED_LOCALES] as const) {
       const t = createTranslate(buildDictionary(locale));
-      const one = plural(t, 'projects.openTasks', 1);
-      const many = plural(t, 'projects.openTasks', 4);
+      const one = plural(t, 'agents.runningCount', 1);
+      const many = plural(t, 'agents.runningCount', 4);
       expect(one).toContain('1');
       expect(many).toContain('4');
       expect(one).not.toBe(many);

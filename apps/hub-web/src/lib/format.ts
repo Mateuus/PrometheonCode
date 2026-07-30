@@ -56,9 +56,17 @@ export function formatMoney(cents: number, currency: string, locale: Locale): st
   );
 }
 
-export function formatMegabytes(value: number, locale: Locale): string {
-  if (value >= 1024) {
-    return `${new Intl.NumberFormat(LOCALE_BCP47[locale], { maximumFractionDigits: 1 }).format(value / 1024)} GB`;
+/** Bytes na unidade binária mais legível. A API mede armazenamento em bytes. */
+export function formatBytes(value: number, locale: Locale): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
   }
-  return `${formatNumber(value, locale)} MB`;
+  const formatted = new Intl.NumberFormat(LOCALE_BCP47[locale], {
+    maximumFractionDigits: unit === 0 ? 0 : 1,
+  }).format(size);
+  return `${formatted} ${units[unit]}`;
 }

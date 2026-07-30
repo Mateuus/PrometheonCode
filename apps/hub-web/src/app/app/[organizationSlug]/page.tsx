@@ -4,10 +4,12 @@ import {
   AlertOctagon,
   Bot,
   BrainCircuit,
-  CircleUser,
   ClipboardCheck,
   FolderGit2,
-  Radio,
+  ListTodo,
+  MonitorSmartphone,
+  ScrollText,
+  Users,
 } from 'lucide-react';
 import { getLocale, getTranslate } from '@/i18n/server';
 import { PageHeader, SectionTitle } from '@/components/ui/page';
@@ -16,15 +18,89 @@ import { Stat, UsageBar } from '@/components/ui/stat';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Alert } from '@/components/ui/alert';
 import { DataView } from '@/components/states/data-view';
-import { SampleDataNotice } from '@/components/layout/sample-data-notice';
-import { getDashboard, getOrganizationBySlug } from '@/lib/api/queries';
-import { applyForcedState, readForcedState } from '@/lib/api/state-override';
-import { env } from '@/lib/env';
-import { formatMegabytes, formatNumber, relativeTime } from '@/lib/format';
+import { ForcedStateNotice } from '@/components/states/forced-state-notice';
+import { LiveRegion } from '@/components/realtime/live-region';
+import { getDashboard, resolveOrganizationId } from '@/lib/api/queries';
+import { applyForcedState, devForcedState } from '@/lib/api/state-override';
+import { absoluteDateTime, formatBytes, formatNumber, relativeTime } from '@/lib/format';
 import { taskStatusBadge } from '@/lib/status-badges';
-import { plural } from '@/i18n/plural';
+import { roleLabel } from '@/lib/roles';
+import type { PlanLimits, SubscriptionOverview, Usage } from '@/lib/api/types';
+import type { Locale } from '@/i18n/config';
+import type { Translate } from '@/i18n/dictionary';
+import type { MessageKey } from '@/i18n/catalog';
 
 export const metadata: Metadata = { title: 'Dashboard' };
+
+/** Só as medidas numéricas de `Usage`; `measuredAt` não vira barra. */
+type UsageMetric = {
+  [K in keyof Usage]: Usage[K] extends number ? K : never;
+}[keyof Usage];
+
+/** Linhas da barra de uso: o que a assinatura mede e o que o plano limita. */
+const USAGE_ROWS: {
+  used: UsageMetric;
+  limit: keyof PlanLimits;
+  labelKey: MessageKey;
+}[] = [
+  { used: 'members', limit: 'maxMembers', labelKey: 'dashboard.usage.members' },
+  { used: 'projects', limit: 'maxProjects', labelKey: 'dashboard.usage.projects' },
+  { used: 'knowledgeItems', limit: 'maxKnowledgeItems', labelKey: 'dashboard.usage.knowledge' },
+  { used: 'agentRunsThisMonth', limit: 'maxAgentRunsPerMonth', labelKey: 'dashboard.usage.agentRuns' },
+];
+
+/**
+ * Consumo do plano.
+ *
+ * Vem de `GET /v1/organizations/:id/subscription`, que é o mais perto de um
+ * resumo que a API oferece: mede membros, projetos, conhecimento e execuções de
+ * agente no mês, e traz os limites do plano junto. Sem ele o painel não inventa
+ * números — diz que não conseguiu ler.
+ */
+function UsagePanel({
+  subscription,
+  locale,
+  t,
+}: {
+  subscription: SubscriptionOverview | null;
+  locale: Locale;
+  t: Translate;
+}) {
+  if (subscription === null) {
+    return <p className="text-sm text-muted">{t('dashboard.usage.unavailable')}</p>;
+  }
+
+  const storage = subscription.plan.limits.maxStorageBytes;
+  return (
+    <>
+      {USAGE_ROWS.map((row) => {
+        const used = subscription.usage[row.used];
+        const limit = subscription.plan.limits[row.limit];
+        return (
+          <UsageBar
+            key={row.used}
+            label={t(row.labelKey)}
+            valueLabel={
+              limit === null
+                ? formatNumber(used, locale)
+                : t('dashboard.usage.ofLimit', {
+                    used: formatNumber(used, locale),
+                    limit: formatNumber(limit, locale),
+                  })
+            }
+            ratio={limit === null || limit === 0 ? null : used / limit}
+          />
+        );
+      })}
+      <p className="pt-1 text-xs text-muted">
+        {t('dashboard.usage.plan', { plan: subscription.plan.name })}
+        {storage === null
+          ? ''
+          : ` · ${t('admin.plans.limit.storage')}: ${formatBytes(storage, locale)}`}
+      </p>
+    </>
+  );
+}
 
 export default async function DashboardPage({
   params,
@@ -41,38 +117,54 @@ export default async function DashboardPage({
   ]);
 
   const base = `/app/${organizationSlug}`;
-  const forced = readForcedState(query, env().HUB_WEB_SAMPLE_DATA);
+  const forced = devForcedState(query);
 
-  const organization = await getOrganizationBySlug(organizationSlug);
+  const organizationId = await resolveOrganizationId(organizationSlug);
   const summary = await applyForcedState(
     forced,
-    organization.ok ? await getDashboard(organization.data.id) : { ok: false, kind: 'not-found' },
+    organizationId.ok ? await getDashboard(organizationId.data) : organizationId,
   );
 
   return (
     <div className="space-y-6">
-      <SampleDataNotice />
+      <ForcedStateNotice forced={forced} />
 
-      <PageHeader
-        title={t('dashboard.title')}
-        description={t('dashboard.subtitle')}
+      {/* O painel agrega tarefas, conhecimento e agentes: qualquer um dos três
+          eventos o deixa velho. */}
+      <LiveRegion
+        eventTypes={[
+          'task.created',
+          'task.updated',
+          'task.claimed',
+          'task.released',
+          'knowledge.proposed',
+          'knowledge.reviewed',
+          'device.changed',
+          'agent.started',
+          'agent.stopped',
+        ]}
       />
+
+      <PageHeader title={t('dashboard.title')} description={t('dashboard.subtitle')} />
 
       <DataView result={summary} retryHref={base} backHref="/app">
         {(data) => (
           <div className="space-y-6">
+            {data.partial ? <Alert tone="alert" title={t('dashboard.partial')} /> : null}
+
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Stat
-                label={t('dashboard.membersOnline')}
-                value={formatNumber(data.membersOnline.length, locale)}
-                icon={<CircleUser />}
-                tone="activity"
+                label={t('nav.projects')}
+                value={formatNumber(data.projectCount, locale)}
+                icon={<FolderGit2 />}
+                tone="accent"
               />
               <Stat
-                label={t('dashboard.agentsWorking')}
-                value={formatNumber(data.agentsWorking.length, locale)}
-                icon={<Bot />}
+                label={t('dashboard.activeTasks')}
+                value={formatNumber(data.activeTasks.length, locale)}
+                icon={<ListTodo />}
                 tone="running"
+                {...(data.partial ? { hint: t('dashboard.partialHint') } : {})}
               />
               <Stat
                 label={t('dashboard.blockedTasks')}
@@ -84,7 +176,7 @@ export default async function DashboardPage({
                 label={t('dashboard.pendingReviews')}
                 value={formatNumber(data.pendingReviews.length, locale)}
                 icon={<ClipboardCheck />}
-                tone="accent"
+                tone="activity"
               />
             </div>
 
@@ -121,15 +213,17 @@ export default async function DashboardPage({
                             </span>
                             <span className="block truncate text-xs text-muted">
                               {t('projects.lastActivity', {
-                                relativeTime: relativeTime(project.lastActivityAt, locale),
+                                relativeTime: relativeTime(project.updatedAt, locale),
                               })}
                             </span>
                           </span>
-                          {project.activeAgentCount > 0 ? (
-                            <StatusBadge tone="running">
-                              {plural(t, 'projects.activeAgents', project.activeAgentCount)}
+                          {project.status === 'active' ? null : (
+                            <StatusBadge tone="neutral">
+                              {project.status === 'paused'
+                                ? t('projects.status.paused')
+                                : t('projects.status.archived')}
                             </StatusBadge>
-                          ) : null}
+                          )}
                         </Link>
                       </li>
                     ))}
@@ -143,43 +237,7 @@ export default async function DashboardPage({
                     <CardTitle>{t('dashboard.hubUsage')}</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    <UsageBar
-                      label={t('dashboard.usage.messages')}
-                      valueLabel={
-                        data.usage.messages.limit === null
-                          ? formatNumber(data.usage.messages.used, locale)
-                          : t('dashboard.usage.ofLimit', {
-                              used: formatNumber(data.usage.messages.used, locale),
-                              limit: formatNumber(data.usage.messages.limit, locale),
-                            })
-                      }
-                      ratio={
-                        data.usage.messages.limit === null
-                          ? null
-                          : data.usage.messages.used / data.usage.messages.limit
-                      }
-                    />
-                    <UsageBar
-                      label={t('dashboard.usage.tasks')}
-                      valueLabel={formatNumber(data.usage.tasks.used, locale)}
-                      ratio={null}
-                    />
-                    <UsageBar
-                      label={t('dashboard.usage.storage')}
-                      valueLabel={
-                        data.usage.storage.limit === null
-                          ? formatMegabytes(data.usage.storage.used, locale)
-                          : t('dashboard.usage.ofLimit', {
-                              used: formatMegabytes(data.usage.storage.used, locale),
-                              limit: formatMegabytes(data.usage.storage.limit, locale),
-                            })
-                      }
-                      ratio={
-                        data.usage.storage.limit === null
-                          ? null
-                          : data.usage.storage.used / data.usage.storage.limit
-                      }
-                    />
+                    <UsagePanel subscription={data.subscription} locale={locale} t={t} />
                   </CardContent>
                 </Card>
 
@@ -192,7 +250,7 @@ export default async function DashboardPage({
                       <p className="text-sm text-muted">{t('dashboard.empty.proposals')}</p>
                     ) : (
                       <ul className="space-y-2">
-                        {data.knowledgeProposals.map((proposal) => (
+                        {data.knowledgeProposals.slice(0, 6).map((proposal) => (
                           <li key={proposal.id} className="flex items-start gap-2">
                             <BrainCircuit aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" />
                             <span className="min-w-0">
@@ -200,7 +258,9 @@ export default async function DashboardPage({
                                 {proposal.title}
                               </span>
                               <span className="block text-xs text-muted">
-                                {t('brain.proposedBy', { author: proposal.authorName })}
+                                {proposal.proposedBy
+                                  ? t('brain.proposedBy', { author: proposal.proposedBy.name })
+                                  : t('brain.proposedByAgent')}
                               </span>
                             </span>
                           </li>
@@ -229,16 +289,16 @@ export default async function DashboardPage({
                           className="rounded-[var(--radius-prom)] border border-line bg-surface p-3"
                         >
                           <div className="flex items-start justify-between gap-2">
-                            <p className="text-sm text-foreground">{task.title}</p>
+                            <Link
+                              href={`${base}/projects/${task.projectId}/tasks`}
+                              className="text-sm text-foreground hover:text-accent"
+                            >
+                              {task.title}
+                            </Link>
                             <StatusBadge tone={badge.tone} icon={badge.icon}>
                               {badge.label}
                             </StatusBadge>
                           </div>
-                          {task.blockedReason ? (
-                            <p className="mt-1 text-xs text-muted">
-                              {t('tasks.blockedReason', { reason: task.blockedReason })}
-                            </p>
-                          ) : null}
                         </li>
                       );
                     })}
@@ -247,22 +307,24 @@ export default async function DashboardPage({
               </section>
 
               <section>
-                <SectionTitle>{t('dashboard.syncIncidents')}</SectionTitle>
-                {data.syncIncidents.length === 0 ? (
-                  <Alert title={t('dashboard.noIncidents')} />
+                <SectionTitle>{t('dashboard.recentActivity')}</SectionTitle>
+                {data.recentActivity.length === 0 ? (
+                  <Alert title={t('dashboard.empty.activity')} />
                 ) : (
-                  <ul className="space-y-2">
-                    {data.syncIncidents.map((incident) => (
-                      <li key={incident.id}>
-                        <Alert
-                          tone={incident.severity === 'error' ? 'danger' : 'alert'}
-                          title={incident.projectName}
-                        >
-                          <span className="block">{incident.summary}</span>
-                          <span className="mt-1 block text-xs">
-                            {relativeTime(incident.occurredAt, locale)}
-                          </span>
-                        </Alert>
+                  <ul className="space-y-1.5">
+                    {data.recentActivity.map((event) => (
+                      <li
+                        key={event.id}
+                        className="flex items-center gap-2 rounded-[var(--radius-prom)] border border-line bg-surface px-3 py-2 text-sm"
+                      >
+                        <ScrollText aria-hidden className="size-3.5 shrink-0 text-muted" />
+                        <code className="font-mono text-xs text-accent">{event.action}</code>
+                        <span className="min-w-0 flex-1 truncate text-muted">
+                          {event.actorUser?.name ?? t('audit.actor.system')}
+                        </span>
+                        <span className="shrink-0 text-xs text-muted">
+                          {absoluteDateTime(event.createdAt, locale)}
+                        </span>
                       </li>
                     ))}
                   </ul>
@@ -271,32 +333,53 @@ export default async function DashboardPage({
             </div>
 
             <section>
-              <SectionTitle>{t('dashboard.agentsWorking')}</SectionTitle>
-              {data.agentsWorking.length === 0 ? (
+              <SectionTitle>{t('dashboard.activeDevices')}</SectionTitle>
+              {data.activeAgents.length === 0 ? (
                 <p className="rounded-[var(--radius-prom)] border border-dashed border-line p-6 text-center text-sm text-muted">
                   {t('dashboard.empty.agents')}
                 </p>
               ) : (
                 <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  {data.agentsWorking.map((agent) => (
+                  {data.activeAgents.map((agent) => (
                     <li
-                      key={agent.id}
+                      key={agent.deviceId}
                       className="rounded-[var(--radius-prom)] border border-line bg-surface p-3"
                     >
                       <div className="flex items-center gap-2">
-                        <Radio aria-hidden className="size-4 text-running" />
-                        <span className="text-sm font-medium text-foreground">{agent.name}</span>
-                        <StatusBadge tone="accent" className="ml-auto">
-                          {agent.role === 'main' ? t('agents.role.main') : t('agents.role.worker')}
-                        </StatusBadge>
+                        <MonitorSmartphone aria-hidden className="size-4 text-running" />
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                          {agent.deviceName}
+                        </span>
+                        <StatusBadge tone="accent">{agent.kind}</StatusBadge>
                       </div>
-                      <p className="mt-1 truncate text-xs text-muted">
-                        {agent.currentTaskTitle ?? agent.deviceLabel}
+                      <p className="mt-1 flex items-center gap-1.5 truncate text-xs text-muted">
+                        <Bot aria-hidden className="size-3" />
+                        {agent.activeAgentRunIds.length > 0
+                          ? t('agents.runningCount', { count: agent.activeAgentRunIds.length })
+                          : agent.owner.name}
                       </p>
                     </li>
                   ))}
                 </ul>
               )}
+            </section>
+
+            <section>
+              <SectionTitle>{t('members.title')}</SectionTitle>
+              <Card>
+                <CardContent className="flex items-center gap-3 py-4">
+                  <Users aria-hidden className="size-4 text-muted" />
+                  <p className="text-sm text-muted">
+                    {t('dashboard.membersHint', { role: roleLabel(data.organization.role, t) })}
+                  </p>
+                  <Link
+                    href={`${base}/members`}
+                    className="ml-auto text-xs text-link hover:underline"
+                  >
+                    {t('action.viewAll')}
+                  </Link>
+                </CardContent>
+              </Card>
             </section>
           </div>
         )}

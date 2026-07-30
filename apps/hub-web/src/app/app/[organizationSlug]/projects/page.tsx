@@ -1,18 +1,16 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
-import { FolderGit2, GitBranch, Plus } from 'lucide-react';
+import { FolderGit2, GitBranch, Lock } from 'lucide-react';
 import { getLocale, getTranslate } from '@/i18n/server';
 import { PageHeader } from '@/components/ui/page';
-import { Button } from '@/components/ui/button';
 import { Badge, StatusBadge } from '@/components/ui/status-badge';
 import { DataView } from '@/components/states/data-view';
-import { SampleDataNotice } from '@/components/layout/sample-data-notice';
+import { ForcedStateNotice } from '@/components/states/forced-state-notice';
+import { CreateProjectForm } from '@/components/forms/project-forms';
 import { getOrganizationBySlug, listProjects } from '@/lib/api/queries';
-import { applyForcedState, readForcedState } from '@/lib/api/state-override';
-import { env } from '@/lib/env';
+import { applyForcedState, devForcedState } from '@/lib/api/state-override';
 import { relativeTime } from '@/lib/format';
 import { viewerCan } from '@/lib/roles';
-import { plural } from '@/i18n/plural';
 
 export const metadata: Metadata = { title: 'Projects' };
 
@@ -31,36 +29,29 @@ export default async function ProjectsPage({
   ]);
 
   const base = `/app/${organizationSlug}`;
-  const forced = readForcedState(query, env().HUB_WEB_SAMPLE_DATA);
+  const forced = devForcedState(query);
 
   const organization = await getOrganizationBySlug(organizationSlug);
   const projects = await applyForcedState(
     forced,
-    organization.ok ? await listProjects(organization.data.id) : { ok: false, kind: 'not-found' },
+    organization.ok ? await listProjects(organization.data.id) : organization,
     [],
   );
 
   // A API é quem autoriza de fato; aqui só evitamos oferecer um botão que ela
-  // negaria.
-  const canCreate = organization.ok && viewerCan(organization.data.viewerRole, 'project.create');
+  // negaria. A lista de permissões vem do próprio servidor, junto da organização.
+  const canCreate =
+    organization.ok &&
+    viewerCan({ role: organization.data.role, permissions: organization.data.permissions }, 'project.create');
 
   return (
     <div className="space-y-6">
-      <SampleDataNotice />
+      <ForcedStateNotice forced={forced} />
 
       <PageHeader
         title={t('projects.title')}
         description={t('projects.subtitle')}
-        {...(canCreate
-          ? {
-              actions: (
-                <Button size="sm">
-                  <Plus aria-hidden />
-                  {t('projects.create')}
-                </Button>
-              ),
-            }
-          : {})}
+        {...(canCreate ? { actions: <CreateProjectForm organizationSlug={organizationSlug} /> } : {})}
       />
 
       <DataView
@@ -70,14 +61,7 @@ export default async function ProjectsPage({
         retryHref={`${base}/projects`}
         backHref="/app"
         {...(canCreate
-          ? {
-              emptyAction: (
-                <Button size="sm">
-                  <Plus aria-hidden />
-                  {t('projects.create')}
-                </Button>
-              ),
-            }
+          ? { emptyAction: <CreateProjectForm organizationSlug={organizationSlug} /> }
           : {})}
       >
         {(items) => (
@@ -93,31 +77,44 @@ export default async function ProjectsPage({
                   </span>
                   <div className="min-w-0 flex-1">
                     <h2 className="truncate text-sm font-semibold text-foreground">
-                      <Link
-                        href={`${base}/projects/${project.id}`}
-                        className="hover:text-accent"
-                      >
+                      <Link href={`${base}/projects/${project.id}`} className="hover:text-accent">
                         {project.name}
                       </Link>
                     </h2>
-                    <p className="mt-0.5 line-clamp-2 text-sm text-muted">{project.description}</p>
+                    <p className="mt-0.5 line-clamp-2 text-sm text-muted">
+                      {project.description ?? t('projects.noDescription')}
+                    </p>
                   </div>
-                  {project.activeAgentCount > 0 ? (
-                    <StatusBadge tone="running">
-                      {plural(t, 'projects.activeAgents', project.activeAgentCount)}
+                  {project.status === 'active' ? null : (
+                    <StatusBadge tone="neutral">
+                      {project.status === 'paused'
+                        ? t('projects.status.paused')
+                        : t('projects.status.archived')}
                     </StatusBadge>
-                  ) : null}
+                  )}
                 </div>
 
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">
-                  <Badge>{plural(t, 'projects.openTasks', project.openTaskCount)}</Badge>
-                  <span className="inline-flex items-center gap-1">
-                    <GitBranch aria-hidden className="size-3.5" />
-                    {project.defaultBranch}
-                  </span>
+                  {project.visibility === 'private' ? (
+                    <Badge>
+                      <Lock aria-hidden className="mr-1 inline size-3" />
+                      {t('projects.visibility.private')}
+                    </Badge>
+                  ) : null}
+                  {project.repositories.length === 0 ? (
+                    <Badge>{t('projects.noRepository')}</Badge>
+                  ) : (
+                    <span className="inline-flex items-center gap-1">
+                      <GitBranch aria-hidden className="size-3.5" />
+                      {project.repositories[0]?.defaultBranch}
+                    </span>
+                  )}
+                  {project.tags.map((tag) => (
+                    <Badge key={tag}>{tag}</Badge>
+                  ))}
                   <span>
                     {t('projects.lastActivity', {
-                      relativeTime: relativeTime(project.lastActivityAt, locale),
+                      relativeTime: relativeTime(project.updatedAt, locale),
                     })}
                   </span>
                 </div>
