@@ -1,0 +1,27 @@
+{
+  "name": "@prometheon/testing",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@prometheon/config": "workspace:*",
+    "mysql2": "^3.11.0",
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10",
+    "@types/node": "^22.10.2"
+  }
+}

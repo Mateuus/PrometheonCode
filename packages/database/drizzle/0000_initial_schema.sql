@@ -1,0 +1,1122 @@
+CREATE TABLE `device_tokens` (
+	`id` char(26) NOT NULL,
+	`device_id` char(26) NOT NULL,
+	`user_id` char(26),
+	`type` enum('device_code','device_credential') NOT NULL,
+	`token_hash` varchar(64) NOT NULL,
+	`user_code` varchar(16),
+	`scope` varchar(512),
+	`expires_at` datetime(3) NOT NULL,
+	`approved_at` datetime(3),
+	`consumed_at` datetime(3),
+	`revoked_at` datetime(3),
+	`revoked_reason` varchar(191),
+	`last_used_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `device_tokens_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_device_tokens_hash` UNIQUE(`token_hash`),
+	CONSTRAINT `uq_device_tokens_user_code` UNIQUE(`user_code`)
+);
+--> statement-breakpoint
+CREATE TABLE `devices` (
+	`id` char(26) NOT NULL,
+	`user_id` char(26) NOT NULL,
+	`name` varchar(160) NOT NULL,
+	`platform` enum('windows','macos','linux','web','other') NOT NULL DEFAULT 'other',
+	`client` varchar(64) NOT NULL DEFAULT 'extension',
+	`client_version` varchar(32),
+	`fingerprint` varchar(128),
+	`status` enum('pending','active','revoked','expired') NOT NULL DEFAULT 'pending',
+	`approved_at` datetime(3),
+	`revoked_at` datetime(3),
+	`last_seen_at` datetime(3),
+	`last_ip` varchar(45),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `devices_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_devices_user_fingerprint` UNIQUE(`user_id`,`fingerprint`)
+);
+--> statement-breakpoint
+CREATE TABLE `refresh_tokens` (
+	`id` char(26) NOT NULL,
+	`session_id` char(26) NOT NULL,
+	`user_id` char(26) NOT NULL,
+	`token_hash` varchar(64) NOT NULL,
+	`previous_token_id` char(26),
+	`expires_at` datetime(3) NOT NULL,
+	`used_at` datetime(3),
+	`revoked_at` datetime(3),
+	`revoked_reason` varchar(191),
+	`ip` varchar(45),
+	`user_agent` varchar(512),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `refresh_tokens_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_refresh_tokens_hash` UNIQUE(`token_hash`)
+);
+--> statement-breakpoint
+CREATE TABLE `user_identities` (
+	`id` char(26) NOT NULL,
+	`user_id` char(26) NOT NULL,
+	`provider` enum('password','github','google','gitlab','oidc') NOT NULL,
+	`provider_account_id` varchar(191) NOT NULL,
+	`email` varchar(320),
+	`display_name` varchar(160),
+	`last_authenticated_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `user_identities_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_user_identities_provider_account` UNIQUE(`provider`,`provider_account_id`)
+);
+--> statement-breakpoint
+CREATE TABLE `user_sessions` (
+	`id` char(26) NOT NULL,
+	`user_id` char(26) NOT NULL,
+	`device_id` char(26),
+	`organization_id` char(26),
+	`ip` varchar(45),
+	`user_agent` varchar(512),
+	`expires_at` datetime(3) NOT NULL,
+	`last_seen_at` datetime(3),
+	`revoked_at` datetime(3),
+	`revoked_reason` varchar(191),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `user_sessions_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `users` (
+	`id` char(26) NOT NULL,
+	`email` varchar(320) NOT NULL,
+	`email_verified_at` datetime(3),
+	`password_hash` varchar(255),
+	`password_updated_at` datetime(3),
+	`display_name` varchar(160) NOT NULL,
+	`avatar_url` varchar(1024),
+	`locale` varchar(16) NOT NULL DEFAULT 'en',
+	`timezone` varchar(64) NOT NULL DEFAULT 'UTC',
+	`status` enum('pending','active','suspended','disabled') NOT NULL DEFAULT 'pending',
+	`last_login_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	`deleted_at` datetime(3),
+	CONSTRAINT `users_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_users_email` UNIQUE(`email`)
+);
+--> statement-breakpoint
+CREATE TABLE `invitations` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`email` varchar(320) NOT NULL,
+	`role_id` char(26) NOT NULL,
+	`token_hash` varchar(64) NOT NULL,
+	`status` enum('pending','accepted','revoked','expired') NOT NULL DEFAULT 'pending',
+	`message` text,
+	`invited_by` char(26),
+	`accepted_by_user_id` char(26),
+	`expires_at` datetime(3) NOT NULL,
+	`accepted_at` datetime(3),
+	`revoked_at` datetime(3),
+	`pending_email` varchar(320) GENERATED ALWAYS AS ((case when `status` = 'pending' then `email` else null end)) VIRTUAL,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `invitations_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_invitations_token_hash` UNIQUE(`token_hash`),
+	CONSTRAINT `uq_invitations_org_pending_email` UNIQUE(`organization_id`,`pending_email`)
+);
+--> statement-breakpoint
+CREATE TABLE `organization_members` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`user_id` char(26) NOT NULL,
+	`role_id` char(26) NOT NULL,
+	`status` enum('invited','active','suspended') NOT NULL DEFAULT 'active',
+	`invited_by` char(26),
+	`joined_at` datetime(3),
+	`last_active_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `organization_members_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_organization_members_org_user` UNIQUE(`organization_id`,`user_id`)
+);
+--> statement-breakpoint
+CREATE TABLE `organizations` (
+	`id` char(26) NOT NULL,
+	`slug` varchar(64) NOT NULL,
+	`name` varchar(160) NOT NULL,
+	`plan_id` char(26) NOT NULL,
+	`owner_user_id` char(26),
+	`billing_email` varchar(320),
+	`status` enum('active','suspended','pending_deletion') NOT NULL DEFAULT 'active',
+	`policy` json,
+	`settings` json,
+	`retention_days` int,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	`deleted_at` datetime(3),
+	CONSTRAINT `organizations_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_organizations_slug` UNIQUE(`slug`)
+);
+--> statement-breakpoint
+CREATE TABLE `plans` (
+	`id` char(26) NOT NULL,
+	`code` varchar(32) NOT NULL,
+	`name` varchar(96) NOT NULL,
+	`description` varchar(512),
+	`price_cents` int NOT NULL DEFAULT 0,
+	`currency` varchar(3) NOT NULL DEFAULT 'USD',
+	`billing_period` enum('none','monthly','yearly') NOT NULL DEFAULT 'none',
+	`max_members` int NOT NULL DEFAULT 3,
+	`max_projects` int NOT NULL DEFAULT 1,
+	`max_agent_runs_per_month` int NOT NULL DEFAULT 200,
+	`max_storage_bytes` bigint unsigned NOT NULL DEFAULT 1073741824,
+	`retention_days` int NOT NULL DEFAULT 30,
+	`is_default` boolean NOT NULL DEFAULT false,
+	`is_active` boolean NOT NULL DEFAULT true,
+	`features` json,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `plans_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_plans_code` UNIQUE(`code`)
+);
+--> statement-breakpoint
+CREATE TABLE `role_permissions` (
+	`role_id` char(26) NOT NULL,
+	`permission` varchar(64) NOT NULL,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	CONSTRAINT `role_permissions_role_id_permission_pk` PRIMARY KEY(`role_id`,`permission`)
+);
+--> statement-breakpoint
+CREATE TABLE `roles` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26),
+	`slug` varchar(64) NOT NULL,
+	`name` varchar(96) NOT NULL,
+	`description` varchar(512),
+	`is_system` boolean NOT NULL DEFAULT false,
+	`priority` int NOT NULL DEFAULT 0,
+	`is_default` boolean NOT NULL DEFAULT false,
+	`system_slug` varchar(64) GENERATED ALWAYS AS ((case when `organization_id` is null then `slug` else null end)) VIRTUAL,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `roles_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_roles_organization_slug` UNIQUE(`organization_id`,`slug`),
+	CONSTRAINT `uq_roles_system_slug` UNIQUE(`system_slug`)
+);
+--> statement-breakpoint
+CREATE TABLE `git_connections` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`provider` enum('github','gitlab','bitbucket','azure_devops') NOT NULL,
+	`kind` enum('app_installation','oauth','personal_access_token') NOT NULL DEFAULT 'app_installation',
+	`account_login` varchar(191) NOT NULL,
+	`external_account_id` varchar(191) NOT NULL,
+	`installation_id` varchar(191),
+	`status` enum('active','revoked','error','expired') NOT NULL DEFAULT 'active',
+	`scopes` json,
+	`credential_ciphertext` varbinary(4096),
+	`credential_iv` varbinary(16),
+	`credential_auth_tag` varbinary(16),
+	`credential_key_id` varchar(64),
+	`credential_algorithm` varchar(32),
+	`credential_rotated_at` datetime(3),
+	`credential_expires_at` datetime(3),
+	`last_used_at` datetime(3),
+	`last_error_message` varchar(512),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `git_connections_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_git_connections_account` UNIQUE(`organization_id`,`provider`,`external_account_id`)
+);
+--> statement-breakpoint
+CREATE TABLE `git_repositories` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`git_connection_id` char(26) NOT NULL,
+	`provider` enum('github','gitlab','bitbucket','azure_devops') NOT NULL,
+	`external_id` varchar(191) NOT NULL,
+	`owner` varchar(191) NOT NULL,
+	`name` varchar(191) NOT NULL,
+	`full_name` varchar(383) NOT NULL,
+	`default_branch` varchar(191) NOT NULL DEFAULT 'main',
+	`is_private` boolean NOT NULL DEFAULT true,
+	`clone_url` varchar(1024),
+	`html_url` varchar(1024),
+	`webhook_secret_ciphertext` varbinary(1024),
+	`webhook_secret_iv` varbinary(16),
+	`webhook_secret_auth_tag` varbinary(16),
+	`webhook_secret_key_id` varchar(64),
+	`last_synced_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `git_repositories_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_git_repositories_external` UNIQUE(`git_connection_id`,`external_id`)
+);
+--> statement-breakpoint
+CREATE TABLE `mcp_registry_entries` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`project_id` char(26),
+	`slug` varchar(96) NOT NULL,
+	`name` varchar(160) NOT NULL,
+	`description` varchar(512),
+	`transport` enum('stdio','http','sse','websocket') NOT NULL DEFAULT 'stdio',
+	`command` varchar(512),
+	`url` varchar(1024),
+	`args` json,
+	`env_keys` json,
+	`scopes` json,
+	`trust_level` enum('trusted','restricted','blocked') NOT NULL DEFAULT 'restricted',
+	`status` enum('active','disabled') NOT NULL DEFAULT 'active',
+	`config` json,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `mcp_registry_entries_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_mcp_registry_entries_slug` UNIQUE(`organization_id`,`slug`)
+);
+--> statement-breakpoint
+CREATE TABLE `webhook_deliveries` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`git_connection_id` char(26),
+	`git_repository_id` char(26),
+	`provider` enum('github','gitlab','bitbucket','azure_devops') NOT NULL,
+	`external_delivery_id` varchar(191) NOT NULL,
+	`event_type` varchar(96) NOT NULL,
+	`signature_valid` boolean NOT NULL DEFAULT false,
+	`status` enum('received','processing','processed','failed','skipped') NOT NULL DEFAULT 'received',
+	`attempts` int NOT NULL DEFAULT 0,
+	`payload_hash` varchar(64) NOT NULL,
+	`payload` json,
+	`error_message` text,
+	`received_at` datetime(3) NOT NULL,
+	`processed_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `webhook_deliveries_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_webhook_deliveries_external` UNIQUE(`provider`,`external_delivery_id`)
+);
+--> statement-breakpoint
+CREATE TABLE `agent_profiles` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`slug` varchar(96) NOT NULL,
+	`name` varchar(160) NOT NULL,
+	`description` varchar(512),
+	`provider` varchar(64) NOT NULL,
+	`transport` enum('cli','api') NOT NULL DEFAULT 'cli',
+	`model` varchar(128),
+	`role` enum('main','planner','implementer','reviewer','researcher','tester','documenter') NOT NULL DEFAULT 'implementer',
+	`default_work_mode` enum('plan','edit','agent_team') NOT NULL DEFAULT 'plan',
+	`default_autonomy` enum('manual','auto','bypass') NOT NULL DEFAULT 'manual',
+	`concurrency_limit` int NOT NULL DEFAULT 1,
+	`instructions` text,
+	`config` json,
+	`is_default` boolean NOT NULL DEFAULT false,
+	`is_active` boolean NOT NULL DEFAULT true,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `agent_profiles_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_agent_profiles_org_slug` UNIQUE(`organization_id`,`slug`)
+);
+--> statement-breakpoint
+CREATE TABLE `project_agent_profiles` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`project_id` char(26) NOT NULL,
+	`agent_profile_id` char(26) NOT NULL,
+	`is_enabled` boolean NOT NULL DEFAULT true,
+	`priority` int NOT NULL DEFAULT 0,
+	`overrides` json,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `project_agent_profiles_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_project_agent_profiles` UNIQUE(`project_id`,`agent_profile_id`)
+);
+--> statement-breakpoint
+CREATE TABLE `project_members` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`project_id` char(26) NOT NULL,
+	`user_id` char(26) NOT NULL,
+	`role_id` char(26),
+	`status` enum('active','suspended') NOT NULL DEFAULT 'active',
+	`added_by` char(26),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `project_members_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_project_members_project_user` UNIQUE(`project_id`,`user_id`)
+);
+--> statement-breakpoint
+CREATE TABLE `project_repositories` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`project_id` char(26) NOT NULL,
+	`git_repository_id` char(26) NOT NULL,
+	`root_path` varchar(512),
+	`default_branch` varchar(191),
+	`is_primary` boolean NOT NULL DEFAULT false,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `project_repositories_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_project_repositories_project_repo` UNIQUE(`project_id`,`git_repository_id`)
+);
+--> statement-breakpoint
+CREATE TABLE `project_settings` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`project_id` char(26) NOT NULL,
+	`default_work_mode` enum('plan','edit','agent_team') NOT NULL DEFAULT 'plan',
+	`default_autonomy` enum('manual','auto','bypass') NOT NULL DEFAULT 'manual',
+	`context_budget_tokens` int NOT NULL DEFAULT 120000,
+	`allow_remote_agents` boolean NOT NULL DEFAULT false,
+	`require_review` boolean NOT NULL DEFAULT true,
+	`policy` json,
+	`knowledge_path` varchar(512) NOT NULL DEFAULT '.prometheon/knowledge',
+	`retention_days` int,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `project_settings_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_project_settings_project` UNIQUE(`project_id`)
+);
+--> statement-breakpoint
+CREATE TABLE `projects` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`slug` varchar(96) NOT NULL,
+	`name` varchar(160) NOT NULL,
+	`description` text,
+	`status` enum('active','paused','archived') NOT NULL DEFAULT 'active',
+	`visibility` enum('private','organization') NOT NULL DEFAULT 'organization',
+	`default_branch` varchar(191) NOT NULL DEFAULT 'main',
+	`archived_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	`deleted_at` datetime(3),
+	CONSTRAINT `projects_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_projects_org_slug` UNIQUE(`organization_id`,`slug`)
+);
+--> statement-breakpoint
+CREATE TABLE `conversation_participants` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`conversation_id` char(26) NOT NULL,
+	`participant_type` enum('user','agent') NOT NULL,
+	`participant_id` char(26) NOT NULL,
+	`role` enum('owner','member','observer') NOT NULL DEFAULT 'member',
+	`last_read_sequence` bigint unsigned NOT NULL DEFAULT 0,
+	`joined_at` datetime(3),
+	`left_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `conversation_participants_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_conversation_participants` UNIQUE(`conversation_id`,`participant_type`,`participant_id`)
+);
+--> statement-breakpoint
+CREATE TABLE `conversation_summaries` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`conversation_id` char(26) NOT NULL,
+	`layer` enum('current_summary','decisions','facts','tasks','open_questions','references') NOT NULL,
+	`from_sequence` bigint unsigned NOT NULL,
+	`to_sequence` bigint unsigned NOT NULL,
+	`content` mediumtext NOT NULL,
+	`source_message_ids` json,
+	`model` varchar(128),
+	`token_count` int,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `conversation_summaries_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `conversations` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`project_id` char(26),
+	`title` varchar(255) NOT NULL,
+	`origin` enum('web','local_import','agent') NOT NULL DEFAULT 'web',
+	`status` enum('active','archived','locked') NOT NULL DEFAULT 'active',
+	`visibility` enum('private','project','organization') NOT NULL DEFAULT 'project',
+	`work_mode` enum('plan','edit','agent_team') NOT NULL DEFAULT 'plan',
+	`last_sequence` bigint unsigned NOT NULL DEFAULT 0,
+	`message_count` int NOT NULL DEFAULT 0,
+	`last_message_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	`deleted_at` datetime(3),
+	CONSTRAINT `conversations_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `message_attachments` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`message_id` char(26) NOT NULL,
+	`file_name` varchar(255) NOT NULL,
+	`mime_type` varchar(191) NOT NULL,
+	`size_bytes` bigint unsigned NOT NULL,
+	`storage_key` varchar(512) NOT NULL,
+	`checksum_sha256` varchar(64) NOT NULL,
+	`scan_status` enum('pending','clean','rejected') NOT NULL DEFAULT 'pending',
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `message_attachments_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `message_context_refs` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`message_id` char(26) NOT NULL,
+	`ref_type` enum('file','diff','knowledge_item','task','artifact','graph_node','commit','url') NOT NULL,
+	`ref_id` varchar(512) NOT NULL,
+	`label` varchar(255),
+	`revision` varchar(191),
+	`metadata` json,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	CONSTRAINT `message_context_refs_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `message_parts` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`message_id` char(26) NOT NULL,
+	`sequence` int NOT NULL,
+	`type` enum('text','reasoning_summary','tool_call','tool_result','artifact_reference','task_reference','error') NOT NULL,
+	`content` mediumtext,
+	`payload` json,
+	`tool_name` varchar(128),
+	`token_count` int,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	CONSTRAINT `message_parts_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_message_parts_message_sequence` UNIQUE(`message_id`,`sequence`)
+);
+--> statement-breakpoint
+CREATE TABLE `messages` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`conversation_id` char(26) NOT NULL,
+	`author_type` enum('user','agent','system') NOT NULL,
+	`author_user_id` char(26),
+	`author_agent_run_id` char(26),
+	`status` enum('pending','streaming','complete','failed','cancelled','redacted') NOT NULL DEFAULT 'complete',
+	`sequence` bigint unsigned NOT NULL,
+	`parent_message_id` char(26),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	`deleted_at` datetime(3),
+	CONSTRAINT `messages_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_messages_conversation_sequence` UNIQUE(`conversation_id`,`sequence`)
+);
+--> statement-breakpoint
+CREATE TABLE `agent_run_events` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`agent_run_id` char(26) NOT NULL,
+	`sequence` bigint unsigned NOT NULL,
+	`type` varchar(96) NOT NULL,
+	`payload` json,
+	`occurred_at` datetime(3) NOT NULL,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	CONSTRAINT `agent_run_events_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_agent_run_events_run_sequence` UNIQUE(`agent_run_id`,`sequence`)
+);
+--> statement-breakpoint
+CREATE TABLE `agent_runs` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`project_id` char(26) NOT NULL,
+	`task_id` char(26),
+	`conversation_id` char(26),
+	`agent_profile_id` char(26),
+	`device_id` char(26),
+	`external_session_id` varchar(191),
+	`status` enum('queued','starting','running','paused','completed','failed','cancelled','timed_out') NOT NULL DEFAULT 'queued',
+	`mode` enum('local','remote') NOT NULL DEFAULT 'local',
+	`work_mode` enum('plan','edit','agent_team') NOT NULL DEFAULT 'plan',
+	`autonomy` enum('manual','auto','bypass') NOT NULL DEFAULT 'manual',
+	`started_at` datetime(3),
+	`finished_at` datetime(3),
+	`heartbeat_at` datetime(3),
+	`exit_code` int,
+	`error_code` varchar(96),
+	`error_message` text,
+	`input_tokens` int,
+	`output_tokens` int,
+	`cost_cents` int,
+	`result_summary` mediumtext,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `agent_runs_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `approvals` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`project_id` char(26),
+	`task_id` char(26),
+	`agent_run_id` char(26),
+	`conversation_id` char(26),
+	`kind` enum('tool_call','file_write','command','merge','remote_start','knowledge_publish','bypass') NOT NULL,
+	`status` enum('pending','approved','rejected','expired','cancelled') NOT NULL DEFAULT 'pending',
+	`risk` enum('low','medium','high') NOT NULL DEFAULT 'medium',
+	`subject` json,
+	`requested_by_type` enum('user','agent','system') NOT NULL,
+	`requested_by_id` char(26),
+	`decided_by_user_id` char(26),
+	`decided_at` datetime(3),
+	`expires_at` datetime(3),
+	`reason` varchar(512),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `approvals_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `artifacts` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`project_id` char(26) NOT NULL,
+	`task_id` char(26),
+	`agent_run_id` char(26),
+	`type` enum('diff','patch','file','report','test_result','commit','pull_request','log') NOT NULL,
+	`title` varchar(255) NOT NULL,
+	`storage_key` varchar(512),
+	`uri` varchar(1024),
+	`mime_type` varchar(191),
+	`size_bytes` bigint unsigned,
+	`checksum_sha256` varchar(64),
+	`metadata` json,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `artifacts_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `reviews` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`project_id` char(26) NOT NULL,
+	`task_id` char(26),
+	`agent_run_id` char(26),
+	`artifact_id` char(26),
+	`reviewer_user_id` char(26),
+	`status` enum('pending','approved','changes_requested','rejected') NOT NULL DEFAULT 'pending',
+	`summary` mediumtext,
+	`checklist` json,
+	`submitted_at` datetime(3),
+	`decided_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `reviews_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `task_assignments` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`task_id` char(26) NOT NULL,
+	`assignee_type` enum('user','agent_profile') NOT NULL,
+	`assignee_id` char(26) NOT NULL,
+	`agent_run_id` char(26),
+	`status` enum('assigned','accepted','released','completed','failed') NOT NULL DEFAULT 'assigned',
+	`assigned_by` char(26),
+	`assigned_at` datetime(3) NOT NULL,
+	`accepted_at` datetime(3),
+	`released_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `task_assignments_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `task_dependencies` (
+	`task_id` char(26) NOT NULL,
+	`depends_on_task_id` char(26) NOT NULL,
+	`type` enum('blocks','relates_to','duplicates') NOT NULL DEFAULT 'blocks',
+	`organization_id` char(26) NOT NULL,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	CONSTRAINT `task_dependencies_task_id_depends_on_task_id_pk` PRIMARY KEY(`task_id`,`depends_on_task_id`)
+);
+--> statement-breakpoint
+CREATE TABLE `tasks` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`project_id` char(26) NOT NULL,
+	`conversation_id` char(26),
+	`parent_task_id` char(26),
+	`number` int NOT NULL,
+	`title` varchar(255) NOT NULL,
+	`description` mediumtext,
+	`status` enum('backlog','ready','claimed','in_progress','blocked','in_review','done','cancelled','failed') NOT NULL DEFAULT 'backlog',
+	`priority` enum('low','normal','high','urgent') NOT NULL DEFAULT 'normal',
+	`work_mode` enum('plan','edit','agent_team') NOT NULL DEFAULT 'plan',
+	`autonomy` enum('manual','auto','bypass') NOT NULL DEFAULT 'manual',
+	`scope` json,
+	`branch_name` varchar(255),
+	`claimed_by_device_id` char(26),
+	`claimed_by_user_id` char(26),
+	`claimed_at` datetime(3),
+	`started_at` datetime(3),
+	`completed_at` datetime(3),
+	`due_at` datetime(3),
+	`blocked_reason` varchar(512),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `tasks_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_tasks_project_number` UNIQUE(`project_id`,`number`)
+);
+--> statement-breakpoint
+CREATE TABLE `knowledge_items` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`project_id` char(26),
+	`slug` varchar(191) NOT NULL,
+	`title` varchar(255) NOT NULL,
+	`category` enum('architecture','component','decision','problem','solution','lesson') NOT NULL,
+	`status` enum('draft','proposed','verified','approved','official','superseded','rejected') NOT NULL DEFAULT 'draft',
+	`origin` enum('extracted','inferred','human','decision','experimental') NOT NULL DEFAULT 'human',
+	`confidence` smallint NOT NULL DEFAULT 50,
+	`scope` varchar(255),
+	`path` varchar(512),
+	`current_version_id` char(26),
+	`superseded_by_id` char(26),
+	`tags` json,
+	`approved_at` datetime(3),
+	`scope_key` varchar(26) GENERATED ALWAYS AS ((coalesce(`project_id`, ''))) VIRTUAL,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	`deleted_at` datetime(3),
+	CONSTRAINT `knowledge_items_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_knowledge_items_scope_slug` UNIQUE(`organization_id`,`scope_key`,`slug`)
+);
+--> statement-breakpoint
+CREATE TABLE `knowledge_relations` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`from_item_id` char(26) NOT NULL,
+	`to_item_id` char(26) NOT NULL,
+	`relation_type` enum('relates_to','depends_on','supersedes','contradicts','derived_from','part_of') NOT NULL,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	CONSTRAINT `knowledge_relations_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_knowledge_relations` UNIQUE(`from_item_id`,`to_item_id`,`relation_type`)
+);
+--> statement-breakpoint
+CREATE TABLE `knowledge_reviews` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`knowledge_item_id` char(26) NOT NULL,
+	`knowledge_version_id` char(26) NOT NULL,
+	`reviewer_user_id` char(26),
+	`decision` enum('pending','approved','rejected','changes_requested') NOT NULL DEFAULT 'pending',
+	`rationale` text,
+	`reviewed_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `knowledge_reviews_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `knowledge_sources` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`knowledge_item_id` char(26) NOT NULL,
+	`knowledge_version_id` char(26),
+	`source_type` enum('file','commit','message','agent_run','task','graph_node','url') NOT NULL,
+	`source_ref` varchar(512) NOT NULL,
+	`locator` varchar(191),
+	`origin` enum('extracted','inferred','human','decision','experimental') NOT NULL DEFAULT 'extracted',
+	`confidence` smallint NOT NULL DEFAULT 50,
+	`extracted_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	CONSTRAINT `knowledge_sources_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `knowledge_versions` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`knowledge_item_id` char(26) NOT NULL,
+	`version_number` int NOT NULL,
+	`title` varchar(255) NOT NULL,
+	`content` mediumtext NOT NULL,
+	`content_format` varchar(32) NOT NULL DEFAULT 'markdown',
+	`summary` text,
+	`checksum_sha256` varchar(64),
+	`status` enum('draft','proposed','verified','approved','official','superseded','rejected') NOT NULL DEFAULT 'proposed',
+	`origin` enum('extracted','inferred','human','decision','experimental') NOT NULL DEFAULT 'human',
+	`confidence` smallint NOT NULL DEFAULT 50,
+	`evidence` json,
+	`change_note` varchar(512),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`created_by` char(26),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `knowledge_versions_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_knowledge_versions_item_number` UNIQUE(`knowledge_item_id`,`version_number`)
+);
+--> statement-breakpoint
+CREATE TABLE `sync_checkpoints` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`scope` varchar(64) NOT NULL,
+	`scope_key` varchar(191) NOT NULL,
+	`cursor` varchar(255),
+	`last_event_id` char(26),
+	`last_synced_at` datetime(3),
+	`state` json,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `sync_checkpoints_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_sync_checkpoints_scope` UNIQUE(`organization_id`,`scope`,`scope_key`)
+);
+--> statement-breakpoint
+CREATE TABLE `audit_logs` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`actor_type` enum('user','agent','device','system') NOT NULL,
+	`actor_id` char(26),
+	`actor_label` varchar(191),
+	`action` varchar(128) NOT NULL,
+	`resource_type` varchar(64) NOT NULL,
+	`resource_id` varchar(191),
+	`project_id` char(26),
+	`result` enum('success','denied','failure') NOT NULL DEFAULT 'success',
+	`reason` varchar(512),
+	`request_id` varchar(64),
+	`ip` varchar(45),
+	`user_agent` varchar(512),
+	`metadata` json,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	CONSTRAINT `audit_logs_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `data_export_jobs` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`requested_by_user_id` char(26),
+	`scope` enum('organization','project','conversation','user') NOT NULL,
+	`scope_id` char(26),
+	`format` enum('json','zip') NOT NULL DEFAULT 'json',
+	`status` enum('pending','scheduled','running','completed','failed','cancelled') NOT NULL DEFAULT 'pending',
+	`storage_key` varchar(512),
+	`size_bytes` bigint unsigned,
+	`download_expires_at` datetime(3),
+	`error_message` text,
+	`started_at` datetime(3),
+	`completed_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `data_export_jobs_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `deletion_jobs` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`requested_by_user_id` char(26),
+	`target_type` enum('organization','project','conversation','user','knowledge_item') NOT NULL,
+	`target_id` char(26) NOT NULL,
+	`status` enum('pending','scheduled','running','completed','failed','cancelled') NOT NULL DEFAULT 'pending',
+	`scheduled_for` datetime(3) NOT NULL,
+	`reason` varchar(512),
+	`error_message` text,
+	`started_at` datetime(3),
+	`completed_at` datetime(3),
+	`cancelled_at` datetime(3),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	`version` int NOT NULL DEFAULT 1,
+	CONSTRAINT `deletion_jobs_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `security_events` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26),
+	`user_id` char(26),
+	`type` varchar(96) NOT NULL,
+	`severity` enum('low','medium','high','critical') NOT NULL DEFAULT 'low',
+	`ip` varchar(45),
+	`user_agent` varchar(512),
+	`details` json,
+	`occurred_at` datetime(3) NOT NULL,
+	`resolved_at` datetime(3),
+	`resolved_by_user_id` char(26),
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	CONSTRAINT `security_events_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `outbox_messages` (
+	`id` char(26) NOT NULL,
+	`organization_id` char(26) NOT NULL,
+	`project_id` char(26),
+	`aggregate_type` varchar(64) NOT NULL,
+	`aggregate_id` char(26) NOT NULL,
+	`aggregate_sequence` bigint unsigned,
+	`event_type` varchar(96) NOT NULL,
+	`event_version` int NOT NULL DEFAULT 1,
+	`payload` json NOT NULL,
+	`dedupe_key` varchar(191),
+	`occurred_at` datetime(3) NOT NULL,
+	`available_at` datetime(3) NOT NULL,
+	`published_at` datetime(3),
+	`attempts` int NOT NULL DEFAULT 0,
+	`last_error` text,
+	`created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	CONSTRAINT `outbox_messages_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_outbox_dedupe_key` UNIQUE(`dedupe_key`)
+);
+--> statement-breakpoint
+ALTER TABLE `device_tokens` ADD CONSTRAINT `device_tokens_device_id_devices_id_fk` FOREIGN KEY (`device_id`) REFERENCES `devices`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `device_tokens` ADD CONSTRAINT `device_tokens_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `devices` ADD CONSTRAINT `devices_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `refresh_tokens` ADD CONSTRAINT `refresh_tokens_session_id_user_sessions_id_fk` FOREIGN KEY (`session_id`) REFERENCES `user_sessions`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `refresh_tokens` ADD CONSTRAINT `refresh_tokens_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `user_identities` ADD CONSTRAINT `user_identities_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `user_sessions` ADD CONSTRAINT `user_sessions_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `user_sessions` ADD CONSTRAINT `user_sessions_device_id_devices_id_fk` FOREIGN KEY (`device_id`) REFERENCES `devices`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `invitations` ADD CONSTRAINT `invitations_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `invitations` ADD CONSTRAINT `invitations_role_id_roles_id_fk` FOREIGN KEY (`role_id`) REFERENCES `roles`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `invitations` ADD CONSTRAINT `invitations_invited_by_users_id_fk` FOREIGN KEY (`invited_by`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `invitations` ADD CONSTRAINT `invitations_accepted_by_user_id_users_id_fk` FOREIGN KEY (`accepted_by_user_id`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `organization_members` ADD CONSTRAINT `organization_members_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `organization_members` ADD CONSTRAINT `organization_members_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `organization_members` ADD CONSTRAINT `organization_members_role_id_roles_id_fk` FOREIGN KEY (`role_id`) REFERENCES `roles`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `organization_members` ADD CONSTRAINT `organization_members_invited_by_users_id_fk` FOREIGN KEY (`invited_by`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `organizations` ADD CONSTRAINT `organizations_plan_id_plans_id_fk` FOREIGN KEY (`plan_id`) REFERENCES `plans`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `organizations` ADD CONSTRAINT `organizations_owner_user_id_users_id_fk` FOREIGN KEY (`owner_user_id`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `role_permissions` ADD CONSTRAINT `role_permissions_role_id_roles_id_fk` FOREIGN KEY (`role_id`) REFERENCES `roles`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `roles` ADD CONSTRAINT `roles_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `git_connections` ADD CONSTRAINT `git_connections_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `git_repositories` ADD CONSTRAINT `git_repositories_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `git_repositories` ADD CONSTRAINT `git_repositories_git_connection_id_git_connections_id_fk` FOREIGN KEY (`git_connection_id`) REFERENCES `git_connections`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `mcp_registry_entries` ADD CONSTRAINT `mcp_registry_entries_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `webhook_deliveries` ADD CONSTRAINT `webhook_deliveries_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `webhook_deliveries` ADD CONSTRAINT `webhook_deliveries_git_connection_id_git_connections_id_fk` FOREIGN KEY (`git_connection_id`) REFERENCES `git_connections`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `webhook_deliveries` ADD CONSTRAINT `webhook_deliveries_git_repository_id_git_repositories_id_fk` FOREIGN KEY (`git_repository_id`) REFERENCES `git_repositories`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `agent_profiles` ADD CONSTRAINT `agent_profiles_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `project_agent_profiles` ADD CONSTRAINT `project_agent_profiles_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `project_agent_profiles` ADD CONSTRAINT `project_agent_profiles_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `project_agent_profiles` ADD CONSTRAINT `project_agent_profiles_agent_profile_id_agent_profiles_id_fk` FOREIGN KEY (`agent_profile_id`) REFERENCES `agent_profiles`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `project_members` ADD CONSTRAINT `project_members_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `project_members` ADD CONSTRAINT `project_members_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `project_members` ADD CONSTRAINT `project_members_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `project_members` ADD CONSTRAINT `project_members_role_id_roles_id_fk` FOREIGN KEY (`role_id`) REFERENCES `roles`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `project_members` ADD CONSTRAINT `project_members_added_by_users_id_fk` FOREIGN KEY (`added_by`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `project_repositories` ADD CONSTRAINT `project_repositories_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `project_repositories` ADD CONSTRAINT `project_repositories_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `project_repositories` ADD CONSTRAINT `project_repositories_git_repository_id_git_repositories_id_fk` FOREIGN KEY (`git_repository_id`) REFERENCES `git_repositories`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `project_settings` ADD CONSTRAINT `project_settings_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `project_settings` ADD CONSTRAINT `project_settings_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `projects` ADD CONSTRAINT `projects_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `conversation_participants` ADD CONSTRAINT `conversation_participants_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `conversation_participants` ADD CONSTRAINT `conversation_participants_conversation_id_conversations_id_fk` FOREIGN KEY (`conversation_id`) REFERENCES `conversations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `conversation_summaries` ADD CONSTRAINT `conversation_summaries_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `conversation_summaries` ADD CONSTRAINT `conversation_summaries_conversation_id_conversations_id_fk` FOREIGN KEY (`conversation_id`) REFERENCES `conversations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `conversations` ADD CONSTRAINT `conversations_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `conversations` ADD CONSTRAINT `conversations_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `message_attachments` ADD CONSTRAINT `message_attachments_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `message_attachments` ADD CONSTRAINT `message_attachments_message_id_messages_id_fk` FOREIGN KEY (`message_id`) REFERENCES `messages`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `message_context_refs` ADD CONSTRAINT `message_context_refs_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `message_context_refs` ADD CONSTRAINT `message_context_refs_message_id_messages_id_fk` FOREIGN KEY (`message_id`) REFERENCES `messages`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `message_parts` ADD CONSTRAINT `message_parts_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `message_parts` ADD CONSTRAINT `message_parts_message_id_messages_id_fk` FOREIGN KEY (`message_id`) REFERENCES `messages`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `messages` ADD CONSTRAINT `messages_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `messages` ADD CONSTRAINT `messages_conversation_id_conversations_id_fk` FOREIGN KEY (`conversation_id`) REFERENCES `conversations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `messages` ADD CONSTRAINT `messages_author_user_id_users_id_fk` FOREIGN KEY (`author_user_id`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `agent_run_events` ADD CONSTRAINT `agent_run_events_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `agent_run_events` ADD CONSTRAINT `agent_run_events_agent_run_id_agent_runs_id_fk` FOREIGN KEY (`agent_run_id`) REFERENCES `agent_runs`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `agent_runs` ADD CONSTRAINT `agent_runs_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `agent_runs` ADD CONSTRAINT `agent_runs_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `agent_runs` ADD CONSTRAINT `agent_runs_task_id_tasks_id_fk` FOREIGN KEY (`task_id`) REFERENCES `tasks`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `agent_runs` ADD CONSTRAINT `agent_runs_conversation_id_conversations_id_fk` FOREIGN KEY (`conversation_id`) REFERENCES `conversations`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `agent_runs` ADD CONSTRAINT `agent_runs_agent_profile_id_agent_profiles_id_fk` FOREIGN KEY (`agent_profile_id`) REFERENCES `agent_profiles`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `agent_runs` ADD CONSTRAINT `agent_runs_device_id_devices_id_fk` FOREIGN KEY (`device_id`) REFERENCES `devices`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `approvals` ADD CONSTRAINT `approvals_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `approvals` ADD CONSTRAINT `approvals_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `approvals` ADD CONSTRAINT `approvals_task_id_tasks_id_fk` FOREIGN KEY (`task_id`) REFERENCES `tasks`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `approvals` ADD CONSTRAINT `approvals_agent_run_id_agent_runs_id_fk` FOREIGN KEY (`agent_run_id`) REFERENCES `agent_runs`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `approvals` ADD CONSTRAINT `approvals_conversation_id_conversations_id_fk` FOREIGN KEY (`conversation_id`) REFERENCES `conversations`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `approvals` ADD CONSTRAINT `approvals_decided_by_user_id_users_id_fk` FOREIGN KEY (`decided_by_user_id`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `artifacts` ADD CONSTRAINT `artifacts_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `artifacts` ADD CONSTRAINT `artifacts_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `artifacts` ADD CONSTRAINT `artifacts_task_id_tasks_id_fk` FOREIGN KEY (`task_id`) REFERENCES `tasks`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `artifacts` ADD CONSTRAINT `artifacts_agent_run_id_agent_runs_id_fk` FOREIGN KEY (`agent_run_id`) REFERENCES `agent_runs`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `reviews` ADD CONSTRAINT `reviews_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `reviews` ADD CONSTRAINT `reviews_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `reviews` ADD CONSTRAINT `reviews_task_id_tasks_id_fk` FOREIGN KEY (`task_id`) REFERENCES `tasks`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `reviews` ADD CONSTRAINT `reviews_agent_run_id_agent_runs_id_fk` FOREIGN KEY (`agent_run_id`) REFERENCES `agent_runs`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `reviews` ADD CONSTRAINT `reviews_reviewer_user_id_users_id_fk` FOREIGN KEY (`reviewer_user_id`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `task_assignments` ADD CONSTRAINT `task_assignments_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `task_assignments` ADD CONSTRAINT `task_assignments_task_id_tasks_id_fk` FOREIGN KEY (`task_id`) REFERENCES `tasks`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `task_assignments` ADD CONSTRAINT `task_assignments_assigned_by_users_id_fk` FOREIGN KEY (`assigned_by`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `task_dependencies` ADD CONSTRAINT `task_dependencies_task_id_tasks_id_fk` FOREIGN KEY (`task_id`) REFERENCES `tasks`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `task_dependencies` ADD CONSTRAINT `task_dependencies_depends_on_task_id_tasks_id_fk` FOREIGN KEY (`depends_on_task_id`) REFERENCES `tasks`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `tasks` ADD CONSTRAINT `tasks_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `tasks` ADD CONSTRAINT `tasks_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `tasks` ADD CONSTRAINT `tasks_conversation_id_conversations_id_fk` FOREIGN KEY (`conversation_id`) REFERENCES `conversations`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `tasks` ADD CONSTRAINT `tasks_claimed_by_device_id_devices_id_fk` FOREIGN KEY (`claimed_by_device_id`) REFERENCES `devices`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `tasks` ADD CONSTRAINT `tasks_claimed_by_user_id_users_id_fk` FOREIGN KEY (`claimed_by_user_id`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_items` ADD CONSTRAINT `knowledge_items_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_items` ADD CONSTRAINT `knowledge_items_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_relations` ADD CONSTRAINT `knowledge_relations_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_relations` ADD CONSTRAINT `knowledge_relations_from_item_id_knowledge_items_id_fk` FOREIGN KEY (`from_item_id`) REFERENCES `knowledge_items`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_relations` ADD CONSTRAINT `knowledge_relations_to_item_id_knowledge_items_id_fk` FOREIGN KEY (`to_item_id`) REFERENCES `knowledge_items`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_reviews` ADD CONSTRAINT `knowledge_reviews_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_reviews` ADD CONSTRAINT `knowledge_reviews_knowledge_item_id_knowledge_items_id_fk` FOREIGN KEY (`knowledge_item_id`) REFERENCES `knowledge_items`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_reviews` ADD CONSTRAINT `knowledge_reviews_knowledge_version_id_knowledge_versions_id_fk` FOREIGN KEY (`knowledge_version_id`) REFERENCES `knowledge_versions`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_reviews` ADD CONSTRAINT `knowledge_reviews_reviewer_user_id_users_id_fk` FOREIGN KEY (`reviewer_user_id`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_sources` ADD CONSTRAINT `knowledge_sources_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_sources` ADD CONSTRAINT `knowledge_sources_knowledge_item_id_knowledge_items_id_fk` FOREIGN KEY (`knowledge_item_id`) REFERENCES `knowledge_items`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_sources` ADD CONSTRAINT `knowledge_sources_knowledge_version_id_knowledge_versions_id_fk` FOREIGN KEY (`knowledge_version_id`) REFERENCES `knowledge_versions`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_versions` ADD CONSTRAINT `knowledge_versions_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `knowledge_versions` ADD CONSTRAINT `knowledge_versions_knowledge_item_id_knowledge_items_id_fk` FOREIGN KEY (`knowledge_item_id`) REFERENCES `knowledge_items`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `sync_checkpoints` ADD CONSTRAINT `sync_checkpoints_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `audit_logs` ADD CONSTRAINT `audit_logs_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `data_export_jobs` ADD CONSTRAINT `data_export_jobs_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `data_export_jobs` ADD CONSTRAINT `data_export_jobs_requested_by_user_id_users_id_fk` FOREIGN KEY (`requested_by_user_id`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `deletion_jobs` ADD CONSTRAINT `deletion_jobs_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `deletion_jobs` ADD CONSTRAINT `deletion_jobs_requested_by_user_id_users_id_fk` FOREIGN KEY (`requested_by_user_id`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `security_events` ADD CONSTRAINT `security_events_organization_id_organizations_id_fk` FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `security_events` ADD CONSTRAINT `security_events_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX `idx_device_tokens_device_type` ON `device_tokens` (`device_id`,`type`,`expires_at`);--> statement-breakpoint
+CREATE INDEX `idx_devices_user_status` ON `devices` (`user_id`,`status`,`last_seen_at`);--> statement-breakpoint
+CREATE INDEX `idx_refresh_tokens_session` ON `refresh_tokens` (`session_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_refresh_tokens_user_created_at` ON `refresh_tokens` (`user_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_user_identities_user` ON `user_identities` (`user_id`,`provider`);--> statement-breakpoint
+CREATE INDEX `idx_user_sessions_user_created_at` ON `user_sessions` (`user_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_user_sessions_expires_at` ON `user_sessions` (`expires_at`);--> statement-breakpoint
+CREATE INDEX `idx_users_status_created_at` ON `users` (`status`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_invitations_org_created_at` ON `invitations` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_invitations_email_status` ON `invitations` (`email`,`status`);--> statement-breakpoint
+CREATE INDEX `idx_organization_members_org_created_at` ON `organization_members` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_organization_members_user` ON `organization_members` (`user_id`,`status`);--> statement-breakpoint
+CREATE INDEX `idx_organizations_created_at` ON `organizations` (`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_organizations_status_updated_at` ON `organizations` (`status`,`updated_at`);--> statement-breakpoint
+CREATE INDEX `idx_plans_active` ON `plans` (`is_active`);--> statement-breakpoint
+CREATE INDEX `idx_git_connections_org_created_at` ON `git_connections` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_git_repositories_org_created_at` ON `git_repositories` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_git_repositories_full_name` ON `git_repositories` (`full_name`);--> statement-breakpoint
+CREATE INDEX `idx_mcp_registry_entries_project` ON `mcp_registry_entries` (`project_id`,`status`);--> statement-breakpoint
+CREATE INDEX `idx_webhook_deliveries_org_created_at` ON `webhook_deliveries` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_webhook_deliveries_status_received` ON `webhook_deliveries` (`status`,`received_at`);--> statement-breakpoint
+CREATE INDEX `idx_agent_profiles_org_created_at` ON `agent_profiles` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_project_agent_profiles_org` ON `project_agent_profiles` (`organization_id`,`is_enabled`);--> statement-breakpoint
+CREATE INDEX `idx_project_members_org_created_at` ON `project_members` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_project_members_user` ON `project_members` (`user_id`,`status`);--> statement-breakpoint
+CREATE INDEX `idx_project_repositories_org_created_at` ON `project_repositories` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_projects_org_created_at` ON `projects` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_projects_org_status_updated_at` ON `projects` (`organization_id`,`status`,`updated_at`);--> statement-breakpoint
+CREATE INDEX `idx_conversation_participants_participant` ON `conversation_participants` (`participant_id`,`participant_type`);--> statement-breakpoint
+CREATE INDEX `idx_conversation_summaries_conversation` ON `conversation_summaries` (`conversation_id`,`layer`,`to_sequence`);--> statement-breakpoint
+CREATE INDEX `idx_conversation_summaries_org_created_at` ON `conversation_summaries` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_conversations_org_created_at` ON `conversations` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_conversations_project_status_updated_at` ON `conversations` (`project_id`,`status`,`updated_at`);--> statement-breakpoint
+CREATE INDEX `idx_conversations_project_last_message` ON `conversations` (`project_id`,`last_message_at`);--> statement-breakpoint
+CREATE INDEX `idx_message_attachments_message` ON `message_attachments` (`message_id`);--> statement-breakpoint
+CREATE INDEX `idx_message_attachments_org_created_at` ON `message_attachments` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_message_context_refs_message` ON `message_context_refs` (`message_id`,`ref_type`);--> statement-breakpoint
+CREATE INDEX `idx_message_context_refs_org_created_at` ON `message_context_refs` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_message_parts_org_created_at` ON `message_parts` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_messages_org_created_at` ON `messages` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_messages_conversation_created_at` ON `messages` (`conversation_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_messages_author_user` ON `messages` (`author_user_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_agent_run_events_run_occurred_at` ON `agent_run_events` (`agent_run_id`,`occurred_at`);--> statement-breakpoint
+CREATE INDEX `idx_agent_run_events_org_created_at` ON `agent_run_events` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_agent_runs_project_status_updated_at` ON `agent_runs` (`project_id`,`status`,`updated_at`);--> statement-breakpoint
+CREATE INDEX `idx_agent_runs_org_created_at` ON `agent_runs` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_agent_runs_task_created_at` ON `agent_runs` (`task_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_agent_runs_heartbeat` ON `agent_runs` (`status`,`heartbeat_at`);--> statement-breakpoint
+CREATE INDEX `idx_approvals_org_status_created_at` ON `approvals` (`organization_id`,`status`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_approvals_task_created_at` ON `approvals` (`task_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_approvals_run` ON `approvals` (`agent_run_id`,`status`);--> statement-breakpoint
+CREATE INDEX `idx_artifacts_task_created_at` ON `artifacts` (`task_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_artifacts_run_created_at` ON `artifacts` (`agent_run_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_artifacts_org_created_at` ON `artifacts` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_reviews_task_created_at` ON `reviews` (`task_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_reviews_project_status_updated_at` ON `reviews` (`project_id`,`status`,`updated_at`);--> statement-breakpoint
+CREATE INDEX `idx_reviews_org_created_at` ON `reviews` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_task_assignments_task_created_at` ON `task_assignments` (`task_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_task_assignments_assignee` ON `task_assignments` (`assignee_type`,`assignee_id`,`status`);--> statement-breakpoint
+CREATE INDEX `idx_task_assignments_org_created_at` ON `task_assignments` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_task_dependencies_depends_on` ON `task_dependencies` (`depends_on_task_id`);--> statement-breakpoint
+CREATE INDEX `idx_tasks_project_status_updated_at` ON `tasks` (`project_id`,`status`,`updated_at`);--> statement-breakpoint
+CREATE INDEX `idx_tasks_org_created_at` ON `tasks` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_tasks_parent` ON `tasks` (`parent_task_id`);--> statement-breakpoint
+CREATE INDEX `idx_knowledge_items_org_created_at` ON `knowledge_items` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_knowledge_items_project_status_updated` ON `knowledge_items` (`project_id`,`status`,`updated_at`);--> statement-breakpoint
+CREATE INDEX `idx_knowledge_relations_to` ON `knowledge_relations` (`to_item_id`,`relation_type`);--> statement-breakpoint
+CREATE INDEX `idx_knowledge_reviews_item_created_at` ON `knowledge_reviews` (`knowledge_item_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_knowledge_reviews_org_created_at` ON `knowledge_reviews` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_knowledge_sources_item` ON `knowledge_sources` (`knowledge_item_id`,`source_type`);--> statement-breakpoint
+CREATE INDEX `idx_knowledge_sources_org_created_at` ON `knowledge_sources` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_knowledge_versions_org_created_at` ON `knowledge_versions` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_sync_checkpoints_org_updated_at` ON `sync_checkpoints` (`organization_id`,`updated_at`);--> statement-breakpoint
+CREATE INDEX `idx_audit_logs_org_actor_created_at` ON `audit_logs` (`organization_id`,`actor_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_audit_logs_org_created_at` ON `audit_logs` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_audit_logs_resource` ON `audit_logs` (`resource_type`,`resource_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_audit_logs_org_action_created_at` ON `audit_logs` (`organization_id`,`action`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_data_export_jobs_org_created_at` ON `data_export_jobs` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_data_export_jobs_status` ON `data_export_jobs` (`status`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_deletion_jobs_org_created_at` ON `deletion_jobs` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_deletion_jobs_status_scheduled` ON `deletion_jobs` (`status`,`scheduled_for`);--> statement-breakpoint
+CREATE INDEX `idx_deletion_jobs_target` ON `deletion_jobs` (`target_type`,`target_id`);--> statement-breakpoint
+CREATE INDEX `idx_security_events_org_created_at` ON `security_events` (`organization_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_security_events_type_created_at` ON `security_events` (`type`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_security_events_user_created_at` ON `security_events` (`user_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_outbox_unpublished` ON `outbox_messages` (`published_at`,`available_at`,`id`);--> statement-breakpoint
+CREATE INDEX `idx_outbox_aggregate` ON `outbox_messages` (`aggregate_type`,`aggregate_id`,`id`);--> statement-breakpoint
+CREATE INDEX `idx_outbox_org_created_at` ON `outbox_messages` (`organization_id`,`created_at`);
