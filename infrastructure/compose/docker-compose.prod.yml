@@ -113,7 +113,9 @@ services:
     environment:
       DATABASE_HOST: mysql
       VALKEY_URL: redis://:${VALKEY_PASSWORD}@redis:6379
-      SMTP_HOST: mailserver
+      # O nome precisa ser o do certificado, senão o TLS recusa por divergência
+      # de host. O alias de rede do mailserver faz este nome resolver aqui dentro.
+      SMTP_HOST: ${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}
       SMTP_PORT: '587'
       # Confia na CA que assinou o certificado interno do servidor de e-mail, em
       # vez de desligar a verificação de TLS.
@@ -159,7 +161,9 @@ services:
     environment:
       DATABASE_HOST: mysql
       VALKEY_URL: redis://:${VALKEY_PASSWORD}@redis:6379
-      SMTP_HOST: mailserver
+      # O nome precisa ser o do certificado, senão o TLS recusa por divergência
+      # de host. O alias de rede do mailserver faz este nome resolver aqui dentro.
+      SMTP_HOST: ${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}
       SMTP_PORT: '587'
       # Confia na CA que assinou o certificado interno do servidor de e-mail, em
       # vez de desligar a verificação de TLS.
@@ -254,7 +258,12 @@ services:
       - ${MAIL_CERT_DIR:-/opt/prometheon/certs}/:/etc/letsencrypt/live/${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}/:ro
     cap_add:
       - NET_ADMIN
-    networks: [internal]
+    networks:
+      internal:
+        # O certificado é emitido para o nome público. Sem este alias, a API
+        # teria de conectar em `mailserver` e o TLS falharia por divergência —
+        # e desligar a verificação para contornar seria pior que o problema.
+        aliases: [${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}]
 
 volumes:
   mysql-data:
