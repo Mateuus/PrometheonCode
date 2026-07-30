@@ -27,6 +27,8 @@ import {
   refreshResponseSchema,
   registerRequestSchema,
   successEnvelope,
+  switchOrganizationRequestSchema,
+  switchOrganizationResponseSchema,
   verifyEmailRequestSchema,
 } from '@prometheon/contracts';
 import { z } from 'zod';
@@ -43,6 +45,7 @@ export {
   passwordResetRequestSchema,
   refreshRequestSchema,
   registerRequestSchema,
+  switchOrganizationRequestSchema,
   verifyEmailRequestSchema,
 };
 
@@ -67,6 +70,9 @@ export const registerEnvelope = successEnvelope(registerAcceptedSchema);
 export const loginEnvelope = successEnvelope(loginResponseSchema);
 export const refreshEnvelope = successEnvelope(refreshResponseSchema);
 export const meEnvelope = successEnvelope(meResponseSchema);
+export const switchOrganizationEnvelope = successEnvelope(
+  switchOrganizationResponseSchema,
+);
 export const emptyEnvelope = successEnvelope(z.object({}));
 
 export const verifyEmailResponseSchema = z.object({

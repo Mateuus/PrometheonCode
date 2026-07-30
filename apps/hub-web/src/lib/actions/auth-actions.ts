@@ -1,6 +1,7 @@
 'use server';
 
 import { redirect } from 'next/navigation';
+import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { MIN_PASSWORD_LENGTH } from '@prometheon/contracts';
 import { hubRequestWithCookies } from '@/lib/api/client';
@@ -8,9 +9,18 @@ import {
   emptyResultSchema,
   loginResultSchema,
   registerAcceptedSchema,
+  switchOrganizationResultSchema,
   verifyEmailResultSchema,
 } from '@/lib/api/schemas';
-import { buildSession, clearSession, readSession, revokeSession, writeSession } from '@/lib/auth/session';
+import {
+  accessToken,
+  buildSession,
+  clearSession,
+  readSession,
+  revokeSession,
+  writeSession,
+} from '@/lib/auth/session';
+import { API_CSRF_COOKIE, API_REFRESH_COOKIE } from '@/lib/auth/session-codec';
 import { safeRedirect } from '@/lib/auth/safe-redirect';
 import { formError, formSuccess, type FormState } from './form-state';
 
@@ -239,6 +249,76 @@ export async function resetPasswordAction(
   // A API invalida as sessões ao trocar a senha; o cookie local acompanha.
   await clearSession();
   redirect('/login?reset=1');
+}
+
+// ------------------------------------------------- organização ativa da sessão
+
+/**
+ * Troca a organização ativa.
+ *
+ * A API **encerra a sessão anterior e abre outra** — o claim `org` vive dentro
+ * de um JWT assinado e não há como reescrevê-lo. Por isso o cookie é regravado
+ * por inteiro: manter o refresh antigo aqui guardaria um token que a API acabou
+ * de revogar, e a próxima renovação derrubaria o usuário para o login.
+ *
+ * Quem decide se a troca vale é a API, contra a associação no banco. Esta action
+ * só carrega o pedido e guarda o resultado.
+ */
+export async function switchOrganizationAction(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const organizationId = text(formData, 'organizationId');
+  if (!organizationId) {
+    return formError('auth.error.generic');
+  }
+
+  // `accessToken()` renova antes de gastar a chamada, e a sessão é relida logo
+  // depois para que os cookies de refresh acompanhem o token já renovado.
+  const token = await accessToken();
+  const session = await readSession();
+  if (!token || !session) {
+    redirect('/login');
+  }
+
+  const { result, cookies } = await hubRequestWithCookies(
+    '/v1/auth/switch-organization',
+    switchOrganizationResultSchema,
+    {
+      method: 'POST',
+      body: { organizationId },
+      accessToken: token,
+      browserOrigin: true,
+      apiCookies: {
+        [API_REFRESH_COOKIE]: session.refreshToken,
+        [API_CSRF_COOKIE]: session.csrfToken,
+      },
+      csrfToken: session.csrfToken,
+    },
+  );
+
+  if (!result.ok) {
+    if (result.kind === 'offline') {
+      return formError('auth.error.offline');
+    }
+    if (result.code === 'EMAIL_NOT_VERIFIED') {
+      return formError('auth.verify.requiredToWrite');
+    }
+    return formError(
+      result.code === 'ORGANIZATION_ACCESS_DENIED'
+        ? 'organizations.switchDenied'
+        : 'auth.error.generic',
+    );
+  }
+
+  await writeSession(buildSession(result.data, cookies, session));
+
+  // O escopo da sessão mudou, então toda leitura em cache aponta para a
+  // organização anterior — inclusive a casca, que desenha o seletor.
+  revalidatePath('/', 'layout');
+
+  const next = text(formData, 'next');
+  redirect(safeRedirect(next ?? null));
 }
 
 // -------------------------------------------------------------------- logout

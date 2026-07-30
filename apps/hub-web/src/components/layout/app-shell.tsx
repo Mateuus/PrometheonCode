@@ -3,10 +3,12 @@ import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { getLocale, getTranslate } from '@/i18n/server';
 import { readSession, THEME_COOKIE } from '@/lib/auth/session';
+import { getViewer } from '@/lib/api/queries';
 import { Wordmark } from '@/components/brand/logo';
 import { ConnectionBanner, ConnectionIndicator } from '@/components/states/connection';
 import { ThemeToggle } from './theme-toggle';
 import { LocaleSelect } from './locale-select';
+import { OrganizationSwitcher } from './organization-switcher';
 import { UserMenu } from './user-menu';
 import { NavLink } from './nav-link';
 import type { ThemePreference } from '@/lib/actions/preference-actions';
@@ -32,12 +34,19 @@ export async function AppShell({
   navItems?: NavItem[];
   children: ReactNode;
 }) {
-  const [t, locale, session, cookieStore] = await Promise.all([
+  const [t, locale, session, cookieStore, viewer] = await Promise.all([
     getTranslate(),
     getLocale(),
     readSession(),
     cookies(),
+    getViewer(),
   ]);
+
+  // O seletor precisa da lista de organizações e de qual está ancorada na
+  // sessão — as duas vêm de `GET /v1/me`. Se a chamada falhar, o cabeçalho sai
+  // sem o seletor: uma casca que não desenha é melhor que uma casca que quebra.
+  const organizations = viewer.ok ? viewer.data.organizations : [];
+  const activeOrganizationId = viewer.ok ? viewer.data.activeOrganizationId : null;
 
   const themeCookie = cookieStore.get(THEME_COOKIE)?.value;
   const theme: ThemePreference =
@@ -69,6 +78,10 @@ export async function AppShell({
 
         <div className="flex-1" />
 
+        <OrganizationSwitcher
+          organizations={organizations}
+          activeOrganizationId={activeOrganizationId}
+        />
         <ConnectionIndicator />
         <ThemeToggle current={theme} />
         <LocaleSelect current={locale} />

@@ -8,6 +8,7 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { DataView } from '@/components/states/data-view';
 import { ForcedStateNotice } from '@/components/states/forced-state-notice';
 import { ChangePasswordForm, UpdateProfileForm } from '@/components/forms/account-forms';
+import { SwitchToOrganizationButton } from '@/components/layout/organization-switcher';
 import { getViewer } from '@/lib/api/queries';
 import { applyForcedState, devForcedState } from '@/lib/api/state-override';
 import { roleLabel } from '@/lib/roles';
@@ -93,7 +94,13 @@ export default async function AccountPage({
                       <StatusBadge tone="accent">{roleLabel(organization.role, t)}</StatusBadge>
                       {organization.id === data.activeOrganizationId ? (
                         <StatusBadge tone="activity">{t('account.activeOrganization')}</StatusBadge>
-                      ) : null}
+                      ) : (
+                        <SwitchToOrganizationButton
+                          organizationId={organization.id}
+                          next="/settings/account"
+                          label={t('organizations.switch')}
+                        />
+                      )}
                     </li>
                   ))}
                 </ul>

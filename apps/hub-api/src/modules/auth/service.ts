@@ -41,6 +41,7 @@ import {
   invalidCredentials,
   invitationExpired,
   invitationInvalid,
+  organizationAccessDenied,
   refreshTokenInvalid,
   resetTokenInvalid,
   sessionRevoked,
@@ -466,6 +467,110 @@ export class AuthService {
     await this.repository.revokeTokenFamily(sessionId, 'logout');
     await denySession(this.deps.redis, sessionId);
     logger.info({ userId: input.userId, sessionId }, 'session revoked');
+  }
+
+  /**
+   * Troca a organização ativa.
+   *
+   * DECISÃO DE PROJETO — por que uma sessão nova, e não um `UPDATE` na atual:
+   *
+   * O claim `org` mora dentro de um JWT assinado. Reescrevê-lo é impossível;
+   * emitir outro é fácil. Sobra decidir o que fazer com o token antigo, e as
+   * duas saídas não se equivalem:
+   *
+   * - **Mudar `user_sessions.organization_id` e emitir um access token novo**
+   *   deixaria a mesma sessão com dois tokens vivos apontando para organizações
+   *   diferentes por até quinze minutos. Quem trocou de A para B continuaria
+   *   agindo em A com a credencial anterior — e a auditoria de A registraria uma
+   *   sessão que o usuário acredita ter deixado.
+   * - **Abrir uma sessão nova e revogar a anterior** encerra o escopo antigo no
+   *   mesmo instante: `revokeTokenFamily()` mata o refresh, e `denySession()`
+   *   põe a sessão na denylist do Redis, que é o que alcança um access token
+   *   ainda dentro da validade (ver `plugins/auth.ts`). O token antigo não vale
+   *   para a organização nova porque carrega `org: A`, e não vale mais nem para
+   *   a antiga porque a sessão dele morreu.
+   *
+   * É por isso que a denylist participa: sem ela, "não vale mais" só começaria a
+   * valer quando o JWT expirasse sozinho.
+   *
+   * A rotação continua funcionando porque a sessão nova nasce pelo mesmo caminho
+   * do login — `issueSession()` grava a linha em `user_sessions` e emite o
+   * primeiro refresh da família. Não há estado especial de "sessão trocada".
+   *
+   * A ordem importa: emitir primeiro, revogar depois. Se a revogação falhar, o
+   * usuário fica com duas sessões válidas — incômodo e auditável. Na ordem
+   * inversa, uma falha na emissão o deixaria sem nenhuma.
+   */
+  async switchOrganization(input: {
+    userId: string;
+    /** Sessão em uso. Nulo quando quem chama é uma credencial de dispositivo. */
+    currentSessionId: string | null;
+    organizationId: string;
+    origin: RequestOrigin;
+  }): Promise<{ user: CurrentUserView; session: IssuedSession }> {
+    // A associação é verificada aqui, no servidor, contra o banco. O corpo da
+    // requisição só diz para onde o usuário quer ir; ele nunca diz que pode.
+    const membership = await this.repository.findMembership(
+      input.organizationId,
+      input.userId,
+    );
+
+    if (membership?.status !== 'active') {
+      // O identificador pedido vai em `details`, não na coluna: quem chama pode
+      // ter mandado um ULID que não corresponde a organização nenhuma, e
+      // `security_events.organization_id` tem chave estrangeira — gravá-lo ali
+      // transformaria uma recusa correta em erro do servidor.
+      await this.repository.recordSecurityEvent({
+        type: 'organization_switch_denied',
+        severity: 'medium',
+        userId: input.userId,
+        ip: input.origin.ip,
+        userAgent: input.origin.userAgent,
+        details: {
+          requestedOrganizationId: input.organizationId,
+          membershipStatus: membership?.status ?? 'none',
+        },
+      });
+
+      throw organizationAccessDenied();
+    }
+
+    const user = await this.repository.findUserById(input.userId);
+
+    if (user === undefined) {
+      throw sessionRevoked();
+    }
+
+    // O dispositivo da sessão anterior acompanha a nova: continua sendo a mesma
+    // máquina, e perder o vínculo apagaria o dispositivo da lista de sessões.
+    const previous =
+      input.currentSessionId === null
+        ? undefined
+        : await this.repository.findSession(input.currentSessionId);
+
+    const session = await this.issueSession({
+      userId: input.userId,
+      organizationId: input.organizationId,
+      deviceId: previous?.deviceId ?? null,
+      origin: input.origin,
+    });
+
+    if (input.currentSessionId !== null) {
+      await this.repository.revokeTokenFamily(input.currentSessionId, 'organization_switch');
+      await denySession(this.deps.redis, input.currentSessionId);
+    }
+
+    logger.info(
+      {
+        userId: input.userId,
+        organizationId: input.organizationId,
+        sessionId: session.sessionId,
+        previousSessionId: input.currentSessionId,
+      },
+      'active organization switched',
+    );
+
+    return { user: toCurrentUser(user), session };
   }
 
   /** Cria a sessão e o primeiro par de tokens. */

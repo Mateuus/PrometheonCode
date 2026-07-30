@@ -1,6 +1,8 @@
 /** Schemas das rotas de organização. */
 
 import {
+  acceptInvitationRequestSchema,
+  acceptInvitationResponseSchema,
   createInvitationRequestSchema,
   createOrganizationRequestSchema,
   cursorPageQuerySchema,
@@ -18,6 +20,7 @@ import {
 import { z } from 'zod';
 
 export {
+  acceptInvitationRequestSchema,
   createInvitationRequestSchema,
   createOrganizationRequestSchema,
   cursorPageQuerySchema,
@@ -51,6 +54,12 @@ export const memberEnvelope = successEnvelope(organizationMemberSchema);
  * quem convida entrar na conta de quem foi convidado.
  */
 export const invitationEnvelope = successEnvelope(invitationSchema);
+
+/**
+ * Aceitação de convite: devolve a organização com o papel concedido e o vínculo
+ * criado, para o cliente já saber para onde navegar e o que pode fazer lá.
+ */
+export const acceptInvitationEnvelope = successEnvelope(acceptInvitationResponseSchema);
 
 export const organizationErrorResponses = {
   400: errorEnvelopeSchema,

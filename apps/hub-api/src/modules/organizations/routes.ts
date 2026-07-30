@@ -12,7 +12,13 @@
  * | `GET /organizations/:orgId`       | `chat.read`          | todos os papéis                |
  * | `GET .../members`                 | `chat.read`          | todos os papéis                |
  * | `POST .../invitations`            | `members.invite`     | owner e admin                  |
+ * | `POST /invitations/accept`        | (só autenticação)    | a conta convidada, verificada  |
  * | `PATCH .../members/:memberId`     | `organization.manage`| owner                          |
+ *
+ * `POST /invitations/accept` é a única que não pode passar por
+ * `requirePermission`: quem aceita ainda não é membro, e toda permissão exige
+ * associação ativa. O que autoriza ali é a posse do token somada à identidade da
+ * conta — ver o comentário da própria rota.
  *
  * `chat.read` nas duas leituras merece explicação: o `Docs/09` fixa quinze
  * permissões e nenhuma delas é "ler a organização". `chat.read` é a permissão
@@ -21,14 +27,19 @@
  * de virar um `if` solto.
  */
 
+import type { OrganizationRole } from '@prometheon/contracts';
 import type { FastifyPluginCallbackZod } from 'fastify-type-provider-zod';
 
-import { PAYLOAD_LIMITS } from '../../config/index.js';
+import { PAYLOAD_LIMITS, RATE_LIMITS } from '../../config/index.js';
+import { routeRateLimit } from '../../plugins/rate-limit.js';
 import { recordAudit, requestOrigin } from '../../shared/audit.js';
 import { ok } from '../../shared/envelope.js';
-import { unauthenticated } from '../../shared/errors.js';
+import { forbidden, unauthenticated } from '../../shared/errors.js';
+import { recordMemberJoined } from '../../shared/events.js';
 import { organizationNotFound } from './errors.js';
 import {
+  acceptInvitationEnvelope,
+  acceptInvitationRequestSchema,
   createInvitationRequestSchema,
   createOrganizationRequestSchema,
   cursorPageQuerySchema,
@@ -260,6 +271,91 @@ export const organizationRoutes: FastifyPluginCallbackZod<OrganizationRoutesOpti
           acceptedAt: null,
         }),
       );
+    },
+  );
+
+  /**
+   * Aceitar um convite estando autenticado.
+   *
+   * **Não passa por `requirePermission`, e não pode passar**: quem aceita ainda
+   * não é membro da organização — exigir uma permissão dentro dela recusaria
+   * todo mundo. O que autoriza aqui é a posse do token somada à identidade da
+   * conta, e as duas são conferidas no serviço (ver `acceptInvitation()`).
+   *
+   * A rota fica fora de `/organizations/:orgId` de propósito: quem tem o link
+   * não sabe — nem precisa saber — qual é o identificador da organização. É o
+   * convite que diz para onde a pessoa está entrando.
+   */
+  app.post(
+    '/invitations/accept',
+    {
+      bodyLimit: PAYLOAD_LIMITS.auth,
+      preHandler: app.authenticate,
+      config: routeRateLimit(RATE_LIMITS.invitationAccept),
+      schema: {
+        tags: ['organizations'],
+        summary: 'Accept an invitation with an existing account',
+        description:
+          'The invited address must match the signed-in account, and that address must be confirmed.',
+        security: [{ bearerAuth: [] }],
+        body: acceptInvitationRequestSchema,
+        response: { 200: acceptInvitationEnvelope, ...organizationErrorResponses },
+      },
+    },
+    async (request) => {
+      const auth = request.auth;
+
+      if (auth === undefined) {
+        throw unauthenticated();
+      }
+
+      // Ver a decisão 2 em `OrganizationService.acceptInvitation()`: sem o
+      // endereço confirmado, cadastrar-se com o e-mail alheio bastaria para
+      // consumir o convite dele.
+      if (!auth.emailVerified) {
+        throw forbidden(
+          'Confirm your email address before accepting an invitation.',
+          'EMAIL_NOT_VERIFIED',
+        );
+      }
+
+      const result = await service.acceptInvitation({
+        token: request.body.token,
+        userId: auth.userId,
+        userEmail: auth.email,
+        onAccepted: async (tx, accepted) => {
+          await recordMemberJoined(tx, {
+            organizationId: accepted.organizationId,
+            projectId: null,
+            memberId: accepted.memberId,
+            userId: auth.userId,
+            role: accepted.roleSlug as OrganizationRole,
+            invitationId: accepted.invitationId,
+          });
+        },
+      });
+
+      const origin = requestOrigin(request);
+
+      // A associação entra na auditoria da organização de destino: é lá que ela
+      // significa alguma coisa, e é lá que `audit.read` a alcança. `created`
+      // separa quem de fato entrou de quem repetiu a chamada.
+      await recordAudit(app.db, {
+        organizationId: result.organization.id,
+        actorType: 'user',
+        actorId: auth.userId,
+        actorLabel: auth.email,
+        action: 'invitation.accepted',
+        resourceType: 'member',
+        resourceId: result.member.id,
+        requestId: request.id,
+        ip: origin.ip,
+        userAgent: origin.userAgent,
+        // O token do convite nunca entra em auditoria; o papel concedido, sim.
+        metadata: { role: result.member.role, created: result.created },
+      });
+
+      return ok(request, { organization: result.organization, member: result.member });
     },
   );
 

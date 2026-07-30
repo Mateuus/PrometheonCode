@@ -61,6 +61,16 @@ export const ERROR_CODES = [
   'INVITATION_NOT_FOUND',
   'INVITATION_EXPIRED',
   'INVITATION_ALREADY_USED',
+  /** Convite cancelado por quem administra a organização. */
+  'INVITATION_REVOKED',
+  /**
+   * O convite foi endereçado a outro endereço.
+   *
+   * Código próprio, e não `PERMISSION_DENIED`, porque a ação do usuário é
+   * específica: entrar com a conta que recebeu o convite, ou pedir um convite
+   * para o endereço que ele usa. A mensagem nunca diz qual é o endereço alvo.
+   */
+  'INVITATION_EMAIL_MISMATCH',
 
   // Projeto e chat
   'PROJECT_NOT_FOUND',

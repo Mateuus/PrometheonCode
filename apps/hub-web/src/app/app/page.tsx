@@ -9,7 +9,8 @@ import { Badge, StatusBadge } from '@/components/ui/status-badge';
 import { Alert } from '@/components/ui/alert';
 import { DataView } from '@/components/states/data-view';
 import { ForcedStateNotice } from '@/components/states/forced-state-notice';
-import { listOrganizations } from '@/lib/api/queries';
+import { SwitchToOrganizationButton } from '@/components/layout/organization-switcher';
+import { getViewer, listOrganizations } from '@/lib/api/queries';
 import { applyForcedState, devForcedState } from '@/lib/api/state-override';
 import { readSession } from '@/lib/auth/session';
 import { roleLabel } from '@/lib/roles';
@@ -21,8 +22,18 @@ export default async function OrganizationsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const [t, query, session] = await Promise.all([getTranslate(), searchParams, readSession()]);
+  const [t, query, session, viewer] = await Promise.all([
+    getTranslate(),
+    searchParams,
+    readSession(),
+    getViewer(),
+  ]);
   const forced = devForcedState(query);
+  // A sessão fica ancorada numa organização por vez, e é ela que responde as
+  // rotas sem `:orgId`. O cartão da organização ancorada diz isso; os outros
+  // oferecem a troca, em vez de deixar o usuário descobrir o descompasso lá
+  // dentro.
+  const activeOrganizationId = viewer.ok ? viewer.data.activeOrganizationId : null;
   const organizations = await applyForcedState(forced, await listOrganizations(), []);
   const justVerified = (Array.isArray(query.verified) ? query.verified[0] : query.verified) === '1';
 
@@ -69,9 +80,22 @@ export default async function OrganizationsPage({
                         </Link>
                       </CardTitle>
                     </CardHeader>
-                    <CardContent className="flex flex-wrap gap-2">
-                      <Badge>{organization.planCode}</Badge>
-                      <Badge>{organization.slug}</Badge>
+                    <CardContent className="space-y-3">
+                      <div className="flex flex-wrap gap-2">
+                        <Badge>{organization.planCode}</Badge>
+                        <Badge>{organization.slug}</Badge>
+                      </div>
+                      {organization.id === activeOrganizationId ? (
+                        <StatusBadge tone="activity">
+                          {t('account.activeOrganization')}
+                        </StatusBadge>
+                      ) : (
+                        <SwitchToOrganizationButton
+                          organizationId={organization.id}
+                          next={`/app/${organization.slug}`}
+                          label={t('organizations.switchTo', { organization: organization.name })}
+                        />
+                      )}
                     </CardContent>
                   </Card>
                 </li>

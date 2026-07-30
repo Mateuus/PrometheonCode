@@ -29,11 +29,31 @@ test.describe('portaria e telas públicas', () => {
 
   test('o convite encaminha para o cadastro carregando o token', async ({ page }) => {
     await page.goto('/invite/token-de-teste-com-tamanho-suficiente');
-    const accept = page.getByRole('link', { name: /aceitar|accept|aceptar/i });
-    await expect(accept).toHaveAttribute(
-      'href',
-      /\/register\?invitation=token-de-teste-com-tamanho-suficiente/,
-    );
+    // Sem sessão a tela oferece dois caminhos; este é o do cadastro.
+    await expect(
+      page.locator('a[href*="/register?invitation=token-de-teste-com-tamanho-suficiente"]'),
+    ).toBeVisible();
+  });
+
+  test('o link do e-mail de convite abre a tela de aceite', async ({ page }) => {
+    // A Hub API monta `/invitations/accept?token=…`; esta rota precisa existir,
+    // ou todo convite por e-mail cai em 404.
+    await page.goto('/invitations/accept?token=token-de-teste-com-tamanho-suficiente');
+
+    // Sem sessão: entrar (preservando o destino) ou criar a conta com o convite.
+    await expect(
+      page.locator(
+        'a[href*="/login?next=%2Finvitations%2Faccept%3Ftoken%3Dtoken-de-teste-com-tamanho-suficiente"]',
+      ),
+    ).toBeVisible();
+    await expect(
+      page.locator('a[href*="/register?invitation=token-de-teste-com-tamanho-suficiente"]'),
+    ).toBeVisible();
+  });
+
+  test('o aceite sem token não inventa uma tela', async ({ page }) => {
+    const response = await page.goto('/invitations/accept');
+    expect(response?.status()).toBe(404);
   });
 
   test('a recuperação de senha sem token explica o que fazer', async ({ page }) => {
