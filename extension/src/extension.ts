@@ -10,6 +10,7 @@ import { CHAT_VIEW_ID, CHAT_VIEW_SECONDARY_ID } from './constants';
 import { PrometheonCore } from './core/PrometheonCore';
 import { EventBus } from './core/EventBus';
 import { DisabledHubClient } from './hub/DisabledHubClient';
+import { LiveHubClient } from './hub/LiveHubClient';
 import { Logger } from './logger';
 import { PermissionService } from './permissions/PermissionService';
 import { SpeechService } from './speech/SpeechService';
@@ -75,7 +76,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
   const registry = new AgentRegistry();
   registry.register(new MockAgentAdapter());
 
-  const hub = new DisabledHubClient();
+  // Com uma URL configurada, a extensão fala com o Hub de verdade; sem ela,
+  // continua estritamente local. A escolha é do usuário, e é explícita.
+  const configuredHubUrl = vscode.workspace
+    .getConfiguration('prometheon')
+    .get<string>('hub.url', '')
+    .trim();
+  const hub =
+    configuredHubUrl === '' ? new DisabledHubClient() : new LiveHubClient(secrets, logger, extensionVersion);
   const localChat = new LocalChatService(localState, registry, logger);
   const webChat = new WebChatService(hub);
 
