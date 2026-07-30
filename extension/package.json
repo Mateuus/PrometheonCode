@@ -201,7 +201,7 @@
     "lint": "eslint src",
     "icon": "node scripts/generate-icon.mjs",
     "test": "npm run compile-tests && npm run compile && vscode-test",
-    "vsix": "vsce package --no-dependencies --out ../dist/"
+    "vsix": "node -e \"require('node:fs').mkdirSync('../dist',{recursive:true})\" && vsce package --no-dependencies --out ../dist/"
   },
   "dependencies": {
     "yaml": "^2.8.1"
