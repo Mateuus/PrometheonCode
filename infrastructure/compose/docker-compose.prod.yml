@@ -77,13 +77,21 @@ services:
   # Roda uma vez e sai. A API só sobe depois que este serviço terminar com
   # sucesso — subir a API antes das migrations deixaria o Hub respondendo 500
   # em tudo enquanto alguém tenta entender o que houve.
+  #
+  # O seed vem junto, e não é opcional: ele cria os papéis, as permissões e o
+  # plano padrão. Sem plano, o primeiro cadastro falha com "No default plan is
+  # configured" — um 500 numa instalação recém-migrada, que parece defeito e é
+  # só um passo que faltou. Ele é idempotente e pode rodar a cada subida.
   migrate:
     build:
       context: ../..
       dockerfile: infrastructure/docker/Dockerfile
     image: prometheon-hub:latest
     restart: 'no'
-    command: ['node', 'packages/database/dist/migrate.js']
+    command:
+      - sh
+      - -c
+      - 'node packages/database/dist/migrate.js && node packages/database/dist/seed.js'
     env_file: [.env]
     environment:
       DATABASE_HOST: mysql
@@ -107,6 +115,20 @@ services:
       VALKEY_URL: redis://:${VALKEY_PASSWORD}@redis:6379
       SMTP_HOST: mailserver
       SMTP_PORT: '587'
+      # Confia na CA que assinou o certificado interno do servidor de e-mail, em
+      # vez de desligar a verificação de TLS.
+      #
+      # `NODE_TLS_REJECT_UNAUTHORIZED=0` resolveria numa linha e seria um
+      # desastre: valeria para **todas** as conexões do processo, e o Hub também
+      # fala com o GitHub e com o R2 — um proxy no meio do caminho passaria sem
+      # ninguém notar. Acrescentar uma CA específica mantém o resto verificado.
+      #
+      # Com um certificado público (Let's Encrypt), esta variável deixa de ser
+      # necessária; apontá-la para um arquivo ausente só gera um aviso.
+      NODE_EXTRA_CA_CERTS: /etc/ssl/prometheon/cacert.pem
+    volumes:
+      # Só a CA, somente leitura. A chave privada dela não entra aqui.
+      - ../mail/config/ssl/demoCA/cacert.pem:/etc/ssl/prometheon/cacert.pem:ro
     ports:
       # Ver `BIND_ADDRESS` no topo do arquivo.
       - '${BIND_ADDRESS:-127.0.0.1}:${HUB_API_PORT:-3551}:3551'
@@ -120,7 +142,9 @@ services:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:3551/v1/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        # `/health/ready` fica fora do prefixo `/v1`: ele descreve o processo,
+        # não a API versionada, e não deve mudar de lugar quando a v2 chegar.
+        - "fetch('http://127.0.0.1:3551/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 30s
       timeout: 10s
       retries: 3
@@ -137,6 +161,20 @@ services:
       VALKEY_URL: redis://:${VALKEY_PASSWORD}@redis:6379
       SMTP_HOST: mailserver
       SMTP_PORT: '587'
+      # Confia na CA que assinou o certificado interno do servidor de e-mail, em
+      # vez de desligar a verificação de TLS.
+      #
+      # `NODE_TLS_REJECT_UNAUTHORIZED=0` resolveria numa linha e seria um
+      # desastre: valeria para **todas** as conexões do processo, e o Hub também
+      # fala com o GitHub e com o R2 — um proxy no meio do caminho passaria sem
+      # ninguém notar. Acrescentar uma CA específica mantém o resto verificado.
+      #
+      # Com um certificado público (Let's Encrypt), esta variável deixa de ser
+      # necessária; apontá-la para um arquivo ausente só gera um aviso.
+      NODE_EXTRA_CA_CERTS: /etc/ssl/prometheon/cacert.pem
+    volumes:
+      # Só a CA, somente leitura. A chave privada dela não entra aqui.
+      - ../mail/config/ssl/demoCA/cacert.pem:/etc/ssl/prometheon/cacert.pem:ro
     # Sem `ports`: a porta de health do worker (3552) é alcançada de dentro da
     # rede, ou por `docker compose exec`. Ela não tem por que sair daqui.
     depends_on:
