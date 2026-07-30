@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { auditListQuerySchema, auditLogSchema } from './audit.js';
 import {
+  changePasswordRequestSchema,
   deviceAuthorizationRequestSchema,
   deviceAuthorizationResponseSchema,
   deviceCredentialSchema,
@@ -9,7 +10,9 @@ import {
   meResponseSchema,
   passwordResetConfirmSchema,
   registerRequestSchema,
+  sessionSchema,
   tokenPairSchema,
+  updateProfileRequestSchema,
 } from './auth.js';
 import {
   changePlanRequestSchema,
@@ -314,6 +317,69 @@ describe('auth contracts', () => {
       passwordResetConfirmSchema.safeParse({ token: 'short', password: 'correct horse battery staple' })
         .success,
     ).toBe(false);
+  });
+
+  it('demands the current password to change the password', () => {
+    expect(
+      changePasswordRequestSchema.safeParse({
+        currentPassword: 'correct horse battery staple',
+        newPassword: 'a completely different one',
+      }).success,
+    ).toBe(true);
+
+    // Sessão sequestrada não vira conta sequestrada: sem a senha atual, o
+    // corpo nem chega ao handler.
+    expect(
+      changePasswordRequestSchema.safeParse({ newPassword: 'a completely different one' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('describes a session without the raw user agent', () => {
+    const session = {
+      id: ULID_A,
+      clientName: 'Chrome on Windows',
+      ipAddress: '203.0.113.0',
+      current: true,
+      createdAt: NOW,
+      lastUsedAt: NOW,
+      expiresAt: NOW,
+    };
+
+    expect(sessionSchema.safeParse(session).success).toBe(true);
+
+    // O campo não existe no contrato: a string crua do navegador é impressão
+    // digital, e a lista de sessões não é lugar para ela.
+    expect(sessionSchema.parse({ ...session, userAgent: 'Mozilla/5.0' })).not.toHaveProperty(
+      'userAgent',
+    );
+    expect(sessionSchema.safeParse({ ...session, current: undefined }).success).toBe(false);
+  });
+
+  it('keeps the email out of the profile update', () => {
+    const parsed = updateProfileRequestSchema.parse({
+      name: 'Ada Lovelace',
+      locale: 'pt-BR',
+      timeZone: 'America/Sao_Paulo',
+      avatarUrl: null,
+      email: 'hijacked@example.com',
+    });
+
+    // Trocar de e-mail exige verificar o novo endereço; não é campo de
+    // formulário de perfil. O que vier é descartado, não aceito.
+    expect(parsed).not.toHaveProperty('email');
+    expect(parsed.avatarUrl).toBeNull();
+
+    // `javascript:` num `<img src>` é execução de script no cliente.
+    expect(
+      updateProfileRequestSchema.safeParse({ avatarUrl: 'javascript:alert(1)' }).success,
+    ).toBe(false);
+    expect(
+      updateProfileRequestSchema.safeParse({ timeZone: 'nao e um fuso' }).success,
+    ).toBe(false);
+    expect(updateProfileRequestSchema.safeParse({ locale: 'português' }).success).toBe(
+      false,
+    );
   });
 
   it('validates the device flow round trip', () => {

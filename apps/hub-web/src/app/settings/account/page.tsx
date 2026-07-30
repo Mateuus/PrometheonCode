@@ -4,16 +4,25 @@ import { getLocale, getTranslate } from '@/i18n/server';
 import { PageHeader } from '@/components/ui/page';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Alert } from '@/components/ui/alert';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { DataView } from '@/components/states/data-view';
 import { ForcedStateNotice } from '@/components/states/forced-state-notice';
+import { ChangePasswordForm, UpdateProfileForm } from '@/components/forms/account-forms';
 import { getViewer } from '@/lib/api/queries';
 import { applyForcedState, devForcedState } from '@/lib/api/state-override';
 import { roleLabel } from '@/lib/roles';
 
 export const metadata: Metadata = { title: 'Account' };
 
+/**
+ * Conta do usuário.
+ *
+ * O perfil e a senha são editáveis aqui (`PATCH /v1/me` e `POST /v1/me/password`).
+ * O **e-mail não é**: trocá-lo exige provar posse do novo endereço antes de o
+ * antigo perder valor, e a API não expõe esse fluxo. Por isso ele aparece como
+ * dado, fora do formulário — um campo editável que não salva seria pior que a
+ * ausência dele.
+ */
 export default async function AccountPage({
   searchParams,
 }: {
@@ -34,14 +43,10 @@ export default async function AccountPage({
           <div className="max-w-2xl space-y-5">
             <Card>
               <CardHeader>
-                <CardTitle>{t('account.profile')}</CardTitle>
+                <CardTitle>{t('account.identity')}</CardTitle>
               </CardHeader>
               <CardContent>
                 <dl className="divide-y divide-line text-sm">
-                  <div className="flex items-center justify-between gap-2 py-2">
-                    <dt className="text-muted">{t('auth.field.name')}</dt>
-                    <dd className="font-medium text-foreground">{data.user.name}</dd>
-                  </div>
                   <div className="flex items-center justify-between gap-2 py-2">
                     <dt className="text-muted">{t('auth.field.email')}</dt>
                     <dd className="flex items-center gap-2 font-medium text-foreground">
@@ -54,9 +59,7 @@ export default async function AccountPage({
                     </dd>
                   </div>
                 </dl>
-                {/* A Hub API não expõe atualização de perfil; um formulário aqui
-                    seria um campo que não salva em lugar nenhum. */}
-                <p className="mt-3 text-xs text-muted">{t('account.profileReadOnly')}</p>
+                <p className="mt-3 text-xs text-muted">{t('account.emailNotEditable')}</p>
               </CardContent>
               {data.user.emailVerified ? null : (
                 <CardFooter>
@@ -66,6 +69,12 @@ export default async function AccountPage({
                 </CardFooter>
               )}
             </Card>
+
+            <UpdateProfileForm
+              name={data.user.name}
+              locale={data.user.locale}
+              timeZone={data.user.timeZone}
+            />
 
             <Card>
               <CardHeader>
@@ -91,22 +100,14 @@ export default async function AccountPage({
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>{t('account.security')}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {/* Trocar a senha logado ainda não tem rota na API; o caminho
-                    honesto é o mesmo da recuperação, que existe e funciona. */}
-                <p className="text-sm text-muted">{t('account.changePasswordHint')}</p>
-                <Alert title={t('account.changePasswordViaEmail')} />
-              </CardContent>
-              <CardFooter>
-                <Button asChild size="sm" variant="secondary">
-                  <Link href="/forgot-password">{t('account.changePassword')}</Link>
-                </Button>
-              </CardFooter>
-            </Card>
+            <ChangePasswordForm />
+
+            <p className="text-xs text-muted">
+              {t('account.forgotCurrentPassword')}{' '}
+              <Link href="/forgot-password" className="text-link hover:underline">
+                {t('auth.forgot.link')}
+              </Link>
+            </p>
           </div>
         )}
       </DataView>

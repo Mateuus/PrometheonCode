@@ -164,16 +164,128 @@ export const passwordResetConfirmSchema = z.object({
   password: passwordSchema,
 });
 
+/**
+ * Troca de senha feita de dentro da sessão.
+ *
+ * A senha atual é exigida mesmo com a pessoa já autenticada: sessão sequestrada
+ * não pode virar conta sequestrada. Quem só tem o access token roubado não
+ * consegue trocar a senha e trancar o dono do lado de fora.
+ */
 export const changePasswordRequestSchema = z.object({
   currentPassword: passwordSchema,
   newPassword: passwordSchema,
 });
 
+export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>;
+
+/**
+ * Resultado da troca.
+ *
+ * `revokedSessions` conta as **outras** sessões derrubadas — a de quem trocou
+ * continua de pé. O número existe para a interface poder dizer quantos acessos
+ * caíram, que é a confirmação de que a troca teve efeito.
+ */
+export const changePasswordResponseSchema = z.object({
+  revokedSessions: z.int().nonnegative(),
+});
+
+export type ChangePasswordResponse = z.infer<typeof changePasswordResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Perfil
+// ---------------------------------------------------------------------------
+
+/** Etiqueta de idioma no formato BCP 47 (`en`, `pt-BR`, `es-419`). */
+export const localeSchema = z
+  .string()
+  .trim()
+  .max(10)
+  .regex(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/, {
+    message: 'must be a BCP 47 language tag',
+  });
+
+/**
+ * Fuso horário IANA (`America/Sao_Paulo`).
+ *
+ * A regex só garante a forma; se o identificador existe de verdade é o servidor
+ * que decide, contra a base de fusos do runtime — uma lista fixa aqui
+ * envelheceria a cada revisão da IANA.
+ */
+export const timeZoneSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9_+-]+(?:\/[A-Za-z0-9_+-]+)*$/, {
+    message: 'must be an IANA time zone name',
+  });
+
+/**
+ * Endereço da imagem de perfil.
+ *
+ * Só `http` e `https`: `javascript:` e `data:` numa URL que a interface coloca
+ * em `<img src>` são vetor de execução no cliente, e a validação do esquema é o
+ * lugar mais barato para fechar isso.
+ */
+export const avatarUrlSchema = z
+  .url({ protocol: /^https?$/ })
+  .max(1024);
+
+/**
+ * Edição do próprio perfil.
+ *
+ * **E-mail não entra aqui.** Trocar o endereço exige provar posse do novo antes
+ * de o antigo perder valor — é um fluxo com token de verificação e período em
+ * que os dois endereços convivem, não um campo de formulário. Enquanto esse
+ * fluxo não existe, o campo fica de fora em vez de existir pela metade.
+ *
+ * Todos os campos são opcionais e o que não vier permanece como está; `null` em
+ * `avatarUrl` é o pedido explícito de remover a imagem.
+ */
+export const updateProfileRequestSchema = z.object({
+  name: displayNameSchema.optional(),
+  locale: localeSchema.optional(),
+  timeZone: timeZoneSchema.optional(),
+  avatarUrl: avatarUrlSchema.nullable().optional(),
+});
+
+export type UpdateProfileRequest = z.infer<typeof updateProfileRequestSchema>;
+
+export const updateProfileResponseSchema = z.object({
+  user: currentUserSchema,
+});
+
+// ---------------------------------------------------------------------------
+// Sessões
+// ---------------------------------------------------------------------------
+
+/**
+ * Uma sessão na lista da própria conta.
+ *
+ * O conjunto de campos é escolhido para responder "eu reconheço este acesso?" e
+ * nada além disso. Em particular:
+ *
+ * - **não há `userAgent` cru.** A string completa identifica versão de
+ *   navegador e de sistema com precisão suficiente para servir de impressão
+ *   digital, e não ajuda ninguém a reconhecer a própria sessão melhor que
+ *   "Chrome no Windows". O que vai é o rótulo derivado, em `clientName`.
+ * - **`ipAddress` vai truncado.** O endereço inteiro transforma a lista num
+ *   histórico de localização de quem quer que consiga ler a tela — inclusive
+ *   quem sequestrou a sessão. A rede é o bastante para a pessoa distinguir
+ *   "isto foi de casa" de "isto não fui eu".
+ */
 export const sessionSchema = z.object({
   id: ulidSchema,
+  /** Rótulo legível: nome do dispositivo, ou navegador e sistema. */
   clientName: shortTextSchema.nullable(),
+  /** Rede de origem, não o endereço exato: `203.0.113.0` ou `2001:db8::`. */
   ipAddress: z.string().max(45).nullable(),
-  userAgent: z.string().max(512).nullable(),
+  /**
+   * Verdadeiro na sessão que está fazendo a chamada.
+   *
+   * Sem esta marca, revogar a própria sessão achando que era a de outro
+   * aparelho é o erro mais fácil de cometer nesta tela.
+   */
   current: z.boolean(),
   createdAt: isoDateTimeSchema,
   lastUsedAt: isoDateTimeSchema,
@@ -183,6 +295,8 @@ export const sessionSchema = z.object({
 export type Session = z.infer<typeof sessionSchema>;
 
 export const sessionPageSchema = cursorPageSchema(sessionSchema);
+
+export type SessionPage = z.infer<typeof sessionPageSchema>;
 
 // ---------------------------------------------------------------------------
 // Device flow (`Docs/09`): a extensão pede um código, o usuário autoriza no

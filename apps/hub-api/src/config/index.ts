@@ -189,6 +189,15 @@ export const RATE_LIMITS = {
   loginPerIp: { max: 60, windowSeconds: 300 },
   loginPerEmail: { max: 10, windowSeconds: 300 },
   register: { max: 5, windowSeconds: 3_600 },
+  /**
+   * Troca de senha de dentro da sessão.
+   *
+   * A rota exige a senha atual, então ela é um oráculo de senha para quem já
+   * roubou um access token: sem teto, dá para testar um dicionário inteiro
+   * contra a conta sem passar pelo login. O limite é por usuário, e baixo — quem
+   * está trocando a própria senha faz isso uma vez, não dez.
+   */
+  passwordChange: { max: 5, windowSeconds: 900 },
   passwordResetPerIp: { max: 30, windowSeconds: 3_600 },
   passwordResetPerEmail: { max: 5, windowSeconds: 3_600 },
   emailVerification: { max: 20, windowSeconds: 3_600 },

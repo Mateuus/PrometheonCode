@@ -47,6 +47,7 @@ export type {
   PublicUser,
   RealtimeEvent,
   RealtimeEventType,
+  Session,
   Subscription,
   SubscriptionOverview,
   Task,
