@@ -1,0 +1,23 @@
+{
+  "extension.displayName": "Prometheon Code",
+  "extension.description": "Coordene vários agentes de IA de programação a partir de um único workspace.",
+
+  "command.openChat": "Abrir conversa",
+  "command.newLocalChat": "Nova conversa local",
+  "command.configureWorkspace": "Configurar workspace",
+  "command.initializeWorkspace": "Inicializar workspace",
+  "command.selectMainAgent": "Selecionar agente principal",
+  "command.selectWorkMode": "Selecionar modo de trabalho",
+  "command.selectAutonomy": "Selecionar autonomia",
+  "command.disableBypassPermissions": "Desativar ignorar permissões",
+  "command.manageAccounts": "Contas e uso",
+  "command.addAccount": "Adicionar conta",
+  "command.openSettings": "Abrir configurações",
+  "command.showDiagnostics": "Mostrar diagnóstico",
+
+  "configuration.hub.url": "URL base do Prometheon Hub. HTTPS é obrigatório fora de `localhost`. Deixe vazio para trabalhar somente no modo local. Tokens **não** ficam aqui: eles vão para o cofre de segredos do VS Code.",
+  "configuration.chat.defaultType": "Tipo de conversa aberto por padrão.",
+  "configuration.chat.defaultType.local": "Chat Local: funciona sem conta e sem servidor.",
+  "configuration.chat.defaultType.web": "Chat Web: exige um Prometheon Hub configurado.",
+  "configuration.workspace.promptOnOpen": "Mostrar a tela de configuração quando a pasta aberta não tiver .prometheon/prometheon.yaml."
+}
