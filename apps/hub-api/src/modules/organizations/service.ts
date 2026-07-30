@@ -12,7 +12,15 @@ import { outranks, permissionsOf, type Permission, type Role } from '@prometheon
 import { AUTH_SETTINGS, type AppConfig } from '../../config/index.js';
 import { hashToken, randomToken } from '../../shared/crypto.js';
 import { buildPage, type CursorPage } from '../../shared/cursor.js';
+import type { OutboxExecutor } from '../../shared/events.js';
 import { addSeconds, toIso, toIsoOrNull } from '../../shared/time.js';
+import {
+  invitationAlreadyAccepted,
+  invitationEmailMismatch,
+  invitationExpired,
+  invitationInvalid,
+  invitationRevoked,
+} from '../auth/errors.js';
 import { createOrganizationFor } from '../auth/repository.js';
 import type { AuthService } from '../auth/service.js';
 import {
@@ -184,6 +192,123 @@ export class OrganizationService {
     });
 
     return { id: created.id, expiresAt, createdAt: created.createdAt };
+  }
+
+  /**
+   * Aceita um convite com uma conta que já existe.
+   *
+   * O caminho de cadastro (`POST /v1/auth/register` com `invitationToken`) cobre
+   * quem ainda não tem conta. Este cobre quem já tem — sem ele, participar de
+   * uma segunda organização só era possível criando um segundo cadastro.
+   *
+   * Três decisões de segurança, todas verificadas no servidor:
+   *
+   * 1. **O endereço tem que bater.** Ver `invitationEmailMismatch()` para o
+   *    raciocínio completo. Em resumo: o convite autoriza uma pessoa, não quem
+   *    estiver com o link na mão.
+   * 2. **O endereço tem que estar confirmado.** Sem isso, bastaria cadastrar-se
+   *    com o e-mail de outra pessoa — que ninguém precisa provar que é seu no
+   *    cadastro — e usar o convite dela. É a confirmação que transforma "digitei
+   *    este endereço" em "recebo o que é enviado para ele".
+   * 3. **Cada desfecho tem um código próprio.** Vencido, cancelado e já usado
+   *    pedem ações diferentes de quem recebeu o link; um erro genérico deixaria
+   *    a pessoa sem saber se insiste, se pede outro convite ou se já entrou.
+   */
+  async acceptInvitation(input: {
+    token: string;
+    userId: string;
+    userEmail: string;
+    onAccepted: (
+      tx: OutboxExecutor,
+      accepted: { memberId: string; organizationId: string; roleSlug: string; invitationId: string },
+    ) => Promise<void>;
+  }): Promise<{
+    organization: OrganizationView & { role: Role; permissions: Permission[] };
+    member: ReturnType<typeof toMemberView>;
+    /** Falso quando a associação já existia; a rota usa isso na auditoria. */
+    created: boolean;
+  }> {
+    const outcome = await this.repository.acceptInvitation({
+      tokenHash: hashToken(input.token),
+      userId: input.userId,
+      expectedEmail: input.userEmail,
+      onCommitted: input.onAccepted,
+    });
+
+    switch (outcome.kind) {
+      case 'accepted':
+        return { ...(await this.describeMembership(outcome.memberId)), created: true };
+
+      case 'already-member':
+        // Repetir a chamada com o mesmo token não é erro: o estado desejado já
+        // vale. Devolver o vínculo é mais útil que um conflito, e o token foi
+        // consumido de qualquer modo.
+        return { ...(await this.describeMembership(outcome.memberId)), created: false };
+
+      case 'already-accepted': {
+        // Quem perdeu a corrida entre duas aceitações **da mesma pessoa** vê o
+        // resultado que pediu, não um 500 nem um conflito enigmático.
+        if (outcome.acceptedByUserId === input.userId) {
+          const member = await this.repository.findMemberByUser(
+            outcome.organizationId,
+            input.userId,
+          );
+
+          if (member !== undefined) {
+            return { ...(await this.describeMembership(member.id)), created: false };
+          }
+        }
+
+        throw invitationAlreadyAccepted();
+      }
+
+      case 'membership-not-active':
+        // Vínculo suspenso não é reativado por convite: suspender é decisão da
+        // organização, e desfazê-la exige `organization.manage`.
+        throw memberAlreadyExists();
+
+      case 'expired':
+        throw invitationExpired();
+
+      case 'revoked':
+        throw invitationRevoked();
+
+      case 'email-mismatch':
+        throw invitationEmailMismatch();
+
+      case 'not-found':
+      default:
+        throw invitationInvalid();
+    }
+  }
+
+  /** Monta a resposta da aceitação a partir do vínculo recém-resolvido. */
+  private async describeMembership(memberId: string): Promise<{
+    organization: OrganizationView & { role: Role; permissions: Permission[] };
+    member: ReturnType<typeof toMemberView>;
+  }> {
+    const member = await this.repository.findMemberById(memberId);
+
+    if (member === undefined) {
+      throw memberNotFound();
+    }
+
+    const organization = await this.repository.findById(member.organizationId);
+
+    if (organization === undefined) {
+      throw organizationNotFound();
+    }
+
+    const role = member.roleSlug as Role;
+
+    return {
+      organization: {
+        ...toOrganizationView(organization),
+        role,
+        permissions: [...permissionsOf(role)],
+      },
+      member: toMemberView(member),
+    };
   }
 
   /** Muda papel ou situação de um membro, com concorrência otimista. */

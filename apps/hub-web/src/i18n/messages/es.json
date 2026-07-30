@@ -128,7 +128,6 @@
   "You were invited to Prometheon": "Te invitaron a Prometheon",
   "Create your account with this invitation and you join the organization that invited you.": "Crea tu cuenta con esta invitación y entrarás en la organización que la envió.",
   "This invitation is applied when the account is created.": "Esta invitación se aplica cuando se crea la cuenta.",
-  "Already have an account? Accepting an invitation from an existing account is not available yet — ask for an invitation to another address.": "¿Ya tienes cuenta? Aceptar una invitación desde una cuenta existente todavía no está disponible: pide una invitación a otra dirección.",
   "What your team and your agents are doing right now.": "Lo que tu equipo y tus agentes están haciendo ahora mismo.",
   "Recent projects": "Proyectos recientes",
   "Tasks running": "Tareas en curso",
@@ -350,5 +349,15 @@
   "just now": "ahora mismo",
   "never": "nunca",
   "Unknown": "Desconocido",
-  "{current} of {total}": "{current} de {total}"
+  "{current} of {total}": "{current} de {total}",
+  "Accept this invitation": "Aceptar esta invitación",
+  "You are signed in as {email}. Accepting adds this account to the organization that invited you.": "Has iniciado sesión como {email}. Al aceptar, esta cuenta entra en la organización que te invitó.",
+  "Sign in with the invited address, or create the account with this invitation.": "Inicia sesión con la dirección invitada o crea la cuenta con esta invitación.",
+  "Sign in to accept": "Iniciar sesión para aceptar",
+  "This invitation link is not valid.": "Este enlace de invitación no es válido.",
+  "This invitation expired. Ask the organization for a new one.": "Esta invitación caducó. Pide una nueva a la organización.",
+  "This invitation was cancelled by the organization.": "La organización canceló esta invitación.",
+  "This invitation has already been used.": "Esta invitación ya se usó.",
+  "This invitation was sent to a different address. Sign in with the invited account, or ask for an invitation to the address you use.": "Esta invitación se envió a otra dirección. Inicia sesión con la cuenta invitada o pide una invitación para la dirección que usas.",
+  "Your membership in this organization is not active. Ask an administrator to restore it.": "Tu vínculo con esta organización no está activo. Pide a un administrador que lo restaure."
 }

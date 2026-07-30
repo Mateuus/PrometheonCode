@@ -1,6 +1,10 @@
 import 'server-only';
 import { z } from 'zod';
-import { invitationSchema, organizationMemberSchema } from '@prometheon/contracts';
+import {
+  acceptInvitationResponseSchema,
+  invitationSchema,
+  organizationMemberSchema,
+} from '@prometheon/contracts';
 import { accessToken } from '@/lib/auth/session';
 import { hubRequest, type HubRequestOptions } from './client';
 import { failure, type ApiResult } from './result';
@@ -130,6 +134,21 @@ export async function inviteMember(
   return send(`/v1/organizations/${encodeURIComponent(organizationId)}/invitations`, invitationSchema, {
     method: 'POST',
     body: { email: input.email, role: input.role, projectIds: [] },
+  });
+}
+
+/**
+ * Aceita um convite com a conta que já está autenticada.
+ *
+ * A API confere que o endereço do convite é o da conta e que ele está
+ * confirmado; o Hub Web não repete essa decisão, apenas traduz a recusa.
+ */
+export async function acceptInvitation(
+  token: string,
+): Promise<ApiResult<z.infer<typeof acceptInvitationResponseSchema>>> {
+  return send('/v1/invitations/accept', acceptInvitationResponseSchema, {
+    method: 'POST',
+    body: { token },
   });
 }
 

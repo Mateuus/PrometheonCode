@@ -192,6 +192,12 @@ export const RATE_LIMITS = {
   passwordResetPerIp: { max: 30, windowSeconds: 3_600 },
   passwordResetPerEmail: { max: 5, windowSeconds: 3_600 },
   emailVerification: { max: 20, windowSeconds: 3_600 },
+  /**
+   * Aceitação de convite. O token é aleatório de 256 bits, então não é força
+   * bruta que este teto contém — é a varredura de tokens vazados e o custo da
+   * transação com lock que cada tentativa abre.
+   */
+  invitationAccept: { max: 20, windowSeconds: 3_600 },
   refresh: { max: 60, windowSeconds: 300 },
   /** Início do device flow: uma extensão não pede código o tempo todo. */
   deviceAuthorization: { max: 20, windowSeconds: 3_600 },

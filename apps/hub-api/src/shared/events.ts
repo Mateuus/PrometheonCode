@@ -30,6 +30,7 @@ import { enqueueOutboxMessage, type TransactionExecutor } from '@prometheon/data
 import type {
   MessageAuthorType,
   MessageStatus,
+  OrganizationRole,
   RealtimeEventType,
   TaskStatus,
 } from '@prometheon/contracts';
@@ -70,6 +71,43 @@ async function enqueue(
     payload: input.payload,
     dedupeKey: input.dedupeKey ?? null,
     ...(input.occurredAt === undefined ? {} : { occurredAt: input.occurredAt }),
+  });
+}
+
+export interface MemberJoinedInput extends BaseEventInput {
+  readonly memberId: string;
+  readonly userId: string;
+  readonly role: OrganizationRole;
+  readonly invitationId: string | null;
+}
+
+/**
+ * `member.joined`.
+ *
+ * `aggregateSequence` fica nulo: a associação não tem contador próprio — o
+ * agregado nasce com este evento e o `version` da linha começa em zero para
+ * todo mundo, então usá-lo como sequência não ordenaria nada.
+ *
+ * O e-mail do convidado não entra no payload. O evento é entregue a quem assina
+ * a organização, e `viewer` não tem direito de ler o cadastro dos outros — quem
+ * pode ver a lista de membros a busca pelo REST, onde a permissão é conferida.
+ */
+export async function recordMemberJoined(
+  executor: OutboxExecutor,
+  input: MemberJoinedInput,
+): Promise<string> {
+  return enqueue(executor, {
+    ...input,
+    aggregateType: 'organization_member',
+    aggregateId: input.memberId,
+    aggregateSequence: null,
+    eventType: 'member.joined',
+    payload: {
+      memberId: input.memberId,
+      userId: input.userId,
+      role: input.role,
+      invitationId: input.invitationId,
+    },
   });
 }
 

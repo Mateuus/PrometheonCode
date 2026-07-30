@@ -12,15 +12,54 @@ import {
   organizations,
   plans,
   roles,
+  runInTransaction,
   users,
   type Database,
   type Invitation,
+  type MembershipStatus,
   type OrganizationMember,
+  type TransactionExecutor,
 } from '@prometheon/database';
 import type { SelectQueryBuilder } from 'typeorm';
 
 import { decodeCursor } from '../../shared/cursor.js';
 import { affectedRows, applyKeyset } from '../../shared/query.js';
+
+/**
+ * Desfecho de `acceptInvitation()`.
+ *
+ * Cada variante é um caso que o usuário precisa distinguir — "expirado",
+ * "cancelado" e "já usado" pedem ações diferentes de quem recebeu o link, e
+ * juntá-los num erro genérico deixaria a pessoa sem saber o que fazer.
+ */
+export type AcceptInvitationOutcome =
+  | { readonly kind: 'accepted'; readonly memberId: string }
+  /** O convite era para esta conta, que já é membro ativo. Idempotente. */
+  | { readonly kind: 'already-member'; readonly memberId: string }
+  /** Existe vínculo, mas suspenso ou apenas convidado. */
+  | { readonly kind: 'membership-not-active'; readonly status: MembershipStatus }
+  | { readonly kind: 'not-found' }
+  | { readonly kind: 'expired' }
+  | { readonly kind: 'revoked' }
+  | {
+      readonly kind: 'already-accepted';
+      readonly acceptedByUserId: string | null;
+      readonly organizationId: string;
+    }
+  | { readonly kind: 'email-mismatch' };
+
+/**
+ * Compara endereços de e-mail para efeito de autorização.
+ *
+ * Só a caixa das letras é normalizada. Nada de remover pontos ou o sufixo
+ * `+etiqueta`: são convenções de alguns provedores, não regra do protocolo, e
+ * aplicá-las faria `a.b@dominio.com` e `ab@dominio.com` valerem um pelo outro em
+ * servidores onde são caixas diferentes — exatamente o tipo de equivalência
+ * inventada que vira escalada de privilégio.
+ */
+function sameEmail(left: string, right: string): boolean {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
 
 export interface OrganizationRow {
   id: string;
@@ -286,6 +325,154 @@ export class OrganizationRepository {
       { id: invitationId },
       { status: 'expired', updatedAt: new Date() },
     );
+  }
+
+  /**
+   * Aceita um convite, ligando uma conta **já existente** à organização.
+   *
+   * Tudo acontece numa transação só, aberta com `SELECT … FOR UPDATE` sobre a
+   * linha do convite. O lock não é zelo excessivo: sem ele, duas requisições
+   * simultâneas com o mesmo token leem `pending` ao mesmo tempo, e uma das duas
+   * só descobre o problema ao bater no índice único de `organization_members` —
+   * o que chega ao usuário como erro do servidor. Com o lock, a segunda
+   * transação espera o commit da primeira e enxerga o estado final: convite
+   * aceito e associação já criada. A resposta que ela devolve é uma decisão de
+   * produto, não o resto de uma corrida perdida.
+   *
+   * `expectedEmail` entra aqui porque a comparação precisa acontecer sob o mesmo
+   * lock que o resto; **a regra** de que endereço divergente é recusado está no
+   * serviço, junto do porquê.
+   */
+  async acceptInvitation(input: {
+    tokenHash: string;
+    userId: string;
+    expectedEmail: string;
+    onCommitted: (
+      tx: TransactionExecutor,
+      accepted: { memberId: string; organizationId: string; roleSlug: string; invitationId: string },
+    ) => Promise<void>;
+  }): Promise<AcceptInvitationOutcome> {
+    return runInTransaction(this.db, async (tx) => {
+      const invitation = await tx
+        .createQueryBuilder(invitations, 'invitation')
+        .setLock('pessimistic_write')
+        .where('invitation.tokenHash = :tokenHash', { tokenHash: input.tokenHash })
+        .getOne();
+
+      if (invitation === null) {
+        return { kind: 'not-found' } as const;
+      }
+
+      if (invitation.status === 'revoked') {
+        return { kind: 'revoked' } as const;
+      }
+
+      if (invitation.status === 'expired') {
+        return { kind: 'expired' } as const;
+      }
+
+      if (invitation.status === 'accepted') {
+        return {
+          kind: 'already-accepted',
+          acceptedByUserId: invitation.acceptedByUserId,
+          organizationId: invitation.organizationId,
+        } as const;
+      }
+
+      // Convite vencido que ninguém marcou ainda: o estado é corrigido agora,
+      // o que também libera o índice único de "um convite pendente por e-mail"
+      // para um convite novo.
+      if (invitation.expiresAt.getTime() <= Date.now()) {
+        await tx.update(
+          invitations,
+          { id: invitation.id },
+          { status: 'expired', updatedAt: new Date() },
+        );
+
+        return { kind: 'expired' } as const;
+      }
+
+      if (!sameEmail(invitation.email, input.expectedEmail)) {
+        return { kind: 'email-mismatch' } as const;
+      }
+
+      // A associação existente é lida sob lock pelo mesmo motivo do convite: é
+      // ela que o `INSERT` abaixo pode colidir.
+      const existing = await tx
+        .createQueryBuilder(organizationMembers, 'member')
+        .setLock('pessimistic_write')
+        .where('member.organizationId = :organizationId', {
+          organizationId: invitation.organizationId,
+        })
+        .andWhere('member.userId = :userId', { userId: input.userId })
+        .getOne();
+
+      const now = new Date();
+
+      if (existing !== null) {
+        // Já é membro ativo: o convite é consumido — o token não pode continuar
+        // valendo — e a resposta descreve o vínculo que existe. Reativar um
+        // vínculo suspenso, não: suspender alguém é uma decisão da organização,
+        // e um convite antigo não pode desfazê-la.
+        await tx.update(
+          invitations,
+          { id: invitation.id },
+          {
+            status: 'accepted',
+            acceptedAt: now,
+            acceptedByUserId: input.userId,
+            updatedAt: now,
+          },
+        );
+
+        return existing.status === 'active'
+          ? ({ kind: 'already-member', memberId: existing.id } as const)
+          : ({ kind: 'membership-not-active', status: existing.status } as const);
+      }
+
+      const memberId = newId();
+
+      await tx.update(
+        invitations,
+        { id: invitation.id },
+        {
+          status: 'accepted',
+          acceptedAt: now,
+          acceptedByUserId: input.userId,
+          updatedAt: now,
+        },
+      );
+
+      await tx.insert(organizationMembers, {
+        id: memberId,
+        organizationId: invitation.organizationId,
+        userId: input.userId,
+        roleId: invitation.roleId,
+        status: 'active',
+        invitedBy: invitation.invitedBy,
+        joinedAt: now,
+        createdBy: input.userId,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const role = await tx
+        .createQueryBuilder(roles, 'role')
+        .select('role.slug')
+        .where('role.id = :roleId', { roleId: invitation.roleId })
+        .getOne();
+
+      // O evento entra na mesma transação da escrita (`Docs/08`): se o commit
+      // falhar, a associação e o evento somem juntos.
+      await input.onCommitted(tx, {
+        memberId,
+        organizationId: invitation.organizationId,
+        roleSlug: role?.slug ?? '',
+        invitationId: invitation.id,
+      });
+
+      return { kind: 'accepted', memberId } as const;
+    });
   }
 
   async findRoleIdBySlug(slug: string): Promise<string | undefined> {

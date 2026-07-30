@@ -128,7 +128,6 @@
   "You were invited to Prometheon": "Você foi convidado para o Prometheon",
   "Create your account with this invitation and you join the organization that invited you.": "Crie sua conta com este convite e você entra na organização que o enviou.",
   "This invitation is applied when the account is created.": "Este convite é aplicado no momento em que a conta é criada.",
-  "Already have an account? Accepting an invitation from an existing account is not available yet — ask for an invitation to another address.": "Já tem conta? Aceitar um convite com uma conta existente ainda não está disponível — peça um convite para outro endereço.",
   "What your team and your agents are doing right now.": "O que o seu time e os seus agentes estão fazendo agora.",
   "Recent projects": "Projetos recentes",
   "Tasks running": "Tarefas em andamento",
@@ -350,5 +349,15 @@
   "just now": "agora mesmo",
   "never": "nunca",
   "Unknown": "Desconhecido",
-  "{current} of {total}": "{current} de {total}"
+  "{current} of {total}": "{current} de {total}",
+  "Accept this invitation": "Aceitar este convite",
+  "You are signed in as {email}. Accepting adds this account to the organization that invited you.": "Você está conectado como {email}. Ao aceitar, esta conta entra na organização que convidou você.",
+  "Sign in with the invited address, or create the account with this invitation.": "Entre com o endereço convidado ou crie a conta com este convite.",
+  "Sign in to accept": "Entrar para aceitar",
+  "This invitation link is not valid.": "Este link de convite não é válido.",
+  "This invitation expired. Ask the organization for a new one.": "Este convite venceu. Peça um novo à organização.",
+  "This invitation was cancelled by the organization.": "Este convite foi cancelado pela organização.",
+  "This invitation has already been used.": "Este convite já foi usado.",
+  "This invitation was sent to a different address. Sign in with the invited account, or ask for an invitation to the address you use.": "Este convite foi enviado para outro endereço. Entre com a conta convidada ou peça um convite para o endereço que você usa.",
+  "Your membership in this organization is not active. Ask an administrator to restore it.": "Seu vínculo com esta organização não está ativo. Peça a um administrador para restaurá-lo."
 }

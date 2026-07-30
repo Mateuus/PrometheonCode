@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { ORGANIZATION_ROLES, TASK_PRIORITIES, TASK_STATUSES } from '@prometheon/contracts';
 import {
+  acceptInvitation,
   createConversation,
   createMessage,
   createProject,
@@ -203,6 +204,49 @@ export async function updateTaskStatusAction(
 }
 
 // -------------------------------------------------------------------- membros
+
+/**
+ * Aceita um convite com a conta que já está autenticada.
+ *
+ * Cada recusa da API vira uma mensagem própria: "venceu", "foi cancelado", "já
+ * foi usado" e "é de outro endereço" pedem coisas diferentes de quem recebeu o
+ * link, e um erro genérico deixaria a pessoa sem saber se insiste, se pede outro
+ * convite ou se já está dentro.
+ */
+export async function acceptInvitationAction(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const token = field(formData, 'token');
+  if (token === '') {
+    return formError('invite.error.invalidToken');
+  }
+
+  const accepted = await acceptInvitation(token);
+  if (!accepted.ok) {
+    switch (accepted.code) {
+      case 'INVITATION_EMAIL_MISMATCH':
+        return formError('invite.error.emailMismatch');
+      case 'INVITATION_EXPIRED':
+        return formError('invite.error.expired');
+      case 'INVITATION_REVOKED':
+        return formError('invite.error.revoked');
+      case 'INVITATION_ALREADY_USED':
+        return formError('invite.error.alreadyUsed');
+      case 'INVITATION_NOT_FOUND':
+        return formError('invite.error.invalidToken');
+      case 'MEMBER_ALREADY_EXISTS':
+        return formError('invite.error.membershipBlocked');
+      default:
+        return translateFailure(accepted);
+    }
+  }
+
+  // A lista de organizações do usuário mudou; a casca desenha o seletor a
+  // partir dela.
+  revalidatePath('/', 'layout');
+  redirect(`/app/${accepted.data.organization.slug}`);
+}
 
 export async function inviteMemberAction(
   _previous: FormState,

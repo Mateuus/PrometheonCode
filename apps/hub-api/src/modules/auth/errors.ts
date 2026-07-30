@@ -63,6 +63,47 @@ export function invitationExpired(): ApiError {
   return badRequest('INVITATION_EXPIRED', 'This invitation has expired.');
 }
 
+/**
+ * Convite já consumido.
+ *
+ * 409 e não 400: o pedido está bem formado e o token é real; o que mudou foi o
+ * estado do recurso. É também a resposta de quem perdeu uma corrida entre duas
+ * aceitações simultâneas — um conflito, não uma falha do servidor.
+ */
+export function invitationAlreadyAccepted(): ApiError {
+  return conflict('INVITATION_ALREADY_USED', 'This invitation has already been accepted.');
+}
+
+/** Convite cancelado por quem administra a organização. */
+export function invitationRevoked(): ApiError {
+  return conflict('INVITATION_REVOKED', 'This invitation was cancelled.');
+}
+
+/**
+ * O convite é de outro endereço.
+ *
+ * DECISÃO DE SEGURANÇA — por que isto é recusado em vez de aceito:
+ *
+ * O convite não é um cupom ao portador. Ele autoriza **uma pessoa** —
+ * identificada pelo endereço para onde o link foi enviado — a entrar num tenant
+ * com um papel definido por quem convidou. Deixar qualquer conta autenticada
+ * consumir o token transformaria posse do link em pertencimento à organização, e
+ * um link vaza por muitos caminhos que não são invasão de caixa postal: histórico
+ * de navegador, encaminhamento de e-mail, captura de tela em suporte, log de
+ * proxy. Quem convidou `financeiro@empresa.com` como `admin` não consentiu com
+ * uma conta pessoal qualquer virando `admin`.
+ *
+ * A mensagem não diz para qual endereço o convite foi: quem legitimamente
+ * recebeu já sabe, e quem só tem o token não fica sabendo.
+ */
+export function invitationEmailMismatch(): ApiError {
+  return forbidden(
+    'This invitation was sent to a different email address. ' +
+      'Sign in with the invited account, or ask for an invitation to the address you use.',
+    'INVITATION_EMAIL_MISMATCH',
+  );
+}
+
 export function emailAlreadyRegistered(): ApiError {
   // Reservado para fluxos autenticados (convidar alguém que já é membro), onde
   // quem chama já tem direito de saber quem está na organização. O registro

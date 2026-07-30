@@ -173,8 +173,20 @@ export const CATALOG = {
   'invite.genericSubtitle':
     'Create your account with this invitation and you join the organization that invited you.',
   'invite.registerToAccept': 'This invitation is applied when the account is created.',
-  'invite.existingAccount':
-    'Already have an account? Accepting an invitation from an existing account is not available yet — ask for an invitation to another address.',
+  'invite.signedInTitle': 'Accept this invitation',
+  'invite.signedInSubtitle':
+    'You are signed in as {email}. Accepting adds this account to the organization that invited you.',
+  'invite.signedOutHint':
+    'Sign in with the invited address, or create the account with this invitation.',
+  'invite.signInToAccept': 'Sign in to accept',
+  'invite.error.invalidToken': 'This invitation link is not valid.',
+  'invite.error.expired': 'This invitation expired. Ask the organization for a new one.',
+  'invite.error.revoked': 'This invitation was cancelled by the organization.',
+  'invite.error.alreadyUsed': 'This invitation has already been used.',
+  'invite.error.emailMismatch':
+    'This invitation was sent to a different address. Sign in with the invited account, or ask for an invitation to the address you use.',
+  'invite.error.membershipBlocked':
+    'Your membership in this organization is not active. Ask an administrator to restore it.',
 
   // ------------------------------------------------------------- dashboard
   'dashboard.title': 'Dashboard',

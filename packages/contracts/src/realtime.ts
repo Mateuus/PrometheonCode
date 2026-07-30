@@ -12,6 +12,7 @@
 import { z } from 'zod';
 
 import { messageAuthorTypeSchema, messageStatusSchema } from './messages.js';
+import { organizationRoleSchema } from './permissions.js';
 import {
   cursorSchema,
   isoDateTimeSchema,
@@ -26,6 +27,7 @@ export const REALTIME_PROTOCOL_VERSION = 1;
 export const REALTIME_EVENT_TYPES = [
   'presence.changed',
   'device.changed',
+  'member.joined',
   'agent.started',
   'agent.updated',
   'agent.stopped',
@@ -89,6 +91,25 @@ export const deviceChangedEventSchema = realtimeEvent(
   z.object({
     deviceId: ulidSchema,
     status: z.enum(['online', 'idle', 'offline', 'revoked']),
+  }),
+);
+
+/**
+ * `member.joined` — alguém passou a fazer parte da organização.
+ *
+ * O payload é enxuto como os demais (`Docs/08`): quem já está conectado descobre
+ * que a lista de membros mudou e vai buscá-la pelo REST. O e-mail do convidado
+ * **não** entra aqui — o evento chega a todo mundo que assina a organização, e
+ * nem todo papel tem direito de ler o cadastro dos outros.
+ */
+export const memberJoinedEventSchema = realtimeEvent(
+  'member.joined',
+  z.object({
+    memberId: ulidSchema,
+    userId: ulidSchema,
+    role: organizationRoleSchema,
+    /** Convite que originou a associação; nulo quando não houve convite. */
+    invitationId: ulidSchema.nullable(),
   }),
 );
 
@@ -237,6 +258,7 @@ export const gitWebhookProcessedEventSchema = realtimeEvent(
 export const realtimeEventSchema = z.discriminatedUnion('type', [
   presenceChangedEventSchema,
   deviceChangedEventSchema,
+  memberJoinedEventSchema,
   agentStartedEventSchema,
   agentUpdatedEventSchema,
   agentStoppedEventSchema,
