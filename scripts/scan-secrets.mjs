@@ -83,6 +83,25 @@ const RULES = [
     label: "Cabeçalho Authorization com credencial",
     pattern: /\bAuthorization\s*[:=]\s*['"]?(?:Bearer|Basic)\s+[A-Za-z0-9._+/=-]{20,}/i,
   },
+  {
+    id: "env-file-secret",
+    label: "Segredo em arquivo de ambiente ou configuração",
+    // A regra genérica acima exige aspas em volta do valor, o que cobre código
+    // mas deixa passar justamente o caso mais provável: um `.env` que entrou no
+    // commit por engano. Lá o formato é `CHAVE=valor`, sem aspas nenhuma.
+    //
+    // Só vale em arquivo de configuração porque, em código, um valor sem aspas
+    // costuma ser referência (`password: process.env.DB_PASSWORD`) e viraria
+    // falso positivo em série.
+    onlyPaths: /(?:^|\/)\.env(?:\.|$)|\.(?:ini|conf|cfg|properties|toml)$/i,
+    // O valor vai até o primeiro espaço, o que já descarta comentário inline.
+    // `#` continua valendo dentro do valor: senha com `#` é comum, e recortá-la
+    // ali deixaria justamente as senhas fortes passarem batido.
+    // O lookahead ignora `CHAVE=${OUTRA}`, que é referência, não segredo.
+    pattern:
+      /\b[A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|TOKEN|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY)[A-Z0-9_]*\s*[:=]\s*(?!['"]?\$)['"]?([^'"\s]{16,})/i,
+    entropy: 3.0,
+  },
 ];
 
 /** Placeholders comuns em exemplo e documentação — não são segredos. */
@@ -208,6 +227,7 @@ function scan(lines) {
     const isTest = TEST_PATH.test(entry.file);
     for (const rule of RULES) {
       if (rule.skipInTests && isTest) continue;
+      if (rule.onlyPaths && !rule.onlyPaths.test(entry.file)) continue;
       const match = rule.pattern.exec(entry.text);
       if (!match) continue;
       if (looksLikePlaceholder(match[0])) continue;
