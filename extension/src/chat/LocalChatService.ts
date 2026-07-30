@@ -3,7 +3,9 @@ import type { Logger } from '../logger';
 import type { LocalStateStore } from '../storage/LocalStateStore';
 import { PrometheonError, serializeError } from '../utils/errors';
 import { newId } from '../utils/ids';
+import { truncateStepOutput } from './types';
 import type {
+  AgentStep,
   ChatEvent,
   ChatMessage,
   ChatService,
@@ -156,6 +158,39 @@ export class LocalChatService implements ChatService {
     };
 
     let content = '';
+    /** Passos do agente nesta resposta, na ordem, prontos para persistir. */
+    const steps: AgentStep[] = [];
+
+    // Persistimos a cada passo, e não só no fim: recarregar a conversa no meio
+    // de um run precisa devolver o que o agente já fez.
+    const upsertStep = async (step: AgentStep): Promise<void> => {
+      const at = steps.findIndex((item) => item.id === step.id);
+      if (at === -1) {
+        steps.push(step);
+      } else {
+        steps[at] = step;
+      }
+      await this.patchMessage(conversation.id, agentMessage.id, { steps: [...steps] });
+    };
+
+    /**
+     * Fecha os passos que ficaram em andamento quando o run acabou antes da
+     * ferramenta responder. Sem isto, a bolinha ficaria pulsando para sempre.
+     */
+    const settlePending = (): AgentStep[] => {
+      const now = Date.now();
+      const closed: AgentStep[] = [];
+      steps.forEach((step, index) => {
+        if (step.status !== 'running') {
+          return;
+        }
+        const settled: AgentStep = { ...step, status: 'failed', durationMs: now - step.startedAt };
+        steps[index] = settled;
+        closed.push(settled);
+      });
+      return closed;
+    };
+
     try {
       for await (const event of adapter.send(session.id, {
         content: input.content,
@@ -184,6 +219,63 @@ export class LocalChatService implements ChatService {
             yield { type: 'message.delta', runId, messageId: agentMessage.id, delta: event.text };
             break;
 
+          case 'tool.requested': {
+            const step: AgentStep = {
+              id: event.toolId,
+              kind: 'tool',
+              tool: event.tool,
+              title: event.title,
+              ...(event.detail === undefined ? {} : { detail: event.detail }),
+              status: 'running',
+              startedAt: Date.now(),
+            };
+            await upsertStep(step);
+            yield { type: 'step.started', runId, messageId: agentMessage.id, step };
+            break;
+          }
+
+          case 'tool.completed': {
+            const started = steps.find((item) => item.id === event.toolId);
+            const startedAt = started?.startedAt ?? Date.now();
+            const detail = event.detail ?? started?.detail;
+            const output = event.output === undefined ? null : truncateStepOutput(event.output);
+            const step: AgentStep = {
+              id: event.toolId,
+              kind: 'tool',
+              tool: started?.tool ?? 'Tool',
+              title: started?.title ?? '',
+              ...(detail === undefined ? {} : { detail }),
+              ...(output === null
+                ? {}
+                : {
+                    output: output.output,
+                    ...(output.truncated ? { truncated: true } : {}),
+                  }),
+              status: event.failed === true ? 'failed' : 'done',
+              startedAt,
+              durationMs: Date.now() - startedAt,
+            };
+            await upsertStep(step);
+            yield { type: 'step.completed', runId, messageId: agentMessage.id, step };
+            break;
+          }
+
+          case 'thought': {
+            // Raciocínio chega já concluído: só o par tempo/ordem interessa.
+            const step: AgentStep = {
+              id: newId('step'),
+              kind: 'thought',
+              tool: 'Thought',
+              title: '',
+              status: 'done',
+              startedAt: Date.now() - event.durationMs,
+              durationMs: event.durationMs,
+            };
+            await upsertStep(step);
+            yield { type: 'step.completed', runId, messageId: agentMessage.id, step };
+            break;
+          }
+
           case 'completed':
             content = event.text;
             await this.patchMessage(conversation.id, agentMessage.id, {
@@ -201,17 +293,25 @@ export class LocalChatService implements ChatService {
             break;
 
           case 'cancelled':
+            for (const step of settlePending()) {
+              yield { type: 'step.completed', runId, messageId: agentMessage.id, step };
+            }
             await this.patchMessage(conversation.id, agentMessage.id, {
               content,
               status: 'sent',
+              steps: [...steps],
             });
             yield { type: 'run.cancelled', runId, messageId: agentMessage.id };
             break;
 
           case 'failed':
+            for (const step of settlePending()) {
+              yield { type: 'step.completed', runId, messageId: agentMessage.id, step };
+            }
             await this.patchMessage(conversation.id, agentMessage.id, {
               content,
               status: 'failed',
+              steps: [...steps],
             });
             yield { type: 'run.failed', runId, error: event.error };
             break;
@@ -219,7 +319,14 @@ export class LocalChatService implements ChatService {
       }
     } catch (error) {
       this.logger.error(`Run ${runId} falhou: ${String(error)}`);
-      await this.patchMessage(conversation.id, agentMessage.id, { content, status: 'failed' });
+      for (const step of settlePending()) {
+        yield { type: 'step.completed', runId, messageId: agentMessage.id, step };
+      }
+      await this.patchMessage(conversation.id, agentMessage.id, {
+        content,
+        status: 'failed',
+        steps: [...steps],
+      });
       yield { type: 'run.failed', runId, error: serializeError(error) };
     } finally {
       this.runs.delete(runId);

@@ -1,5 +1,12 @@
 import * as assert from 'node:assert/strict';
 import {
+  MAX_CONCURRENT_SESSIONS,
+  MAX_MCP_NAME_LENGTH,
+  MAX_MODEL_LENGTH,
+  MAX_PROFILE_NAME_LENGTH,
+  MAX_TOOLS_PER_LIST,
+} from '../core/types';
+import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_ATTACHMENT_BYTES,
   MAX_MESSAGE_LENGTH,
@@ -15,6 +22,22 @@ function attachment(overrides: Record<string, unknown> = {}): Record<string, unk
   return { name: 'shot.png', mimeType: 'image/png', data: PIXEL, byteSize: 68, ...overrides };
 }
 
+/** Agent Profile mínimo e válido; cada teste estraga um campo por vez. */
+function agentProfile(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    name: 'Code Reviewer',
+    providerProfileId: 'empresa1',
+    role: 'reviewer',
+    autonomyMode: 'manual',
+    allowedTools: [],
+    deniedTools: [],
+    maxConcurrentSessions: 1,
+    contextStrategy: 'project',
+    enabled: true,
+    ...overrides,
+  };
+}
+
 suite('Validação das mensagens da webview', () => {
   test('aceita as mensagens sem payload', () => {
     for (const type of [
@@ -25,7 +48,10 @@ suite('Validação das mensagens da webview', () => {
       'speech.start',
       'speech.stop',
       'speech.cancel',
-      'settings.open',
+      'accounts.refresh',
+      'mcp.refresh',
+      'mcp.import',
+      'settings.openEditor',
       'hub.connect.request',
     ]) {
       assert.deepEqual(parseWebviewMessage({ type }), { type });
@@ -242,6 +268,237 @@ suite('Validação das mensagens da webview', () => {
       payload: { content: 'oi', command: 'rm -rf /' },
     });
     assert.deepEqual(parsed, { type: 'chat.send', payload: { content: 'oi', attachments: [] } });
+  });
+
+  test('accounts.create só aceita provedor conhecido e nome utilizável', () => {
+    assert.deepEqual(
+      parseWebviewMessage({
+        type: 'accounts.create',
+        payload: { name: '  Mateus27  ', providerId: 'claude-code' },
+      }),
+      { type: 'accounts.create', payload: { name: 'Mateus27', providerId: 'claude-code' } },
+    );
+
+    for (const payload of [
+      { name: 'Mateus27', providerId: 'chatgpt-cli' },
+      { name: 'Mateus27' },
+      { name: '   ', providerId: 'claude-code' },
+      { name: 'x'.repeat(MAX_PROFILE_NAME_LENGTH + 1), providerId: 'claude-code' },
+      { name: 42, providerId: 'claude-code' },
+      { providerId: 'claude-code' },
+    ]) {
+      assert.equal(
+        parseWebviewMessage({ type: 'accounts.create', payload }),
+        null,
+        `deveria recusar: ${JSON.stringify(payload)}`,
+      );
+    }
+    assert.equal(parseWebviewMessage({ type: 'accounts.create' }), null);
+  });
+
+  test('agentProfiles.create exige o binding com uma conta', () => {
+    const parsed = parseWebviewMessage({
+      type: 'agentProfiles.create',
+      payload: { profile: agentProfile() },
+    });
+    assert.deepEqual(parsed, {
+      type: 'agentProfiles.create',
+      payload: {
+        profile: {
+          name: 'Code Reviewer',
+          providerProfileId: 'empresa1',
+          role: 'reviewer',
+          autonomyMode: 'manual',
+          allowedTools: [],
+          deniedTools: [],
+          maxConcurrentSessions: 1,
+          contextStrategy: 'project',
+          enabled: true,
+        },
+      },
+    });
+
+    // Sem conta, com conta vazia ou com enum inventado a mensagem cai inteira.
+    for (const invalid of [
+      agentProfile({ providerProfileId: undefined }),
+      agentProfile({ providerProfileId: '' }),
+      agentProfile({ role: 'destroyer' }),
+      agentProfile({ autonomyMode: 'bypass' }),
+      agentProfile({ contextStrategy: 'global' }),
+      agentProfile({ maxConcurrentSessions: 0 }),
+      agentProfile({ maxConcurrentSessions: 2.5 }),
+      agentProfile({ maxConcurrentSessions: MAX_CONCURRENT_SESSIONS + 1 }),
+      agentProfile({ enabled: 'yes' }),
+      agentProfile({ name: '' }),
+      agentProfile({ allowedTools: 'Read' }),
+      agentProfile({ allowedTools: [''] }),
+      agentProfile({ allowedTools: Array.from({ length: MAX_TOOLS_PER_LIST + 1 }, () => 'Read') }),
+      agentProfile({ model: 'x'.repeat(MAX_MODEL_LENGTH + 1) }),
+      'não é objeto',
+    ]) {
+      assert.equal(
+        parseWebviewMessage({ type: 'agentProfiles.create', payload: { profile: invalid } }),
+        null,
+        `deveria recusar: ${JSON.stringify(invalid)}`,
+      );
+    }
+  });
+
+  test('agentProfiles.update carrega o id e o perfil completo', () => {
+    assert.deepEqual(
+      parseWebviewMessage({
+        type: 'agentProfiles.update',
+        payload: { id: 'code-reviewer', profile: agentProfile({ model: ' opus-5 ' }) },
+      }),
+      {
+        type: 'agentProfiles.update',
+        payload: {
+          id: 'code-reviewer',
+          profile: {
+            name: 'Code Reviewer',
+            providerProfileId: 'empresa1',
+            role: 'reviewer',
+            model: 'opus-5',
+            autonomyMode: 'manual',
+            allowedTools: [],
+            deniedTools: [],
+            maxConcurrentSessions: 1,
+            contextStrategy: 'project',
+            enabled: true,
+          },
+        },
+      },
+    );
+
+    assert.equal(
+      parseWebviewMessage({ type: 'agentProfiles.update', payload: { profile: agentProfile() } }),
+      null,
+    );
+    assert.equal(
+      parseWebviewMessage({ type: 'agentProfiles.update', payload: { id: 'code-reviewer' } }),
+      null,
+    );
+    assert.equal(
+      parseWebviewMessage({ type: 'agentProfiles.setEnabled', payload: { id: 'a', enabled: 'sim' } }),
+      null,
+    );
+    assert.deepEqual(
+      parseWebviewMessage({ type: 'agentProfiles.setEnabled', payload: { id: 'a', enabled: false } }),
+      { type: 'agentProfiles.setEnabled', payload: { id: 'a', enabled: false } },
+    );
+    assert.deepEqual(parseWebviewMessage({ type: 'agentProfiles.remove', payload: { id: 'a' } }), {
+      type: 'agentProfiles.remove',
+      payload: { id: 'a' },
+    });
+  });
+
+  test('mcp.save valida o transporte e só aceita os campos dele', () => {
+    assert.deepEqual(
+      parseWebviewMessage({
+        type: 'mcp.save',
+        payload: {
+          server: {
+            name: ' filesystem ',
+            transport: 'stdio',
+            command: 'npx',
+            args: ['-y', '@modelcontextprotocol/server-filesystem'],
+            env: [{ key: 'PORT', value: '3550' }],
+            // Cabeçalho não pertence ao stdio: é descartado com o resto.
+            headers: [{ key: 'Authorization', value: 'x' }],
+            enabled: true,
+          },
+        },
+      }),
+      {
+        type: 'mcp.save',
+        payload: {
+          server: {
+            name: 'filesystem',
+            transport: 'stdio',
+            command: 'npx',
+            args: ['-y', '@modelcontextprotocol/server-filesystem'],
+            env: [{ key: 'PORT', value: '3550' }],
+            headers: [],
+            enabled: true,
+          },
+        },
+      },
+    );
+
+    assert.deepEqual(
+      parseWebviewMessage({
+        type: 'mcp.save',
+        payload: {
+          server: {
+            name: 'origin-agls',
+            transport: 'http',
+            url: 'http://127.0.0.1:3550/mcp',
+            headers: [],
+            enabled: true,
+          },
+        },
+      }),
+      {
+        type: 'mcp.save',
+        payload: {
+          server: {
+            name: 'origin-agls',
+            transport: 'http',
+            args: [],
+            env: [],
+            url: 'http://127.0.0.1:3550/mcp',
+            headers: [],
+            enabled: true,
+          },
+        },
+      },
+    );
+
+    for (const server of [
+      { transport: 'stdio', command: 'npx', enabled: true },
+      { name: 'fs', command: 'npx', enabled: true },
+      { name: 'fs', transport: 'websocket', url: 'https://x.dev', enabled: true },
+      { name: 'fs', transport: 'stdio', enabled: true },
+      { name: 'fs', transport: 'stdio', command: 'npx' },
+      { name: 'fs', transport: 'stdio', command: 'npx', enabled: true, args: 'oops' },
+      { name: 'fs', transport: 'stdio', command: 'npx', enabled: true, args: [''] },
+      { name: 'fs', transport: 'stdio', command: 'npx', enabled: true, env: { PORT: '1' } },
+      {
+        name: 'fs',
+        transport: 'stdio',
+        command: 'npx',
+        enabled: true,
+        env: [{ key: 'PORT', value: 42 }],
+      },
+      { name: 'nome com espaço', transport: 'stdio', command: 'npx', enabled: true },
+      { name: 'remoto', transport: 'http', url: 'ftp://example.com', enabled: true },
+      { name: 'remoto', transport: 'http', url: 'not a url', enabled: true },
+      { name: 'remoto', transport: 'sse', enabled: true },
+      { name: 'x'.repeat(MAX_MCP_NAME_LENGTH + 1), transport: 'stdio', command: 'npx', enabled: true },
+    ]) {
+      assert.equal(
+        parseWebviewMessage({ type: 'mcp.save', payload: { server } }),
+        null,
+        `deveria recusar: ${JSON.stringify(server)}`,
+      );
+    }
+
+    assert.deepEqual(parseWebviewMessage({ type: 'mcp.remove', payload: { name: 'filesystem' } }), {
+      type: 'mcp.remove',
+      payload: { name: 'filesystem' },
+    });
+    assert.equal(parseWebviewMessage({ type: 'mcp.remove', payload: { name: '' } }), null);
+    assert.deepEqual(
+      parseWebviewMessage({ type: 'mcp.setEnabled', payload: { name: 'fs', enabled: true } }),
+      { type: 'mcp.setEnabled', payload: { name: 'fs', enabled: true } },
+    );
+    assert.equal(parseWebviewMessage({ type: 'mcp.setEnabled', payload: { name: 'fs' } }), null);
+  });
+
+  test('as mensagens antigas de conta não existem mais', () => {
+    // `accounts.add` abria um QuickPick; agora tudo acontece no painel.
+    assert.equal(parseWebviewMessage({ type: 'accounts.add' }), null);
+    assert.equal(parseWebviewMessage({ type: 'settings.open' }), null);
   });
 
   test('chat.openSession exige um identificador utilizável', () => {

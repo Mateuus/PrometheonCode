@@ -1,22 +1,61 @@
-import type { ChatMessage, ConversationSummary, ImageAttachment } from '../../chat/types';
-import { IMAGE_MIME_TYPES, type ImageMimeType } from '../../chat/types';
+import type {
+  AgentStep,
+  ChatMessage,
+  ConversationSummary,
+  ImageAttachment,
+} from '../../chat/types';
+import {
+  IMAGE_MIME_TYPES,
+  MAX_STEP_OUTPUT_CHARS,
+  type ImageMimeType,
+} from '../../chat/types';
 import type { PrometheonViewState } from '../../core/state';
 import {
+  AGENT_AUTONOMY_MODES,
+  AGENT_AUTONOMY_MODE_DESCRIPTIONS,
+  AGENT_AUTONOMY_MODE_LABELS,
+  AGENT_ROLES,
+  AGENT_ROLE_DESCRIPTIONS,
+  AGENT_ROLE_LABELS,
   AUTONOMY_DESCRIPTIONS,
   AUTONOMY_LABELS,
   AUTONOMY_LEVELS,
+  CONTEXT_STRATEGIES,
+  CONTEXT_STRATEGY_DESCRIPTIONS,
+  CONTEXT_STRATEGY_LABELS,
   HUB_STATE_LABELS,
+  MAX_CONCURRENT_SESSIONS,
+  MAX_MODEL_LENGTH,
+  MAX_PROFILE_NAME_LENGTH,
+  MAX_SYSTEM_PROMPT_LENGTH,
+  MAX_MCP_COMMAND_LENGTH,
+  MAX_MCP_NAME_LENGTH,
+  MAX_MCP_URL_LENGTH,
+  MCP_TRANSPORTS,
+  MCP_TRANSPORT_DESCRIPTIONS,
+  MCP_TRANSPORT_LABELS,
   WORK_MODES,
   WORK_MODE_DESCRIPTIONS,
   WORK_MODE_LABELS,
   type ActiveAgentSummary,
+  type AgentAutonomyMode,
+  type AgentProfileSummary,
+  type AgentRole,
   type ChatType,
+  type ContextStrategy,
+  type McpKeyValue,
+  type McpServerDraft,
+  type McpServerSummary,
+  type McpTransport,
 } from '../../core/types';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_ATTACHMENT_BYTES,
+  SETTINGS_SECTIONS,
+  type AgentProfileDraft,
   type DraftAttachment,
   type ExtensionToWebviewMessage,
+  type SettingsSection,
   type WebviewToExtensionMessage,
 } from '../messages';
 
@@ -61,6 +100,9 @@ const dom = {
   connectHub: element<HTMLButtonElement>('connect-hub'),
   messages: element<HTMLElement>('messages'),
   emptyState: element<HTMLDivElement>('empty-state'),
+  working: element<HTMLDivElement>('working'),
+  workingWord: element<HTMLSpanElement>('working-word'),
+  workingElapsed: element<HTMLSpanElement>('working-elapsed'),
   agentsSection: element<HTMLDetailsElement>('agents-section'),
   agentsCount: element<HTMLSpanElement>('agents-count'),
   agentsList: element<HTMLUListElement>('agents-list'),
@@ -68,11 +110,11 @@ const dom = {
   activityLabel: element<HTMLSpanElement>('activity-label'),
   activityDetail: element<HTMLSpanElement>('activity-detail'),
   activityElapsed: element<HTMLSpanElement>('activity-elapsed'),
-  openAccounts: element<HTMLButtonElement>('open-accounts'),
-  accountsModal: element<HTMLDivElement>('accounts-modal'),
-  accountsBody: element<HTMLDivElement>('accounts-body'),
-  closeAccounts: element<HTMLButtonElement>('close-accounts'),
-  addAccount: element<HTMLButtonElement>('add-account'),
+  openSettingsModal: element<HTMLButtonElement>('open-settings-modal'),
+  settingsModal: element<HTMLDivElement>('settings-modal'),
+  settingsNav: element<HTMLElement>('settings-nav'),
+  settingsPane: element<HTMLDivElement>('settings-pane'),
+  closeSettings: element<HTMLButtonElement>('close-settings'),
   composerCard: element<HTMLDivElement>('composer-card'),
   attachments: element<HTMLDivElement>('attachments'),
   attachImage: element<HTMLButtonElement>('attach-image'),
@@ -92,6 +134,12 @@ let state: PrometheonViewState | null = null;
 let currentRunId: string | null = null;
 /** Nó de texto de cada mensagem, para aplicar deltas sem redesenhar a lista. */
 const contentNodes = new Map<string, HTMLElement>();
+/** Faixa de passos de cada mensagem, para inserir a timeline sem redesenhá-la. */
+const stepContainers = new Map<string, HTMLElement>();
+/** Elemento de cada passo, indexado por `mensagem:passo`. */
+const stepNodes = new Map<string, HTMLElement>();
+/** Quantas mensagens estão na lista; decide o estado vazio junto do indicador. */
+let messageCount = 0;
 /** Imagens do rascunho atual; só saem daqui quando a mensagem é enviada. */
 let drafts: DraftAttachment[] = [];
 
@@ -158,6 +206,9 @@ interface MenuOption {
   readonly icon: string;
 }
 
+/** Todos os menus vivos, inclusive os criados dentro do modal. */
+const openMenus = new Set<OptionMenu>();
+
 /** Clona um ícone declarado no `<template>` do HTML. */
 function icon(name: string): SVGElement | null {
   const found = dom.iconTemplates.content.querySelector<SVGElement>(`[data-icon="${name}"]`);
@@ -184,6 +235,9 @@ class OptionMenu {
     this.iconSlot = this.slot(button, 'icon');
     this.labelSlot = this.slot(button, 'label');
     this.itemsSlot = this.slot(menu, 'items');
+    // Os menus do modal nascem e morrem com a seção aberta; o registro permite
+    // que um clique em qualquer lugar feche todos sem conhecê-los por nome.
+    openMenus.add(this);
 
     button.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -235,6 +289,12 @@ class OptionMenu {
     if (disabled) {
       this.close();
     }
+  }
+
+  /** Um menu descartado junto com a seção não pode continuar registrado. */
+  destroy(): void {
+    this.close();
+    openMenus.delete(this);
   }
 
   private renderItems(): void {
@@ -340,11 +400,60 @@ const menus = {
 };
 
 function closeAllMenus(except?: OptionMenu): void {
-  for (const menu of Object.values(menus)) {
+  for (const menu of openMenus) {
     if (menu !== except) {
       menu.close();
     }
   }
+}
+
+/**
+ * Menu de escolha única montado em tempo de execução, para os formulários do
+ * modal. Substitui o `<select>` nativo, que não mostra a descrição da opção.
+ */
+function createOptionMenu(
+  title: string,
+  options: readonly MenuOption[],
+  selected: string,
+  onSelect: (value: string) => void,
+): { readonly root: HTMLElement; readonly menu: OptionMenu } {
+  const anchor = document.createElement('div');
+  anchor.className = 'menu-anchor field-menu';
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'pill field-pill';
+  button.setAttribute('aria-haspopup', 'menu');
+  button.setAttribute('aria-expanded', 'false');
+  const iconSlot = document.createElement('span');
+  iconSlot.className = 'pill-icon';
+  iconSlot.dataset['slot'] = 'icon';
+  const labelSlot = document.createElement('span');
+  labelSlot.className = 'field-pill-label';
+  labelSlot.dataset['slot'] = 'label';
+  // O chevron não é um slot do OptionMenu: ele fica fora e sobrevive ao update.
+  const caret = document.createElement('span');
+  caret.className = 'field-pill-caret';
+  caret.append(...nodes(icon('chevron')));
+  button.append(iconSlot, labelSlot, caret);
+
+  const dropdown = document.createElement('div');
+  dropdown.className = 'menu menu-below';
+  dropdown.setAttribute('role', 'menu');
+  dropdown.setAttribute('aria-label', title);
+  dropdown.hidden = true;
+  const heading = document.createElement('div');
+  heading.className = 'menu-title';
+  heading.textContent = title;
+  const items = document.createElement('div');
+  items.className = 'menu-items';
+  items.dataset['slot'] = 'items';
+  dropdown.append(heading, items);
+
+  anchor.append(button, dropdown);
+  const menu = new OptionMenu(button, dropdown, onSelect);
+  menu.update(options, selected);
+  return { root: anchor, menu };
 }
 
 // ---------- Visualizador de imagem ----------
@@ -517,7 +626,56 @@ async function acceptFiles(files: readonly File[]): Promise<void> {
 
 let elapsedTimer = 0;
 
-/** Barra acima do composer: o que o agente faz agora e com qual conta. */
+/**
+ * Gerúndios do indicador de trabalho. Rotacionam devagar para dar sinal de vida
+ * sem virar enfeite; a fase real do run continua na barra do composer.
+ */
+const WORKING_WORDS = ['Envisioning', 'Thinking', 'Working', 'Composing', 'Reasoning'] as const;
+const WORD_INTERVAL_MS = 4200;
+/** Deve casar com a transição de opacidade de `.working-word` no CSS. */
+const WORD_FADE_MS = 200;
+
+let wordIndex = 0;
+let wordTimer = 0;
+let wordFadeTimer = 0;
+
+function currentWord(): string {
+  return `${WORKING_WORDS[wordIndex] ?? 'Working'}…`;
+}
+
+function startWorkingWords(): void {
+  if (wordTimer !== 0) {
+    return;
+  }
+  dom.workingWord.textContent = currentWord();
+  wordTimer = window.setInterval(() => {
+    wordIndex = (wordIndex + 1) % WORKING_WORDS.length;
+    dom.workingWord.classList.add('fading');
+    wordFadeTimer = window.setTimeout(() => {
+      dom.workingWord.textContent = currentWord();
+      dom.workingWord.classList.remove('fading');
+    }, WORD_FADE_MS);
+  }, WORD_INTERVAL_MS);
+}
+
+function stopWorkingWords(): void {
+  window.clearInterval(wordTimer);
+  window.clearTimeout(wordFadeTimer);
+  wordTimer = 0;
+  wordIndex = 0;
+  dom.workingWord.classList.remove('fading');
+}
+
+/** O estado vazio só aparece quando não há mensagem nem trabalho em andamento. */
+function updateEmptyState(): void {
+  dom.emptyState.hidden = messageCount > 0 || !dom.working.hidden || state?.chatType === 'web';
+}
+
+/**
+ * Barra acima do composer (o que o agente faz agora e com qual conta) e
+ * indicador no topo da conversa, que toma o lugar do estado vazio enquanto o
+ * trabalho corre.
+ */
 function renderActivity(activity: PrometheonViewState['activity']): void {
   const running = activity.phase !== 'idle';
   dom.activity.hidden = !running;
@@ -525,18 +683,33 @@ function renderActivity(activity: PrometheonViewState['activity']): void {
   dom.activityDetail.textContent = activity.detail ?? '';
   dom.activity.className = `activity phase-${activity.phase}`;
 
+  dom.working.hidden = !running || state?.chatType === 'web';
+  if (dom.working.hidden) {
+    stopWorkingWords();
+  } else {
+    startWorkingWords();
+  }
+  updateEmptyState();
+
   window.clearInterval(elapsedTimer);
   if (!running || activity.startedAt === null) {
     dom.activityElapsed.textContent = '';
+    dom.workingElapsed.textContent = '';
     return;
   }
   const startedAt = activity.startedAt;
   const tick = (): void => {
-    const seconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-    dom.activityElapsed.textContent = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    const elapsed = formatElapsed(Date.now() - startedAt);
+    dom.activityElapsed.textContent = elapsed;
+    dom.workingElapsed.textContent = elapsed;
   };
   tick();
   elapsedTimer = window.setInterval(tick, 1000);
+}
+
+function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 // ---------- Contas e uso ----------
@@ -548,29 +721,475 @@ function formatTokens(count: number): string {
   return count < 1_000_000 ? `${(count / 1000).toFixed(1)}k` : `${(count / 1_000_000).toFixed(1)}M`;
 }
 
-function openAccounts(): void {
+// ---------- Modal de configuração ----------
+
+const SECTION_LABELS: Record<SettingsSection, string> = {
+  accounts: 'Accounts',
+  agents: 'Agents',
+  workspace: 'Workspace',
+  mcp: 'MCP',
+};
+
+const SECTION_ICONS: Record<SettingsSection, string> = {
+  accounts: 'person',
+  agents: 'agent',
+  workspace: 'folder',
+  mcp: 'plug',
+};
+
+const ROLE_ICONS: Record<AgentRole, string> = {
+  orchestrator: 'agent-team',
+  planner: 'plan',
+  implementer: 'edit',
+  reviewer: 'check',
+  researcher: 'magnifier',
+  tester: 'beaker',
+  custom: 'sliders',
+};
+
+const CONTEXT_ICONS: Record<ContextStrategy, string> = {
+  isolated: 'box',
+  project: 'folder',
+  team: 'agent-team',
+};
+
+const AGENT_AUTONOMY_ICONS: Record<AgentAutonomyMode, string> = {
+  manual: 'manual',
+  auto: 'auto',
+  'bypass-temporary': 'bypass',
+};
+
+/** Rascunho do formulário de conta, preservado entre redesenhos do painel. */
+interface AccountDraft {
+  name: string;
+  providerId: string;
+}
+
+/** Rascunho de um Agent Profile. `id` nulo significa criação. */
+interface AgentDraft {
+  id: string | null;
+  name: string;
+  providerProfileId: string;
+  role: AgentRole;
+  model: string;
+  systemPrompt: string;
+  autonomyMode: AgentAutonomyMode;
+  allowedTools: string;
+  deniedTools: string;
+  maxConcurrentSessions: string;
+  contextStrategy: ContextStrategy;
+  enabled: boolean;
+}
+
+interface McpDraft {
+  /** Nome original quando estamos editando; nulo na criação. */
+  original: string | null;
+  name: string;
+  transport: McpTransport;
+  command: string;
+  /** Um argumento por linha, como o usuário digita. */
+  args: string;
+  /** `CHAVE=valor`, uma por linha. */
+  env: string;
+  url: string;
+  headers: string;
+  enabled: boolean;
+}
+
+let settingsSection: SettingsSection = 'accounts';
+let accountDraft: AccountDraft = { name: '', providerId: '' };
+let agentDraft: AgentDraft | null = null;
+let mcpDraft: McpDraft | null = null;
+/** Menus criados para a seção aberta; descartados a cada redesenho. */
+let sectionMenus: OptionMenu[] = [];
+
+function isSettingsOpen(): boolean {
+  return !dom.settingsModal.hidden;
+}
+
+function openSettings(section: SettingsSection = settingsSection, focus?: 'new'): void {
+  settingsSection = section;
+  dom.settingsModal.hidden = false;
+  dom.openSettingsModal.setAttribute('aria-expanded', 'true');
+  if (focus === 'new') {
+    // Abre já com o formulário da seção pronto para digitar.
+    if (section === 'agents') {
+      agentDraft = newAgentDraft(state?.accounts[0]?.profileId ?? '');
+    } else if (section === 'mcp') {
+      mcpDraft = newMcpDraft();
+    }
+  }
+  renderSettings();
+  const firstField = focus === 'new' ? firstInputFor(section) : null;
+  (firstField ?? dom.closeSettings).focus();
   // Desenha já com o que temos e pede a releitura: consultar o `auth status` de
   // cada CLI leva tempo, e abrir num painel vazio pareceria erro.
-  renderAccounts(state?.accounts ?? []);
-  dom.accountsModal.hidden = false;
-  dom.closeAccounts.focus();
   post({ type: 'accounts.refresh' });
+  post({ type: 'mcp.refresh' });
 }
 
-function closeAccounts(): void {
-  dom.accountsModal.hidden = true;
+/** Primeiro campo do formulário de criação da seção, quando ela tem um. */
+function firstInputFor(section: SettingsSection): HTMLInputElement | null {
+  const names: Partial<Record<SettingsSection, string>> = {
+    accounts: 'account-name',
+    agents: 'agent-name',
+    mcp: 'mcp-name',
+  };
+  const name = names[section];
+  return name === undefined
+    ? null
+    : dom.settingsPane.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
 }
 
-function renderAccounts(accounts: PrometheonViewState['accounts']): void {
-  if (accounts.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'accounts-empty';
-    empty.textContent =
-      'No account yet. Add one to give an agent its own CLI sign-in, isolated from the others.';
-    dom.accountsBody.replaceChildren(empty);
+function closeSettings(): void {
+  dom.settingsModal.hidden = true;
+  dom.openSettingsModal.setAttribute('aria-expanded', 'false');
+  for (const menu of sectionMenus) {
+    menu.destroy();
+  }
+  sectionMenus = [];
+}
+
+function selectSection(section: SettingsSection): void {
+  settingsSection = section;
+  renderSettings();
+  dom.settingsPane.focus();
+}
+
+/**
+ * Redesenha o modal inteiro a partir do snapshot e dos rascunhos. O foco e a
+ * posição do cursor são devolvidos ao campo que estava em uso: o estado chega
+ * de fora a qualquer momento e não pode interromper quem está digitando.
+ */
+function renderSettings(): void {
+  if (!isSettingsOpen()) {
     return;
   }
-  dom.accountsBody.replaceChildren(...accounts.map(renderAccount));
+  const active = document.activeElement;
+  const focusedField =
+    active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+      ? {
+          field: active.dataset['field'] ?? null,
+          start: active.selectionStart,
+          end: active.selectionEnd,
+        }
+      : null;
+
+  for (const menu of sectionMenus) {
+    menu.destroy();
+  }
+  sectionMenus = [];
+
+  renderSettingsNav();
+  dom.settingsPane.setAttribute('aria-label', SECTION_LABELS[settingsSection]);
+  dom.settingsPane.replaceChildren(...renderSection());
+
+  if (focusedField !== null && focusedField.field !== null) {
+    const restored = dom.settingsPane.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+      `[data-field="${focusedField.field}"]`,
+    );
+    if (restored !== null) {
+      restored.focus();
+      if (focusedField.start !== null && focusedField.end !== null) {
+        restored.setSelectionRange(focusedField.start, focusedField.end);
+      }
+    }
+  }
+}
+
+function renderSettingsNav(): void {
+  dom.settingsNav.replaceChildren(
+    ...SETTINGS_SECTIONS.map((section) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'settings-tab';
+      button.setAttribute('role', 'tab');
+      const active = section === settingsSection;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', String(active));
+
+      const glyph = document.createElement('span');
+      glyph.className = 'settings-tab-icon';
+      glyph.append(...nodes(icon(SECTION_ICONS[section])));
+
+      const label = document.createElement('span');
+      label.textContent = SECTION_LABELS[section];
+
+      button.append(glyph, label);
+      button.addEventListener('click', () => selectSection(section));
+      return button;
+    }),
+  );
+}
+
+function renderSection(): readonly Node[] {
+  switch (settingsSection) {
+    case 'accounts':
+      return renderAccountsSection();
+    case 'agents':
+      return renderAgentsSection();
+    case 'workspace':
+      return renderWorkspaceSection();
+    case 'mcp':
+      return renderMcpSection();
+  }
+}
+
+// ---------- Blocos reutilizados pelas seções ----------
+
+function sectionHeading(title: string, note?: string): HTMLElement {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'settings-heading';
+
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+  wrapper.append(heading);
+
+  if (note !== undefined) {
+    const text = document.createElement('p');
+    text.className = 'settings-note';
+    text.textContent = note;
+    wrapper.append(text);
+  }
+  return wrapper;
+}
+
+function emptyNote(text: string): HTMLElement {
+  const paragraph = document.createElement('p');
+  paragraph.className = 'settings-empty';
+  paragraph.textContent = text;
+  return paragraph;
+}
+
+/** Campo rotulado: rótulo em cima, controle embaixo, dica opcional. */
+function field(label: string, control: Node, hint?: string): HTMLElement {
+  const wrapper = document.createElement('label');
+  wrapper.className = 'field';
+
+  const caption = document.createElement('span');
+  caption.className = 'field-label';
+  caption.textContent = label;
+  wrapper.append(caption, control);
+
+  if (hint !== undefined) {
+    const note = document.createElement('span');
+    note.className = 'field-hint';
+    note.textContent = hint;
+    wrapper.append(note);
+  }
+  return wrapper;
+}
+
+function textInput(options: {
+  readonly name: string;
+  readonly value: string;
+  readonly placeholder?: string;
+  readonly maxLength?: number;
+  readonly onInput: (value: string) => void;
+}): HTMLInputElement {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'field-input';
+  input.dataset['field'] = options.name;
+  input.value = options.value;
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  if (options.placeholder !== undefined) {
+    input.placeholder = options.placeholder;
+  }
+  if (options.maxLength !== undefined) {
+    input.maxLength = options.maxLength;
+  }
+  input.addEventListener('input', () => options.onInput(input.value));
+  return input;
+}
+
+function textArea(options: {
+  readonly name: string;
+  readonly value: string;
+  readonly placeholder?: string;
+  readonly maxLength: number;
+  readonly onInput: (value: string) => void;
+}): HTMLTextAreaElement {
+  const area = document.createElement('textarea');
+  area.className = 'field-input field-textarea';
+  area.dataset['field'] = options.name;
+  area.rows = 3;
+  area.value = options.value;
+  area.maxLength = options.maxLength;
+  if (options.placeholder !== undefined) {
+    area.placeholder = options.placeholder;
+  }
+  area.addEventListener('input', () => options.onInput(area.value));
+  return area;
+}
+
+function checkboxField(
+  label: string,
+  checked: boolean,
+  onChange: (value: boolean) => void,
+): HTMLElement {
+  const wrapper = document.createElement('label');
+  wrapper.className = 'field field-inline';
+
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.checked = checked;
+  box.addEventListener('change', () => onChange(box.checked));
+
+  const caption = document.createElement('span');
+  caption.className = 'field-label';
+  caption.textContent = label;
+
+  wrapper.append(box, caption);
+  return wrapper;
+}
+
+/** Menu de seleção dentro de um campo, registrado para ser descartado depois. */
+function menuField(
+  label: string,
+  options: readonly MenuOption[],
+  selected: string,
+  onSelect: (value: string) => void,
+  hint?: string,
+): HTMLElement {
+  const created = createOptionMenu(label, options, selected, onSelect);
+  sectionMenus.push(created.menu);
+  // `label` embrulhando um menu roubaria o clique do botão; aqui é um bloco.
+  const wrapper = document.createElement('div');
+  wrapper.className = 'field';
+
+  const caption = document.createElement('span');
+  caption.className = 'field-label';
+  caption.textContent = label;
+  wrapper.append(caption, created.root);
+
+  if (hint !== undefined) {
+    const note = document.createElement('span');
+    note.className = 'field-hint';
+    note.textContent = hint;
+    wrapper.append(note);
+  }
+  return wrapper;
+}
+
+function actionRow(...buttons: readonly HTMLElement[]): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'field-actions';
+  row.append(...buttons);
+  return row;
+}
+
+function actionButton(
+  label: string,
+  variant: 'primary' | 'ghost' | 'link',
+  onClick: () => void,
+): HTMLButtonElement {
+  const control = document.createElement('button');
+  control.type = 'button';
+  control.className = variant;
+  control.textContent = label;
+  control.addEventListener('click', onClick);
+  return control;
+}
+
+/** Aviso âmbar: algo precisa de atenção, sem ser um erro do usuário. */
+function warningNote(text: string): HTMLElement {
+  const note = document.createElement('p');
+  note.className = 'settings-warning';
+  note.textContent = text;
+  return note;
+}
+
+// ---------- Seção Accounts ----------
+
+function renderAccountsSection(): readonly Node[] {
+  const accounts = state?.accounts ?? [];
+  const providers = state?.providers ?? [];
+  const blocks: Node[] = [
+    sectionHeading(
+      'Accounts',
+      'Each account is a separate CLI sign-in with its own configuration directory. Signing in always happens through the official CLI flow.',
+    ),
+  ];
+
+  if (accounts.length === 0) {
+    blocks.push(
+      emptyNote(
+        'No account yet. Create one to give an agent its own CLI sign-in, isolated from the others.',
+      ),
+    );
+  } else {
+    blocks.push(...accounts.map(renderAccount));
+  }
+
+  blocks.push(
+    renderAccountForm(providers),
+    emptyNote(
+      'Token counts are measured by Prometheon on this machine. Subscription limits live in each provider account and are not read from here.',
+    ),
+  );
+  return blocks;
+}
+
+function renderAccountForm(providers: PrometheonViewState['providers']): HTMLElement {
+  const form = document.createElement('section');
+  form.className = 'settings-form';
+  form.append(sectionHeading('New account'));
+
+  if (providers.length === 0) {
+    form.append(emptyNote('No provider adapter is available yet.'));
+    return form;
+  }
+
+  const selected = providers.find((provider) => provider.id === accountDraft.providerId) ??
+    providers[0];
+  if (selected !== undefined && accountDraft.providerId !== selected.id) {
+    accountDraft = { ...accountDraft, providerId: selected.id };
+  }
+
+  form.append(
+    field(
+      'Name',
+      textInput({
+        name: 'account-name',
+        value: accountDraft.name,
+        placeholder: 'Mateus27',
+        maxLength: MAX_PROFILE_NAME_LENGTH,
+        onInput: (value) => {
+          accountDraft = { ...accountDraft, name: value };
+        },
+      }),
+      'A name to tell this account apart from the others.',
+    ),
+    menuField(
+      'Provider',
+      providers.map((provider) => ({
+        value: provider.id,
+        label: provider.name,
+        description: `Isolated through ${provider.configEnvironmentVariable}`,
+        icon: 'cloud',
+      })),
+      accountDraft.providerId,
+      (value) => {
+        accountDraft = { ...accountDraft, providerId: value };
+        renderSettings();
+      },
+    ),
+    actionRow(
+      actionButton('Create account', 'primary', () => {
+        const name = accountDraft.name.trim();
+        if (name === '' || accountDraft.providerId === '') {
+          showNotification('Give the account a name before creating it.', 'warning');
+          return;
+        }
+        post({ type: 'accounts.create', payload: { name, providerId: accountDraft.providerId } });
+        accountDraft = { ...accountDraft, name: '' };
+        renderSettings();
+      }),
+    ),
+  );
+  return form;
 }
 
 function renderAccount(account: PrometheonViewState['accounts'][number]): HTMLElement {
@@ -649,6 +1268,717 @@ function renderAccount(account: PrometheonViewState['accounts'][number]): HTMLEl
   );
   card.append(actions);
   return card;
+}
+
+// ---------- Seção Agents ----------
+
+function newAgentDraft(providerProfileId: string): AgentDraft {
+  return {
+    id: null,
+    name: '',
+    providerProfileId,
+    role: 'implementer',
+    model: '',
+    systemPrompt: '',
+    autonomyMode: 'manual',
+    allowedTools: '',
+    deniedTools: '',
+    maxConcurrentSessions: '1',
+    contextStrategy: 'project',
+    enabled: true,
+  };
+}
+
+function draftFromSummary(summary: AgentProfileSummary): AgentDraft {
+  const profile = summary.profile;
+  return {
+    id: profile.id,
+    name: profile.name,
+    providerProfileId: profile.providerProfileId,
+    role: profile.role,
+    model: profile.model ?? '',
+    systemPrompt: profile.systemPrompt ?? '',
+    autonomyMode: profile.autonomyMode,
+    allowedTools: profile.allowedTools.join(', '),
+    deniedTools: profile.deniedTools.join(', '),
+    maxConcurrentSessions: String(profile.maxConcurrentSessions),
+    contextStrategy: profile.contextStrategy,
+    enabled: profile.enabled,
+  };
+}
+
+/** Lista separada por vírgula ou quebra de linha, sem itens vazios. */
+function splitList(value: string): string[] {
+  return value
+    .split(/[,\n]/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '');
+}
+
+function renderAgentsSection(): readonly Node[] {
+  const profiles = state?.agentProfiles ?? [];
+  const accounts = state?.accounts ?? [];
+  const blocks: Node[] = [
+    sectionHeading(
+      'Agent Profiles',
+      'Every agent runs through one account. Prometheon never falls back to another one when the bound account is unavailable.',
+    ),
+  ];
+
+  if (accounts.length === 0) {
+    blocks.push(
+      emptyNote('An agent profile needs an account. Create one first, then come back here.'),
+      actionRow(actionButton('Go to Accounts', 'ghost', () => selectSection('accounts'))),
+    );
+    return blocks;
+  }
+
+  blocks.push(
+    profiles.length === 0
+      ? emptyNote('No agent profile yet.')
+      : fragment(profiles.map(renderAgentProfile)),
+  );
+
+  if (agentDraft === null) {
+    const firstAccount = accounts[0];
+    blocks.push(
+      actionRow(
+        actionButton('New agent profile', 'primary', () => {
+          agentDraft = newAgentDraft(firstAccount?.profileId ?? '');
+          renderSettings();
+        }),
+      ),
+    );
+  } else {
+    blocks.push(renderAgentForm(agentDraft, accounts));
+  }
+  return blocks;
+}
+
+function fragment(children: readonly Node[]): DocumentFragment {
+  const parent = document.createDocumentFragment();
+  parent.append(...children);
+  return parent;
+}
+
+function renderAgentProfile(summary: AgentProfileSummary): HTMLElement {
+  const profile = summary.profile;
+  const card = document.createElement('section');
+  card.className = `account agent-profile ${profile.enabled ? 'enabled' : 'disabled'}`;
+
+  const header = document.createElement('header');
+  const name = document.createElement('span');
+  name.className = 'account-name';
+  name.textContent = profile.name;
+
+  const role = document.createElement('span');
+  role.className = 'account-state';
+  role.textContent = AGENT_ROLE_LABELS[profile.role];
+
+  header.append(name, role);
+  card.append(header);
+
+  // `Agent → Provider → Account`: o documento exige que a conta usada nunca
+  // fique escondida.
+  const chain = document.createElement('p');
+  chain.className = 'agent-chain';
+  chain.textContent = `${profile.name} → ${summary.providerName ?? 'unknown provider'} → ${summary.accountName ?? profile.providerProfileId}`;
+  card.append(chain);
+
+  const rows: [string, string][] = [
+    ['Model', profile.model ?? 'Chosen by the CLI'],
+    ['Autonomy', AGENT_AUTONOMY_MODE_LABELS[profile.autonomyMode]],
+    ['Context', CONTEXT_STRATEGY_LABELS[profile.contextStrategy]],
+    ['Max sessions', String(profile.maxConcurrentSessions)],
+  ];
+  if (profile.allowedTools.length > 0) {
+    rows.push(['Allowed tools', profile.allowedTools.join(', ')]);
+  }
+  if (profile.deniedTools.length > 0) {
+    rows.push(['Denied tools', profile.deniedTools.join(', ')]);
+  }
+  card.append(definitionList(rows));
+
+  if (summary.warning !== undefined) {
+    card.append(warningNote(summary.warning));
+  }
+
+  card.append(
+    actionRow(
+      actionButton('Edit', 'ghost', () => {
+        agentDraft = draftFromSummary(summary);
+        renderSettings();
+      }),
+      actionButton(profile.enabled ? 'Disable' : 'Enable', 'ghost', () =>
+        post({
+          type: 'agentProfiles.setEnabled',
+          payload: { id: profile.id, enabled: !profile.enabled },
+        }),
+      ),
+      actionButton('Remove', 'ghost', () =>
+        post({ type: 'agentProfiles.remove', payload: { id: profile.id } }),
+      ),
+    ),
+  );
+  return card;
+}
+
+function renderAgentForm(
+  draft: AgentDraft,
+  accounts: PrometheonViewState['accounts'],
+): HTMLElement {
+  const form = document.createElement('section');
+  form.className = 'settings-form';
+  form.append(sectionHeading(draft.id === null ? 'New agent profile' : `Edit ${draft.name}`));
+
+  const update = (patch: Partial<AgentDraft>, redraw = false): void => {
+    agentDraft = { ...draft, ...patch };
+    if (redraw) {
+      renderSettings();
+    }
+  };
+
+  form.append(
+    field(
+      'Name',
+      textInput({
+        name: 'agent-name',
+        value: draft.name,
+        placeholder: 'Code Reviewer',
+        maxLength: MAX_PROFILE_NAME_LENGTH,
+        onInput: (value) => update({ name: value }),
+      }),
+    ),
+    menuField(
+      'Account',
+      accounts.map((account) => ({
+        value: account.profileId,
+        label: account.name,
+        description: account.authenticated
+          ? `${account.providerName} · signed in`
+          : `${account.providerName} · not signed in`,
+        icon: 'cloud',
+      })),
+      draft.providerProfileId,
+      (value) => update({ providerProfileId: value }, true),
+      'The account this agent runs through. It is required.',
+    ),
+    menuField(
+      'Role',
+      AGENT_ROLES.map((role) => ({
+        value: role,
+        label: AGENT_ROLE_LABELS[role],
+        description: AGENT_ROLE_DESCRIPTIONS[role],
+        icon: ROLE_ICONS[role],
+      })),
+      draft.role,
+      (value) => update({ role: value as AgentRole }, true),
+    ),
+    field(
+      'Model',
+      textInput({
+        name: 'agent-model',
+        value: draft.model,
+        placeholder: 'Leave empty to use the CLI default',
+        maxLength: MAX_MODEL_LENGTH,
+        onInput: (value) => update({ model: value }),
+      }),
+      'Free text: Prometheon does not list models. The CLI validates it when the agent runs.',
+    ),
+    field(
+      'System prompt',
+      textArea({
+        name: 'agent-prompt',
+        value: draft.systemPrompt,
+        placeholder: 'How this agent should behave.',
+        maxLength: MAX_SYSTEM_PROMPT_LENGTH,
+        onInput: (value) => update({ systemPrompt: value }),
+      }),
+    ),
+    menuField(
+      'Autonomy',
+      AGENT_AUTONOMY_MODES.map((mode) => ({
+        value: mode,
+        label: AGENT_AUTONOMY_MODE_LABELS[mode],
+        description: AGENT_AUTONOMY_MODE_DESCRIPTIONS[mode],
+        icon: AGENT_AUTONOMY_ICONS[mode],
+      })),
+      draft.autonomyMode,
+      (value) => update({ autonomyMode: value as AgentAutonomyMode }, true),
+    ),
+    menuField(
+      'Context strategy',
+      CONTEXT_STRATEGIES.map((strategy) => ({
+        value: strategy,
+        label: CONTEXT_STRATEGY_LABELS[strategy],
+        description: CONTEXT_STRATEGY_DESCRIPTIONS[strategy],
+        icon: CONTEXT_ICONS[strategy],
+      })),
+      draft.contextStrategy,
+      (value) => update({ contextStrategy: value as ContextStrategy }, true),
+    ),
+    field(
+      'Allowed tools',
+      textInput({
+        name: 'agent-allowed',
+        value: draft.allowedTools,
+        placeholder: 'Read, Grep, Bash',
+        onInput: (value) => update({ allowedTools: value }),
+      }),
+      'Comma separated. Empty means the provider default.',
+    ),
+    field(
+      'Denied tools',
+      textInput({
+        name: 'agent-denied',
+        value: draft.deniedTools,
+        placeholder: 'Bash, Write',
+        onInput: (value) => update({ deniedTools: value }),
+      }),
+      'Comma separated.',
+    ),
+    field(
+      'Max concurrent sessions',
+      textInput({
+        name: 'agent-sessions',
+        value: draft.maxConcurrentSessions,
+        placeholder: '1',
+        maxLength: 2,
+        onInput: (value) => update({ maxConcurrentSessions: value }),
+      }),
+      `Between 1 and ${MAX_CONCURRENT_SESSIONS}.`,
+    ),
+    checkboxField('Enabled', draft.enabled, (value) => update({ enabled: value })),
+    actionRow(
+      actionButton(draft.id === null ? 'Create agent' : 'Save agent', 'primary', () =>
+        submitAgentDraft(),
+      ),
+      actionButton('Cancel', 'ghost', () => {
+        agentDraft = null;
+        renderSettings();
+      }),
+    ),
+  );
+  return form;
+}
+
+function submitAgentDraft(): void {
+  const draft = agentDraft;
+  if (draft === null) {
+    return;
+  }
+  const name = draft.name.trim();
+  if (name === '') {
+    showNotification('Give the agent profile a name.', 'warning');
+    return;
+  }
+  if (draft.providerProfileId === '') {
+    showNotification('Pick the account this agent runs through.', 'warning');
+    return;
+  }
+  const sessions = Number(draft.maxConcurrentSessions);
+  if (!Number.isInteger(sessions) || sessions < 1 || sessions > MAX_CONCURRENT_SESSIONS) {
+    showNotification(`Max concurrent sessions must be between 1 and ${MAX_CONCURRENT_SESSIONS}.`, 'warning');
+    return;
+  }
+
+  const model = draft.model.trim();
+  const systemPrompt = draft.systemPrompt.trim();
+  const profile: AgentProfileDraft = {
+    name,
+    providerProfileId: draft.providerProfileId,
+    role: draft.role,
+    ...(model === '' ? {} : { model }),
+    ...(systemPrompt === '' ? {} : { systemPrompt }),
+    autonomyMode: draft.autonomyMode,
+    allowedTools: splitList(draft.allowedTools),
+    deniedTools: splitList(draft.deniedTools),
+    maxConcurrentSessions: sessions,
+    contextStrategy: draft.contextStrategy,
+    enabled: draft.enabled,
+  };
+
+  post(
+    draft.id === null
+      ? { type: 'agentProfiles.create', payload: { profile } }
+      : { type: 'agentProfiles.update', payload: { id: draft.id, profile } },
+  );
+  agentDraft = null;
+  renderSettings();
+}
+
+// ---------- Seção Workspace ----------
+
+function renderWorkspaceSection(): readonly Node[] {
+  const workspace = state?.workspace;
+  const blocks: Node[] = [
+    sectionHeading(
+      'Workspace',
+      'The shared Prometheon workspace lives in .prometheon/ inside the open folder. Local Chat works without it.',
+    ),
+  ];
+
+  if (workspace !== undefined) {
+    blocks.push(
+      definitionList([
+        ['Folder', workspace.folderName ?? 'None open'],
+        ['Configured', workspace.configured ? 'Yes' : 'No'],
+        ['Git repository', workspace.hasGit ? 'Detected' : 'Not detected'],
+        ['External folder', workspace.externalFolder ?? 'None'],
+        ['Setup skipped', workspace.skipped ? 'Yes' : 'No'],
+      ]),
+    );
+  }
+
+  blocks.push(
+    actionRow(
+      actionButton('Initialize in current workspace', 'primary', () =>
+        post({ type: 'workspace.initialize', payload: { choice: 'current' } }),
+      ),
+      actionButton('Choose Prometheon workspace folder', 'ghost', () =>
+        post({ type: 'workspace.initialize', payload: { choice: 'external' } }),
+      ),
+      actionButton('Continue without shared workspace', 'link', () =>
+        post({ type: 'workspace.initialize', payload: { choice: 'skip' } }),
+      ),
+    ),
+  );
+  return blocks;
+}
+
+// ---------- Seção MCP ----------
+
+function newMcpDraft(): McpDraft {
+  return {
+    original: null,
+    name: '',
+    transport: 'stdio',
+    command: '',
+    args: '',
+    env: '',
+    url: '',
+    headers: '',
+    enabled: true,
+  };
+}
+
+function draftFromServer(server: McpServerSummary): McpDraft {
+  return {
+    original: server.name,
+    name: server.name,
+    transport: server.transport,
+    command: server.command ?? '',
+    args: server.args.join('\n'),
+    env: pairsToText(server.env),
+    url: server.url ?? '',
+    headers: pairsToText(server.headers),
+    enabled: server.enabled,
+  };
+}
+
+function pairsToText(pairs: readonly McpKeyValue[]): string {
+  return pairs.map((pair) => `${pair.key}=${pair.value}`).join('\n');
+}
+
+/** `CHAVE=valor` por linha. O primeiro `=` separa; o resto faz parte do valor. */
+function textToPairs(value: string): McpKeyValue[] {
+  const pairs: McpKeyValue[] = [];
+  for (const line of value.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '') {
+      continue;
+    }
+    const separator = trimmed.indexOf('=');
+    if (separator <= 0) {
+      continue;
+    }
+    const key = trimmed.slice(0, separator).trim();
+    if (key !== '' && !pairs.some((pair) => pair.key === key)) {
+      pairs.push({ key, value: trimmed.slice(separator + 1).trim() });
+    }
+  }
+  return pairs;
+}
+
+const MCP_SECRET_NOTE =
+  'This file lives at the root of the project and usually goes into Git. Keep tokens out of it: put the value in an environment variable and reference it by name, like ${GITHUB_TOKEN}.';
+
+function renderMcpSection(): readonly Node[] {
+  const mcp = state?.mcp;
+  const blocks: Node[] = [
+    sectionHeading(
+      'MCP servers',
+      'Model Context Protocol servers of this project, read from .mcp.json — the same file Claude Code, Cursor and VS Code use.',
+    ),
+  ];
+
+  if (mcp === undefined || !mcp.available) {
+    blocks.push(
+      emptyNote(
+        mcp?.message ??
+          'MCP servers are configured in .mcp.json at the root of the open folder. Open a folder to configure them.',
+      ),
+      actionRow(actionButton('Go to Workspace', 'ghost', () => selectSection('workspace'))),
+    );
+    return blocks;
+  }
+
+  if (mcp.file !== null) {
+    const path = document.createElement('code');
+    path.className = 'account-directory';
+    path.textContent = mcp.exists ? mcp.file : `${mcp.file} (not created yet)`;
+    path.title = mcp.file;
+    blocks.push(path);
+  }
+  blocks.push(emptyNote(MCP_SECRET_NOTE));
+
+  for (const problem of mcp.problems) {
+    blocks.push(warningNote(`${problem.name}: ${problem.detail}`));
+  }
+
+  blocks.push(
+    mcp.servers.length === 0
+      ? emptyNote('No MCP server configured yet.')
+      : fragment(mcp.servers.map(renderMcpServer)),
+  );
+
+  if (mcpDraft === null) {
+    blocks.push(
+      actionRow(
+        actionButton('Add server', 'primary', () => {
+          mcpDraft = newMcpDraft();
+          renderSettings();
+        }),
+        // A leitura do arquivo escolhido acontece na extensão: a webview só pede.
+        actionButton('Import from .mcp.json', 'ghost', () => post({ type: 'mcp.import' })),
+      ),
+    );
+  } else {
+    blocks.push(renderMcpForm(mcpDraft));
+  }
+  return blocks;
+}
+
+function renderMcpServer(server: McpServerSummary): HTMLElement {
+  const card = document.createElement('section');
+  card.className = `account mcp-server ${server.enabled ? 'enabled' : 'disabled'}`;
+
+  const header = document.createElement('header');
+  const name = document.createElement('span');
+  name.className = 'account-name';
+  name.textContent = server.name;
+
+  const status = document.createElement('span');
+  status.className = 'account-state';
+  status.textContent = server.enabled ? 'Enabled' : 'Disabled';
+
+  header.append(name, status);
+  card.append(header);
+
+  const rows: [string, string][] = [['Transport', MCP_TRANSPORT_LABELS[server.transport]]];
+  if (server.command !== undefined) {
+    rows.push(['Command', server.command]);
+  }
+  if (server.args.length > 0) {
+    rows.push(['Arguments', server.args.join(' ')]);
+  }
+  if (server.url !== undefined) {
+    rows.push(['URL', server.url]);
+  }
+  if (server.env.length > 0) {
+    rows.push(['Environment', server.env.map((pair) => pair.key).join(', ')]);
+  }
+  if (server.headers.length > 0) {
+    rows.push(['Headers', server.headers.map((pair) => pair.key).join(', ')]);
+  }
+  if (server.preservedFields.length > 0) {
+    rows.push(['Kept as is', server.preservedFields.join(', ')]);
+  }
+  card.append(definitionList(rows));
+
+  for (const warning of server.warnings) {
+    card.append(warningNote(warning));
+  }
+
+  card.append(
+    actionRow(
+      actionButton('Edit', 'ghost', () => {
+        mcpDraft = draftFromServer(server);
+        renderSettings();
+      }),
+      actionButton(server.enabled ? 'Disable' : 'Enable', 'ghost', () =>
+        post({ type: 'mcp.setEnabled', payload: { name: server.name, enabled: !server.enabled } }),
+      ),
+      actionButton('Remove', 'ghost', () =>
+        post({ type: 'mcp.remove', payload: { name: server.name } }),
+      ),
+    ),
+  );
+  return card;
+}
+
+function renderMcpForm(draft: McpDraft): HTMLElement {
+  const form = document.createElement('section');
+  form.className = 'settings-form';
+  form.append(sectionHeading(draft.original === null ? 'New MCP server' : `Edit ${draft.original}`));
+
+  const update = (patch: Partial<McpDraft>, redraw = false): void => {
+    mcpDraft = { ...draft, ...patch };
+    if (redraw) {
+      renderSettings();
+    }
+  };
+
+  // O nome é a chave da entrada no arquivo; trocá-lo seria remover e recriar.
+  const nameInput = textInput({
+    name: 'mcp-name',
+    value: draft.name,
+    placeholder: 'filesystem',
+    maxLength: MAX_MCP_NAME_LENGTH,
+    onInput: (value) => update({ name: value }),
+  });
+  nameInput.disabled = draft.original !== null;
+
+  form.append(
+    field(
+      'Name',
+      nameInput,
+      draft.original === null
+        ? 'Letters, digits, dot, dash and underscore. It is the key inside .mcp.json.'
+        : 'To rename a server, remove it and add it again.',
+    ),
+    menuField(
+      'Transport',
+      MCP_TRANSPORTS.map((transport) => ({
+        value: transport,
+        label: MCP_TRANSPORT_LABELS[transport],
+        description: MCP_TRANSPORT_DESCRIPTIONS[transport],
+        icon: transport === 'stdio' ? 'plug' : 'cloud',
+      })),
+      draft.transport,
+      (value) => update({ transport: value as McpTransport }, true),
+    ),
+  );
+
+  if (draft.transport === 'stdio') {
+    form.append(
+      field(
+        'Command',
+        textInput({
+          name: 'mcp-command',
+          value: draft.command,
+          placeholder: 'npx',
+          maxLength: MAX_MCP_COMMAND_LENGTH,
+          onInput: (value) => update({ command: value }),
+        }),
+      ),
+      field(
+        'Arguments',
+        textArea({
+          name: 'mcp-args',
+          value: draft.args,
+          placeholder: '-y\n@modelcontextprotocol/server-filesystem\n.',
+          maxLength: 4_000,
+          onInput: (value) => update({ args: value }),
+        }),
+        'One argument per line.',
+      ),
+      field(
+        'Environment',
+        textArea({
+          name: 'mcp-env',
+          value: draft.env,
+          placeholder: 'GITHUB_TOKEN=${GITHUB_TOKEN}',
+          maxLength: 4_000,
+          onInput: (value) => update({ env: value }),
+        }),
+        'KEY=value, one per line. Reference secrets by variable name, never by value.',
+      ),
+    );
+  } else {
+    form.append(
+      field(
+        'URL',
+        textInput({
+          name: 'mcp-url',
+          value: draft.url,
+          placeholder: 'http://127.0.0.1:3550/mcp',
+          maxLength: MAX_MCP_URL_LENGTH,
+          onInput: (value) => update({ url: value }),
+        }),
+        'Must start with http:// or https://.',
+      ),
+      field(
+        'Headers',
+        textArea({
+          name: 'mcp-headers',
+          value: draft.headers,
+          placeholder: 'Authorization=${MCP_TOKEN}',
+          maxLength: 4_000,
+          onInput: (value) => update({ headers: value }),
+        }),
+        'Header=value, one per line. Reference secrets by variable name, never by value.',
+      ),
+    );
+  }
+
+  form.append(
+    checkboxField('Enabled', draft.enabled, (value) => update({ enabled: value })),
+    actionRow(
+      actionButton(draft.original === null ? 'Add server' : 'Save server', 'primary', () =>
+        submitMcpDraft(),
+      ),
+      actionButton('Cancel', 'ghost', () => {
+        mcpDraft = null;
+        renderSettings();
+      }),
+    ),
+  );
+  return form;
+}
+
+function submitMcpDraft(): void {
+  const draft = mcpDraft;
+  if (draft === null) {
+    return;
+  }
+  const name = draft.name.trim();
+  if (name === '') {
+    showNotification('Give the MCP server a name.', 'warning');
+    return;
+  }
+
+  const base = { name, transport: draft.transport, enabled: draft.enabled };
+  let server: McpServerDraft;
+
+  if (draft.transport === 'stdio') {
+    const command = draft.command.trim();
+    if (command === '') {
+      showNotification('A stdio server needs a command.', 'warning');
+      return;
+    }
+    server = {
+      ...base,
+      command,
+      args: draft.args
+        .split('\n')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== ''),
+      env: textToPairs(draft.env),
+      headers: [],
+    };
+  } else {
+    const url = draft.url.trim();
+    if (url === '') {
+      showNotification(`A ${draft.transport} server needs a URL.`, 'warning');
+      return;
+    }
+    server = { ...base, args: [], env: [], url, headers: textToPairs(draft.headers) };
+  }
+
+  post({ type: 'mcp.save', payload: { server } });
+  mcpDraft = null;
+  renderSettings();
 }
 
 function tokenPair(usage: { input: number; output: number }): string {
@@ -853,6 +2183,108 @@ function renderSessionItem(session: ConversationSummary): HTMLElement {
   return item;
 }
 
+// ---------- Passos do agente ----------
+
+/**
+ * Item de timeline de um passo do agente. Tudo entra por `textContent`: o bloco
+ * de saída é texto monoespaçado, sem destaque de sintaxe e sem `innerHTML`.
+ */
+function renderStep(step: AgentStep): HTMLElement {
+  const dot = document.createElement('span');
+  dot.className = 'step-dot';
+
+  if (step.kind === 'thought') {
+    const item = document.createElement('div');
+    item.className = 'step step-thought step-row status-done';
+    const label = document.createElement('span');
+    label.className = 'step-thought-label';
+    label.textContent = `Thought for ${formatElapsed(step.durationMs ?? 0)}`;
+    item.append(dot, label);
+    return item;
+  }
+
+  const tool = document.createElement('span');
+  tool.className = 'step-tool';
+  tool.textContent = step.tool;
+
+  const target = document.createElement('span');
+  target.className = 'step-target';
+  target.textContent = step.title;
+
+  const detail = document.createElement('span');
+  detail.className = 'step-detail';
+  detail.textContent = step.detail ?? '';
+
+  const hasOutput = step.output !== undefined && step.output !== '';
+  if (!hasOutput) {
+    const item = document.createElement('div');
+    item.className = `step step-tool-item step-row status-${step.status}`;
+    item.append(dot, tool, target, detail);
+    return item;
+  }
+
+  const item = document.createElement('details');
+  item.className = `step step-tool-item status-${step.status}`;
+
+  const summary = document.createElement('summary');
+  summary.className = 'step-row';
+  const caret = document.createElement('span');
+  caret.className = 'step-caret';
+  caret.append(...nodes(icon('chevronRight')));
+  summary.append(dot, tool, target, detail, caret);
+
+  const output = document.createElement('pre');
+  output.className = 'step-output';
+  output.textContent = step.output ?? '';
+
+  item.append(summary, output);
+  if (step.truncated === true) {
+    const note = document.createElement('span');
+    note.className = 'step-truncated';
+    note.textContent = `Output truncated at ${Math.round(MAX_STEP_OUTPUT_CHARS / 1024)} KB`;
+    item.append(note);
+  }
+  return item;
+}
+
+/** Faixa de passos de uma mensagem; nasce vazia e escondida. */
+function renderStepList(message: ChatMessage): HTMLElement {
+  const list = document.createElement('div');
+  list.className = 'steps';
+  const steps = message.steps ?? [];
+  list.hidden = steps.length === 0;
+  for (const step of steps) {
+    const node = renderStep(step);
+    stepNodes.set(`${message.id}:${step.id}`, node);
+    list.append(node);
+  }
+  stepContainers.set(message.id, list);
+  return list;
+}
+
+/** Insere ou substitui um passo, preservando o bloco que o usuário abriu. */
+function upsertStep(messageId: string, step: AgentStep): void {
+  const container = stepContainers.get(messageId);
+  if (container === undefined) {
+    return;
+  }
+  container.hidden = false;
+
+  const key = `${messageId}:${step.id}`;
+  const node = renderStep(step);
+  const previous = stepNodes.get(key);
+  if (previous === undefined) {
+    container.append(node);
+  } else {
+    if (previous instanceof HTMLDetailsElement && node instanceof HTMLDetailsElement) {
+      node.open = previous.open;
+    }
+    previous.replaceWith(node);
+  }
+  stepNodes.set(key, node);
+  scrollToEnd();
+}
+
 // ---------- Mensagens ----------
 
 /** Monta o elemento de uma mensagem. Conteúdo sempre via textContent. */
@@ -891,7 +2323,8 @@ function renderMessage(message: ChatMessage): HTMLElement {
   body.className = 'content';
   body.textContent = message.content;
 
-  item.append(header, body);
+  // Os passos vêm antes da resposta: é a ordem em que o trabalho aconteceu.
+  item.append(header, renderStepList(message), body);
 
   const attachments = message.attachments ?? [];
   if (attachments.length > 0) {
@@ -920,8 +2353,11 @@ function capitalize(value: string): string {
 
 function renderMessages(messages: readonly ChatMessage[]): void {
   contentNodes.clear();
+  stepContainers.clear();
+  stepNodes.clear();
   dom.messages.replaceChildren(...messages.map(renderMessage));
-  dom.emptyState.hidden = messages.length > 0;
+  messageCount = messages.length;
+  updateEmptyState();
   scrollToEnd();
 }
 
@@ -1017,7 +2453,7 @@ function render(next: PrometheonViewState): void {
   dom.agentsSection.hidden = isWeb;
 
   if (isWeb) {
-    dom.emptyState.hidden = true;
+    updateEmptyState();
   } else {
     renderMessages(next.messages);
   }
@@ -1061,9 +2497,7 @@ function render(next: PrometheonViewState): void {
   }
 
   renderActivity(next.activity);
-  if (!dom.accountsModal.hidden) {
-    renderAccounts(next.accounts);
-  }
+  renderSettings();
   renderDictation(next.speech);
   dom.input.disabled = isWeb;
   dom.attachImage.disabled = isWeb || drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE;
@@ -1081,14 +2515,22 @@ function applyChatEvent(event: Extract<ExtensionToWebviewMessage, { type: 'chat.
   switch (payload.type) {
     case 'run.started':
       currentRunId = payload.runId;
-      dom.emptyState.hidden = true;
       dom.messages.append(renderMessage(payload.message));
+      messageCount += 1;
+      updateEmptyState();
       scrollToEnd();
       break;
 
     case 'message.created':
       dom.messages.append(renderMessage(payload.message));
+      messageCount += 1;
+      updateEmptyState();
       scrollToEnd();
+      break;
+
+    case 'step.started':
+    case 'step.completed':
+      upsertStep(payload.messageId, payload.step);
       break;
 
     case 'message.delta': {
@@ -1138,7 +2580,8 @@ function showNotification(text: string, level: 'info' | 'warning' | 'error'): vo
   body.textContent = text;
   item.append(body);
   dom.messages.append(item);
-  dom.emptyState.hidden = true;
+  messageCount += 1;
+  updateEmptyState();
   scrollToEnd();
 }
 
@@ -1225,18 +2668,17 @@ dom.stopRun.addEventListener('click', () => {
 });
 
 dom.clearChat.addEventListener('click', () => post({ type: 'chat.clearLocal' }));
-dom.openSettings.addEventListener('click', () => post({ type: 'settings.open' }));
+dom.openSettings.addEventListener('click', () => post({ type: 'settings.openEditor' }));
 dom.connectHub.addEventListener('click', () => post({ type: 'hub.connect.request' }));
 
-dom.openAccounts.addEventListener('click', (event) => {
+dom.openSettingsModal.addEventListener('click', (event) => {
   event.stopPropagation();
-  openAccounts();
+  openSettings();
 });
-dom.closeAccounts.addEventListener('click', closeAccounts);
-dom.addAccount.addEventListener('click', () => post({ type: 'accounts.add' }));
-dom.accountsModal.addEventListener('click', (event) => {
-  if (event.target === dom.accountsModal) {
-    closeAccounts();
+dom.closeSettings.addEventListener('click', closeSettings);
+dom.settingsModal.addEventListener('click', (event) => {
+  if (event.target === dom.settingsModal) {
+    closeSettings();
   }
 });
 
@@ -1295,8 +2737,9 @@ document.addEventListener('keydown', (event) => {
     closeLightbox();
     return;
   }
-  if (!dom.accountsModal.hidden) {
-    closeAccounts();
+  if (isSettingsOpen()) {
+    closeSettings();
+    dom.openSettingsModal.focus();
     return;
   }
   closeAllMenus();
@@ -1362,8 +2805,8 @@ window.addEventListener('message', (event: MessageEvent<ExtensionToWebviewMessag
     case 'activity':
       renderActivity(message.payload);
       break;
-    case 'accounts.open':
-      openAccounts();
+    case 'settings.open':
+      openSettings(message.payload.section, message.payload.focus);
       break;
     case 'notification':
       showNotification(message.payload.message, message.payload.level);

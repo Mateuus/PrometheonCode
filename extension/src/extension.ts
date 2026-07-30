@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { AgentProfileService } from './agents/AgentProfileService';
+import { AgentProfileStore } from './agents/AgentProfileStore';
 import { AgentRegistry } from './agents/AgentRegistry';
 import { MockAgentAdapter } from './agents/MockAgentAdapter';
 import { LocalChatService } from './chat/LocalChatService';
@@ -18,6 +20,7 @@ import { UsageTracker } from './providers/UsageTracker';
 import { LocalStateStore } from './storage/LocalStateStore';
 import { SecretStore } from './storage/SecretStore';
 import { SettingsStore } from './storage/SettingsStore';
+import { McpConfigStore } from './workspace/McpConfigStore';
 import { WorkspaceInitializer } from './workspace/WorkspaceInitializer';
 import { WorkspaceService } from './workspace/WorkspaceService';
 import { PrometheonViewProvider } from './views/PrometheonViewProvider';
@@ -32,6 +35,8 @@ export interface PrometheonApi {
   readonly permissions: PermissionService;
   readonly speech: SpeechService;
   readonly profiles: ProviderProfileService;
+  readonly agentProfiles: AgentProfileService;
+  readonly mcp: McpConfigStore;
   readonly usage: UsageTracker;
   readonly localState: LocalStateStore;
   readonly secrets: SecretStore;
@@ -62,6 +67,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
   profiles.register(new ClaudeCodeAdapter(logger));
   const usage = new UsageTracker(localState);
 
+  // Agent Profiles vivem em `~/.prometheon/agent-profiles.json` e sempre
+  // apontam para uma dessas contas; MCP é configuração do projeto.
+  const agentProfiles = new AgentProfileService(new AgentProfileStore(logger), profiles, logger);
+  const mcp = new McpConfigStore(workspace, logger);
+
   const registry = new AgentRegistry();
   registry.register(new MockAgentAdapter());
 
@@ -80,6 +90,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
     permissions,
     speech,
     profiles,
+    agentProfiles,
+    mcp,
     usage,
     local: localState,
     settings,
@@ -134,6 +146,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
     permissions,
     speech,
     profiles,
+    agentProfiles,
+    mcp,
     usage,
     localState,
     secrets,

@@ -49,15 +49,18 @@ export function registerCommands({ core, provider, logger }: CommandDeps): vscod
       await core.disableBypass();
     }),
 
+    // Criar conta e configurar tudo o mais acontece dentro do painel: estes
+    // comandos só revelam a view e abrem o modal na seção certa.
     register('prometheon.addAccount', async () => {
-      await core.addAccount();
-      await provider.reveal();
-    }),
-
-    register('prometheon.manageAccounts', async () => {
       await core.refreshAccounts();
       await provider.reveal();
-      provider.post({ type: 'accounts.open' });
+      provider.post({ type: 'settings.open', payload: { section: 'accounts', focus: 'new' } });
+    }),
+
+    register('prometheon.openConfiguration', async () => {
+      await core.refreshAccounts();
+      await provider.reveal();
+      provider.post({ type: 'settings.open', payload: { section: 'accounts' } });
     }),
 
     register('prometheon.openSettings', async () => {

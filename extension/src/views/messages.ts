@@ -1,20 +1,70 @@
 import { IMAGE_MIME_TYPES, type ChatEvent, type ImageAttachment } from '../chat/types';
 import type { PrometheonViewState } from '../core/state';
 import {
+  AGENT_AUTONOMY_MODES,
+  AGENT_ROLES,
   AUTONOMY_LEVELS,
   CHAT_TYPES,
+  CONTEXT_STRATEGIES,
+  MAX_CONCURRENT_SESSIONS,
+  MAX_MCP_ARGS,
+  MAX_MCP_ARG_LENGTH,
+  MAX_MCP_COMMAND_LENGTH,
+  MAX_MCP_ENTRIES,
+  MAX_MCP_KEY_LENGTH,
+  MAX_MCP_NAME_LENGTH,
+  MAX_MCP_URL_LENGTH,
+  MAX_MCP_VALUE_LENGTH,
+  MCP_TRANSPORTS,
+  MAX_MODEL_LENGTH,
+  MAX_PROFILE_NAME_LENGTH,
+  MAX_SYSTEM_PROMPT_LENGTH,
+  MAX_TOOLS_PER_LIST,
+  MAX_TOOL_NAME_LENGTH,
   WORK_MODES,
   type ActiveAgentSummary,
   type ActivityStatus,
+  type AgentAutonomyMode,
+  type AgentRole,
   type Autonomy,
   type ChatType,
+  type ContextStrategy,
   type HubConnectionStatus,
+  type McpKeyValue,
+  type McpServerDraft,
+  type McpTransport,
   type SerializedError,
   type UiNotification,
   type WorkMode,
 } from '../core/types';
+import { PROVIDER_IDS } from '../providers/types';
 
 export type WorkspaceSetupChoice = 'current' | 'external' | 'skip';
+
+/** Seções do modal de configuração, na ordem em que aparecem na navegação. */
+export type SettingsSection = 'accounts' | 'agents' | 'workspace' | 'mcp';
+
+export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  'accounts',
+  'agents',
+  'workspace',
+  'mcp',
+];
+
+/** Agent Profile como a webview o envia: sem `id`, atribuído pela extensão. */
+export interface AgentProfileDraft {
+  readonly name: string;
+  readonly providerProfileId: string;
+  readonly role: AgentRole;
+  readonly model?: string;
+  readonly systemPrompt?: string;
+  readonly autonomyMode: AgentAutonomyMode;
+  readonly allowedTools: readonly string[];
+  readonly deniedTools: readonly string[];
+  readonly maxConcurrentSessions: number;
+  readonly contextStrategy: ContextStrategy;
+  readonly enabled: boolean;
+}
 
 /** Anexo como a webview o envia: sem `id`, que é atribuído pela extensão. */
 export type DraftAttachment = Omit<ImageAttachment, 'id'>;
@@ -37,15 +87,41 @@ export type WebviewToExtensionMessage =
   | { readonly type: 'speech.stop' }
   | { readonly type: 'speech.cancel' }
   | { readonly type: 'accounts.refresh' }
-  | { readonly type: 'accounts.add' }
+  | {
+      readonly type: 'accounts.create';
+      readonly payload: { readonly name: string; readonly providerId: string };
+    }
   | { readonly type: 'accounts.login'; readonly payload: { readonly profileId: string } }
   | { readonly type: 'accounts.logout'; readonly payload: { readonly profileId: string } }
   | { readonly type: 'accounts.remove'; readonly payload: { readonly profileId: string } }
+  | {
+      readonly type: 'agentProfiles.create';
+      readonly payload: { readonly profile: AgentProfileDraft };
+    }
+  | {
+      readonly type: 'agentProfiles.update';
+      readonly payload: { readonly id: string; readonly profile: AgentProfileDraft };
+    }
+  | { readonly type: 'agentProfiles.remove'; readonly payload: { readonly id: string } }
+  | {
+      readonly type: 'agentProfiles.setEnabled';
+      readonly payload: { readonly id: string; readonly enabled: boolean };
+    }
+  | { readonly type: 'mcp.refresh' }
+  /** Escolher e mesclar outro `.mcp.json` — a leitura acontece na extensão. */
+  | { readonly type: 'mcp.import' }
+  | { readonly type: 'mcp.save'; readonly payload: { readonly server: McpServerDraft } }
+  | { readonly type: 'mcp.remove'; readonly payload: { readonly name: string } }
+  | {
+      readonly type: 'mcp.setEnabled';
+      readonly payload: { readonly name: string; readonly enabled: boolean };
+    }
   | { readonly type: 'chat.selectType'; readonly payload: { readonly chatType: ChatType } }
   | { readonly type: 'settings.setWorkMode'; readonly payload: { readonly mode: WorkMode } }
   | { readonly type: 'settings.setAutonomy'; readonly payload: { readonly autonomy: Autonomy } }
   | { readonly type: 'settings.selectMainAgent'; readonly payload: { readonly agentId: string } }
-  | { readonly type: 'settings.open' }
+  /** Abre as configurações da extensão no editor do VS Code (botão de engrenagem). */
+  | { readonly type: 'settings.openEditor' }
   | {
       readonly type: 'workspace.initialize';
       readonly payload: { readonly choice: WorkspaceSetupChoice };
@@ -66,7 +142,14 @@ export type ExtensionToWebviewMessage =
   /** Texto ditado, para o cliente inserir no rascunho onde está o cursor. */
   | { readonly type: 'speech.transcript'; readonly payload: { readonly text: string } }
   | { readonly type: 'activity'; readonly payload: ActivityStatus }
-  | { readonly type: 'accounts.open' }
+  /**
+   * Abre o modal de configuração da webview já na seção pedida. `focus: 'new'`
+   * abre o formulário de criação da seção e coloca o cursor nele.
+   */
+  | {
+      readonly type: 'settings.open';
+      readonly payload: { readonly section: SettingsSection; readonly focus?: 'new' };
+    }
   | { readonly type: 'notification'; readonly payload: UiNotification };
 
 /** Limite defensivo: a webview não deve conseguir enviar payload gigante. */
@@ -189,6 +272,196 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T | nul
 const SETUP_CHOICES: readonly WorkspaceSetupChoice[] = ['current', 'external', 'skip'];
 
 /**
+ * Lista de ferramentas de um Agent Profile. Vem da webview como array de
+ * strings: nomes curtos, sem vazio e sem repetição.
+ */
+function parseToolList(raw: unknown): readonly string[] | null {
+  if (raw === undefined) {
+    return [];
+  }
+  if (!Array.isArray(raw) || raw.length > MAX_TOOLS_PER_LIST) {
+    return null;
+  }
+  const tools: string[] = [];
+  for (const entry of raw) {
+    const tool = nonEmptyString(entry, MAX_TOOL_NAME_LENGTH);
+    if (tool === null) {
+      return null;
+    }
+    if (!tools.includes(tool)) {
+      tools.push(tool);
+    }
+  }
+  return tools;
+}
+
+/**
+ * Texto opcional: ausente ou vazio vira `undefined`, presente precisa caber no
+ * limite. Um valor longo demais derruba a mensagem em vez de ser cortado.
+ */
+function optionalText(raw: unknown, maxLength: number): string | undefined | null {
+  if (raw === undefined || raw === '') {
+    return undefined;
+  }
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  return trimmed.length > maxLength ? null : trimmed;
+}
+
+function boundedInteger(raw: unknown, min: number, max: number): number | null {
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= min && raw <= max ? raw : null;
+}
+
+/**
+ * Agent Profile vindo da webview. O binding com uma conta é obrigatório aqui:
+ * uma mensagem sem `providerProfileId` nem chega ao núcleo.
+ */
+function parseAgentProfileDraft(raw: unknown): AgentProfileDraft | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const name = nonEmptyString(raw['name'], MAX_PROFILE_NAME_LENGTH);
+  const providerProfileId = nonEmptyString(raw['providerProfileId'], 128);
+  const role = oneOf<AgentRole>(raw['role'], AGENT_ROLES);
+  const autonomyMode = oneOf<AgentAutonomyMode>(raw['autonomyMode'], AGENT_AUTONOMY_MODES);
+  const contextStrategy = oneOf<ContextStrategy>(raw['contextStrategy'], CONTEXT_STRATEGIES);
+  const allowedTools = parseToolList(raw['allowedTools']);
+  const deniedTools = parseToolList(raw['deniedTools']);
+  const maxConcurrentSessions = boundedInteger(
+    raw['maxConcurrentSessions'],
+    1,
+    MAX_CONCURRENT_SESSIONS,
+  );
+  const model = optionalText(raw['model'], MAX_MODEL_LENGTH);
+  const systemPrompt = optionalText(raw['systemPrompt'], MAX_SYSTEM_PROMPT_LENGTH);
+
+  if (
+    name === null ||
+    providerProfileId === null ||
+    role === null ||
+    autonomyMode === null ||
+    contextStrategy === null ||
+    allowedTools === null ||
+    deniedTools === null ||
+    maxConcurrentSessions === null ||
+    model === null ||
+    systemPrompt === null ||
+    typeof raw['enabled'] !== 'boolean'
+  ) {
+    return null;
+  }
+
+  return {
+    name,
+    providerProfileId,
+    role,
+    ...(model === undefined ? {} : { model }),
+    ...(systemPrompt === undefined ? {} : { systemPrompt }),
+    autonomyMode,
+    allowedTools,
+    deniedTools,
+    maxConcurrentSessions,
+    contextStrategy,
+    enabled: raw['enabled'],
+  };
+}
+
+/** Nome de servidor: é chave de objeto no `.mcp.json`, então nada de espaço. */
+const MCP_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** `env` e `headers` chegam como pares para preservar a ordem da edição. */
+function parseKeyValues(raw: unknown): readonly McpKeyValue[] | null {
+  if (raw === undefined) {
+    return [];
+  }
+  if (!Array.isArray(raw) || raw.length > MAX_MCP_ENTRIES) {
+    return null;
+  }
+  const pairs: McpKeyValue[] = [];
+  for (const entry of raw) {
+    if (!isRecord(entry)) {
+      return null;
+    }
+    const key = nonEmptyString(entry['key'], MAX_MCP_KEY_LENGTH);
+    const value = entry['value'];
+    if (key === null || typeof value !== 'string' || value.length > MAX_MCP_VALUE_LENGTH) {
+      return null;
+    }
+    if (pairs.some((pair) => pair.key === key)) {
+      return null;
+    }
+    pairs.push({ key, value });
+  }
+  return pairs;
+}
+
+/**
+ * Servidor MCP vindo da webview. O conteúdo vai para o `.mcp.json` do projeto,
+ * lido também por outras ferramentas, então nada é normalizado em silêncio.
+ */
+function parseMcpServer(raw: unknown): McpServerDraft | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const name = nonEmptyString(raw['name'], MAX_MCP_NAME_LENGTH);
+  const transport = oneOf<McpTransport>(raw['transport'], MCP_TRANSPORTS);
+  const env = parseKeyValues(raw['env']);
+  const headers = parseKeyValues(raw['headers']);
+  if (
+    name === null ||
+    !MCP_NAME.test(name) ||
+    transport === null ||
+    env === null ||
+    headers === null ||
+    typeof raw['enabled'] !== 'boolean'
+  ) {
+    return null;
+  }
+
+  if (transport === 'stdio') {
+    const command = nonEmptyString(raw['command'], MAX_MCP_COMMAND_LENGTH);
+    const rawArgs = raw['args'];
+    if (command === null || (rawArgs !== undefined && !Array.isArray(rawArgs))) {
+      return null;
+    }
+    const entries: readonly unknown[] = Array.isArray(rawArgs) ? rawArgs : [];
+    if (entries.length > MAX_MCP_ARGS) {
+      return null;
+    }
+    const args: string[] = [];
+    for (const entry of entries) {
+      const arg = nonEmptyString(entry, MAX_MCP_ARG_LENGTH);
+      if (arg === null) {
+        return null;
+      }
+      args.push(arg);
+    }
+    return { name, transport, command, args, env, headers: [], enabled: raw['enabled'] };
+  }
+
+  const url = nonEmptyString(raw['url'], MAX_MCP_URL_LENGTH);
+  if (url === null || !isHttpUrl(url)) {
+    return null;
+  }
+  return { name, transport, args: [], env: [], url, headers, enabled: raw['enabled'] };
+}
+
+/** Só `http` e `https`: o formato não prevê outro esquema. */
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Valida em runtime tudo o que vem da webview. TypeScript não protege esta
  * fronteira: a mensagem chega como `unknown` e qualquer campo inesperado deve
  * derrubar a mensagem inteira, não ser normalizado silenciosamente.
@@ -208,8 +481,9 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
     case 'speech.stop':
     case 'speech.cancel':
     case 'accounts.refresh':
-    case 'accounts.add':
-    case 'settings.open':
+    case 'mcp.refresh':
+    case 'mcp.import':
+    case 'settings.openEditor':
     case 'hub.connect.request':
       return { type: raw['type'] };
 
@@ -237,6 +511,59 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
     case 'accounts.remove': {
       const profileId = payload === undefined ? null : nonEmptyString(payload['profileId'], 128);
       return profileId === null ? null : { type: raw['type'], payload: { profileId } };
+    }
+
+    case 'accounts.create': {
+      // O provedor é restrito à lista conhecida: a webview não inventa CLI.
+      const name = payload === undefined ? null : nonEmptyString(payload['name'], MAX_PROFILE_NAME_LENGTH);
+      const providerId = payload === undefined ? null : oneOf(payload['providerId'], PROVIDER_IDS);
+      return name === null || providerId === null
+        ? null
+        : { type: 'accounts.create', payload: { name, providerId } };
+    }
+
+    case 'agentProfiles.create': {
+      const profile = payload === undefined ? null : parseAgentProfileDraft(payload['profile']);
+      return profile === null ? null : { type: 'agentProfiles.create', payload: { profile } };
+    }
+
+    case 'agentProfiles.update': {
+      const id = payload === undefined ? null : nonEmptyString(payload['id'], 128);
+      const profile = payload === undefined ? null : parseAgentProfileDraft(payload['profile']);
+      return id === null || profile === null
+        ? null
+        : { type: 'agentProfiles.update', payload: { id, profile } };
+    }
+
+    case 'agentProfiles.remove': {
+      const id = payload === undefined ? null : nonEmptyString(payload['id'], 128);
+      return id === null ? null : { type: 'agentProfiles.remove', payload: { id } };
+    }
+
+    case 'agentProfiles.setEnabled': {
+      const id = payload === undefined ? null : nonEmptyString(payload['id'], 128);
+      const enabled = payload?.['enabled'];
+      return id === null || typeof enabled !== 'boolean'
+        ? null
+        : { type: 'agentProfiles.setEnabled', payload: { id, enabled } };
+    }
+
+    case 'mcp.save': {
+      const server = payload === undefined ? null : parseMcpServer(payload['server']);
+      return server === null ? null : { type: 'mcp.save', payload: { server } };
+    }
+
+    case 'mcp.remove': {
+      const name = payload === undefined ? null : nonEmptyString(payload['name'], MAX_MCP_NAME_LENGTH);
+      return name === null ? null : { type: 'mcp.remove', payload: { name } };
+    }
+
+    case 'mcp.setEnabled': {
+      const name = payload === undefined ? null : nonEmptyString(payload['name'], MAX_MCP_NAME_LENGTH);
+      const enabled = payload?.['enabled'];
+      return name === null || typeof enabled !== 'boolean'
+        ? null
+        : { type: 'mcp.setEnabled', payload: { name, enabled } };
     }
 
     case 'chat.openSession': {

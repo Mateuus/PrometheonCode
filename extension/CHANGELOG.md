@@ -31,14 +31,46 @@ O projeto segue [SemVer](https://semver.org/lang/pt-BR/).
   e registro de adaptadores aberto para Codex, Gemini e Kimi. Os perfis ficam em
   `~/.prometheon/local-profiles.json`; credenciais nunca são lidas, copiadas ou
   versionadas, e remover um perfil não apaga o diretório de autenticação.
-- Painel **Accounts & Usage** com provedor, método de autenticação, conta,
-  organização, plano e diretório isolado de cada perfil, mais a contagem de
-  tokens medida localmente (hoje, 7 dias, total). Limites de assinatura não
+- Modal central de **Settings** no painel, com as seções `Accounts`, `Agents`,
+  `Workspace` e `MCP` — abas no topo em painel estreito, barra lateral a partir
+  de 520px. Abre pelo botão de conta do cabeçalho, pelos comandos
+  `Configuration` e `Add Account`, e fecha com `Esc`.
+- Seção **Accounts** com provedor, método de autenticação, conta, organização,
+  plano e diretório isolado de cada perfil, mais a contagem de tokens medida
+  localmente (hoje, 7 dias, total) e o formulário de criação de conta dentro do
+  próprio painel — sem `QuickPick` nem `InputBox`. Limites de assinatura não
   aparecem: eles vivem na conta do provedor e lê-los exigiria o token do usuário.
+  O `Sign in` continua abrindo o fluxo oficial do CLI em um terminal.
+- Seção **Agents** com o CRUD dos Agent Profiles (papel, modelo, prompt de
+  sistema, autonomia, ferramentas permitidas e negadas, concorrência e
+  estratégia de contexto), gravados em `~/.prometheon/agent-profiles.json`. Cada
+  agente exige um Provider Profile válido: a criação sem binding falha com erro
+  tipado e a interface mostra `Agent → Provider → Account`, avisando quando a
+  conta vinculada não está autenticada. O modelo é texto livre — o CLI é quem o
+  valida na execução.
+- Seção **MCP** para os servidores do projeto no `.mcp.json` da raiz — o mesmo
+  arquivo que Claude Code, Cursor e o VS Code leem. Suporta os transportes
+  `stdio`, `http` e `sse` (`type` ausente é `stdio`), permite adicionar pelo
+  painel, importar e mesclar outro `.mcp.json` (sem sobrescrever nomes que já
+  existem) e ligar/desligar cada servidor. A regravação preserva o resto do
+  documento e os campos que não conhecemos, porque o arquivo é lido por outras
+  ferramentas. `env` e `headers` com cara de credencial em texto puro geram
+  aviso na interface — o arquivo do usuário nunca é reescrito nem mascarado por
+  conta própria, e o valor não vai para o log.
+- Seção **Workspace** com o estado do `.prometheon/` do projeto e as ações de
+  inicialização, que antes só existiam na tela de primeiro uso.
 - **Tokens por resposta** no cabeçalho de cada mensagem (`↑ entrada ↓ saída`),
   acumulados por perfil no estado local.
 - **Barra de atividade** acima do composer enquanto há trabalho: fase, agente,
   provedor, conta, modo e tempo decorrido — o perfil em uso nunca fica oculto.
+- **Timeline de trabalho na conversa**: cada uso de ferramenta vira um passo com
+  bolinha de estado, nome da ferramenta, alvo, detalhe e a saída num bloco
+  recolhível; o raciocínio aparece como `Thought for 3s`. Os passos são
+  persistidos na mensagem, com a saída truncada em 4 KB, e sobrevivem ao recarregar
+  a conversa. Passo que fica pendente quando o run é cancelado ou falha é fechado
+  como falho, em vez de pulsar para sempre.
+- Enquanto o agente trabalha, um indicador animado ocupa o lugar do estado vazio,
+  alternando entre gerúndios e mostrando o tempo decorrido.
 - Interface na **paleta do Prometheon**: roxo `#7C3AED` em botões, ícones, foco e
   seleção; ciano em conexão e atividade; laranja no agente principal; âmbar no
   aviso de bypass. Superfícies e bordas da marca entram apenas em temas escuros —
@@ -71,12 +103,13 @@ O projeto segue [SemVer](https://semver.org/lang/pt-BR/).
   colorido. O ícone dos containers é o `media/prometheon-view-mono.svg`, porque
   a Activity Bar e a Secondary Side Bar usam o arquivo como máscara — cor e
   gradiente viram uma silhueta chapada.
-- 67 testes de integração cobrindo isolamento de perfis por conta, leitura do
+- 84 testes de integração cobrindo isolamento de perfis por conta, leitura do
   status de autenticação, contagem de tokens, registro de agentes, transição de
   chats, histórico de sessões, anexos de imagem, ciclo do ditado, persistência
   de preferências, não persistência do bypass, criação segura de `.prometheon/`,
-  preservação do `.gitignore`, validação das mensagens da webview e precedência
-  de permissões.
+  preservação do `.gitignore`, validação das mensagens da webview, recusa de
+  Agent Profile sem conta vinculada, leitura de `agent-profiles.json` e
+  `.mcp.json` malformados e precedência de permissões.
 
 ### Notas
 

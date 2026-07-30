@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { AgentProfileService } from '../agents/AgentProfileService';
 import type { AgentRegistry } from '../agents/AgentRegistry';
 import type { LocalChatService } from '../chat/LocalChatService';
 import type { WebChatService } from '../chat/WebChatService';
@@ -18,6 +19,7 @@ import type { ProviderProfileService } from '../providers/ProviderProfileService
 import type { UsageTracker } from '../providers/UsageTracker';
 import type { LocalStateStore } from '../storage/LocalStateStore';
 import type { SettingsStore } from '../storage/SettingsStore';
+import type { McpConfigStore } from '../workspace/McpConfigStore';
 import type { WorkspaceInitializer } from '../workspace/WorkspaceInitializer';
 import type { WorkspaceService } from '../workspace/WorkspaceService';
 import { HubNotConfiguredError, serializeError } from '../utils/errors';
@@ -26,6 +28,7 @@ import { parseHubUrl } from '../hub/HubClient';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_ATTACHMENT_BYTES,
+  type AgentProfileDraft,
   type DraftAttachment,
   type WebviewToExtensionMessage,
   type WorkspaceSetupChoice,
@@ -54,7 +57,11 @@ import {
   type ChatType,
   type AccountSummary,
   type ActivityStatus,
+  type AgentProfileSummary,
   type HubConnectionStatus,
+  type McpServerDraft,
+  type McpStatus,
+  type ProviderOption,
   type SpeechStatus,
   type WorkMode,
   type WorkspaceStatus,
@@ -76,6 +83,8 @@ export interface PrometheonCoreDeps {
   readonly permissions: PermissionService;
   readonly speech: SpeechService;
   readonly profiles: ProviderProfileService;
+  readonly agentProfiles: AgentProfileService;
+  readonly mcp: McpConfigStore;
   readonly usage: UsageTracker;
   readonly local: LocalStateStore;
   readonly settings: SettingsStore;
@@ -110,6 +119,15 @@ export class PrometheonCore implements vscode.Disposable {
     detail: NO_SPEECH_ENGINE,
   };
   private accounts: readonly AccountSummary[] = [];
+  private agentProfiles: readonly AgentProfileSummary[] = [];
+  private mcpStatus: McpStatus = {
+    available: false,
+    exists: false,
+    file: null,
+    servers: [],
+    problems: [],
+    message: 'MCP servers are configured in .mcp.json at the root of the open folder.',
+  };
   private activity: ActivityStatus = IDLE_ACTIVITY;
   private workspaceStatus: WorkspaceStatus = {
     configured: false,
@@ -157,6 +175,7 @@ export class PrometheonCore implements vscode.Disposable {
     this.hubStatus = this.deps.hub.getStatus();
     await this.refreshSpeechStatus();
     await this.refreshAccounts();
+    await this.refreshMcp();
     this.workspaceStatus = await this.deps.workspace.status();
     await this.ensureConversation();
     await this.publish();
@@ -175,6 +194,9 @@ export class PrometheonCore implements vscode.Disposable {
       hub: this.hubStatus,
       speech: this.speechStatus,
       accounts: this.accounts,
+      providers: this.providerOptions,
+      agentProfiles: this.agentProfiles,
+      mcp: this.mcpStatus,
       activity: this.activity,
       workspace: this.workspaceStatus,
       conversationId: this.conversationId,
@@ -187,6 +209,15 @@ export class PrometheonCore implements vscode.Disposable {
 
   get isBypassActive(): boolean {
     return this.bypass !== null;
+  }
+
+  /** Provedores com adaptador registrado, como a interface os oferece. */
+  private get providerOptions(): readonly ProviderOption[] {
+    return this.deps.profiles.providers.map((adapter) => ({
+      id: adapter.providerId,
+      name: adapter.displayName,
+      configEnvironmentVariable: adapter.configEnvironmentVariable,
+    }));
   }
 
   async handleWebviewMessage(message: WebviewToExtensionMessage): Promise<void> {
@@ -226,8 +257,36 @@ export class PrometheonCore implements vscode.Disposable {
         await this.refreshAccounts();
         await this.publish();
         return;
-      case 'accounts.add':
-        await this.addAccount();
+      case 'accounts.create':
+        await this.createAccount(message.payload.name, message.payload.providerId);
+        return;
+      case 'agentProfiles.create':
+        await this.createAgentProfile(message.payload.profile);
+        return;
+      case 'agentProfiles.update':
+        await this.updateAgentProfile(message.payload.id, message.payload.profile);
+        return;
+      case 'agentProfiles.remove':
+        await this.removeAgentProfile(message.payload.id);
+        return;
+      case 'agentProfiles.setEnabled':
+        await this.setAgentProfileEnabled(message.payload.id, message.payload.enabled);
+        return;
+      case 'mcp.refresh':
+        await this.refreshMcp();
+        await this.publish();
+        return;
+      case 'mcp.import':
+        await this.importMcpServers();
+        return;
+      case 'mcp.save':
+        await this.saveMcpServer(message.payload.server);
+        return;
+      case 'mcp.remove':
+        await this.removeMcpServer(message.payload.name);
+        return;
+      case 'mcp.setEnabled':
+        await this.setMcpServerEnabled(message.payload.name, message.payload.enabled);
         return;
       case 'accounts.login':
         await this.loginAccount(message.payload.profileId);
@@ -250,8 +309,8 @@ export class PrometheonCore implements vscode.Disposable {
       case 'settings.selectMainAgent':
         await this.setMainAgent(message.payload.agentId);
         return;
-      case 'settings.open':
-        await this.openSettings();
+      case 'settings.openEditor':
+        await this.openSettingsEditor();
         return;
       case 'workspace.initialize':
         await this.configureWorkspace(message.payload.choice);
@@ -625,6 +684,9 @@ export class PrometheonCore implements vscode.Disposable {
     }
 
     await this.refreshWorkspaceStatus();
+    // A seção MCP depende de `.prometheon/`: com o workspace pronto, ela sai do
+    // estado "indisponível" sem o usuário precisar reabrir o painel.
+    await this.refreshMcp();
     await this.publish();
   }
 
@@ -662,57 +724,208 @@ export class PrometheonCore implements vscode.Disposable {
       this.deps.logger.error(`Falha ao ler as contas: ${serializeError(error).message}`);
       this.accounts = [];
     }
+    // O binding de cada agente é resolvido contra estas contas, então ele é
+    // recalculado junto — nunca fica apontando para um estado antigo.
+    await this.refreshAgentProfiles();
   }
 
-  /** Cria uma conta local para um provedor e já oferece o login oficial. */
-  async addAccount(): Promise<void> {
-    const providers = this.deps.profiles.providers;
-    if (providers.length === 0) {
+  /**
+   * Cria uma conta local para um provedor. O nome e o provedor vêm do
+   * formulário do painel — nenhum diálogo do VS Code participa disso. O login
+   * continua sendo um passo à parte, pelo fluxo oficial do CLI (documento §11).
+   */
+  async createAccount(name: string, providerId: string): Promise<void> {
+    try {
+      const profile = await this.deps.profiles.create({ name, providerId });
+      const adapter = this.deps.profiles.adapterFor(profile.providerId);
+      await this.refreshAccounts();
+      await this.publish();
       this.deps.bus.emit('notification', {
-        level: 'warning',
-        message: 'No provider adapter is available yet.',
+        level: 'info',
+        message: `Account "${profile.name}" created with its own ${adapter.configEnvironmentVariable}. Use Sign in to authenticate it through the official CLI flow.`,
       });
-      return;
+    } catch (error) {
+      this.reportFailure('Não foi possível criar a conta', error);
     }
+  }
 
-    const provider =
-      providers.length === 1
-        ? providers[0]
-        : (
-            await vscode.window.showQuickPick(
-              providers.map((adapter) => ({ label: adapter.displayName, adapter })),
-              { title: 'Prometheon: New account', placeHolder: 'Which CLI?' },
-            )
-          )?.adapter;
-    if (provider === undefined) {
-      return;
+  // ---------- Agent Profiles ----------
+
+  /**
+   * Relê os agentes e resolve o binding contra as contas conhecidas. Um agente
+   * cuja conta sumiu ganha um aviso: nunca é reapontado para outro perfil.
+   */
+  async refreshAgentProfiles(): Promise<void> {
+    try {
+      this.agentProfiles = await this.deps.agentProfiles.summaries(this.accounts);
+    } catch (error) {
+      this.deps.logger.error(`Falha ao ler os Agent Profiles: ${serializeError(error).message}`);
+      this.agentProfiles = [];
     }
+  }
 
-    const name = await vscode.window.showInputBox({
-      title: `New ${provider.displayName} account`,
-      prompt: 'A name to tell this account apart, like "Mateus27" or "Empresa1".',
-      ignoreFocusOut: true,
-      validateInput: (value) => (value.trim() === '' ? 'Give the account a name.' : null),
-    });
-    if (name === undefined || name.trim() === '') {
-      return;
+  async createAgentProfile(draft: AgentProfileDraft): Promise<void> {
+    try {
+      const profile = await this.deps.agentProfiles.create(draft);
+      await this.refreshAgentProfiles();
+      await this.publish();
+      this.deps.bus.emit('notification', {
+        level: 'info',
+        message: `Agent profile "${profile.name}" created.`,
+      });
+    } catch (error) {
+      this.reportFailure('Não foi possível criar o Agent Profile', error);
     }
+  }
 
-    const profile = await this.deps.profiles.create({
-      name: name.trim(),
-      providerId: provider.providerId,
-    });
-    await this.refreshAccounts();
-    await this.publish();
-
-    const signIn = 'Sign in now';
-    const choice = await vscode.window.showInformationMessage(
-      `Account "${profile.name}" created with its own ${provider.configEnvironmentVariable}. Sign in through the official CLI flow to use it.`,
-      signIn,
-    );
-    if (choice === signIn) {
-      await this.loginAccount(profile.id);
+  async updateAgentProfile(id: string, draft: AgentProfileDraft): Promise<void> {
+    try {
+      await this.deps.agentProfiles.update(id, draft);
+      await this.refreshAgentProfiles();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível salvar o Agent Profile', error);
     }
+  }
+
+  async setAgentProfileEnabled(id: string, enabled: boolean): Promise<void> {
+    try {
+      await this.deps.agentProfiles.setEnabled(id, enabled);
+      await this.refreshAgentProfiles();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível alterar o Agent Profile', error);
+    }
+  }
+
+  /** Remoção é destrutiva: confirma no diálogo modal do VS Code. */
+  async removeAgentProfile(id: string): Promise<void> {
+    try {
+      const profile = await this.deps.agentProfiles.require(id);
+      const confirm = 'Remove agent';
+      const answer = await vscode.window.showWarningMessage(
+        `Remove the agent profile "${profile.name}"?`,
+        {
+          modal: true,
+          detail: 'The provider account and its sign-in are not touched.',
+        },
+        confirm,
+      );
+      if (answer !== confirm) {
+        return;
+      }
+      await this.deps.agentProfiles.remove(id);
+      await this.refreshAgentProfiles();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível remover o Agent Profile', error);
+    }
+  }
+
+  // ---------- MCP ----------
+
+  async refreshMcp(): Promise<void> {
+    try {
+      this.mcpStatus = await this.deps.mcp.status();
+    } catch (error) {
+      this.deps.logger.error(`Falha ao ler o .mcp.json: ${serializeError(error).message}`);
+      this.mcpStatus = {
+        available: false,
+        exists: false,
+        file: null,
+        servers: [],
+        problems: [],
+        message: 'Could not read .mcp.json.',
+      };
+    }
+  }
+
+  async saveMcpServer(server: McpServerDraft): Promise<void> {
+    try {
+      await this.deps.mcp.save(server);
+      await this.refreshMcp();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível salvar o servidor MCP', error);
+    }
+  }
+
+  /**
+   * Escolhe outro `.mcp.json` e mescla as entradas. A leitura do disco acontece
+   * aqui: a webview só pede. Nome já existente vira aviso, nunca sobrescrita.
+   */
+  async importMcpServers(): Promise<void> {
+    try {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        openLabel: 'Import MCP servers',
+        title: 'Choose an .mcp.json to import',
+        filters: { 'MCP configuration': ['json'] },
+      });
+      const source = picked?.[0];
+      if (source === undefined) {
+        return;
+      }
+
+      const result = await this.deps.mcp.importFrom(source);
+      await this.refreshMcp();
+      await this.publish();
+
+      const parts = [`${result.imported.length} MCP server(s) imported.`];
+      if (result.conflicts.length > 0) {
+        parts.push(
+          `Skipped because the name already exists: ${result.conflicts.join(', ')}. Rename or edit them instead.`,
+        );
+      }
+      if (result.problems.length > 0) {
+        parts.push(`${result.problems.length} entry(ies) could not be read.`);
+      }
+      this.deps.bus.emit('notification', {
+        level: result.conflicts.length > 0 || result.problems.length > 0 ? 'warning' : 'info',
+        message: parts.join(' '),
+      });
+    } catch (error) {
+      this.reportFailure('Não foi possível importar servidores MCP', error);
+    }
+  }
+
+  async setMcpServerEnabled(name: string, enabled: boolean): Promise<void> {
+    try {
+      await this.deps.mcp.setEnabled(name, enabled);
+      await this.refreshMcp();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível alterar o servidor MCP', error);
+    }
+  }
+
+  async removeMcpServer(name: string): Promise<void> {
+    try {
+      const confirm = 'Remove server';
+      const answer = await vscode.window.showWarningMessage(
+        `Remove the MCP server "${name}"?`,
+        { modal: true, detail: 'It is removed from .mcp.json. The rest of the file is kept.' },
+        confirm,
+      );
+      if (answer !== confirm) {
+        return;
+      }
+      await this.deps.mcp.remove(name);
+      await this.refreshMcp();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível remover o servidor MCP', error);
+    }
+  }
+
+  /**
+   * Erro de uma ação do painel: log em português para quem mantém, mensagem já
+   * pronta em inglês para quem usa. Nada de stack trace na interface.
+   */
+  private reportFailure(context: string, error: unknown): void {
+    const serialized = serializeError(error);
+    this.deps.logger.error(`${context}: ${serialized.message}`);
+    this.deps.bus.emit('notification', { level: 'error', message: serialized.message });
   }
 
   async loginAccount(profileId: string): Promise<void> {
@@ -744,12 +957,21 @@ export class PrometheonCore implements vscode.Disposable {
   /** Remove o perfil da lista. As credenciais em disco não são tocadas. */
   async removeAccount(profileId: string): Promise<void> {
     const profile = await this.deps.profiles.require(profileId);
+    // Agentes vinculados não são reapontados para outra conta: eles passam a
+    // avisar que o binding quebrou, e é isso que o diálogo antecipa.
+    const bound = this.agentProfiles.filter(
+      (summary) => summary.profile.providerProfileId === profileId,
+    );
+    const boundDetail =
+      bound.length === 0
+        ? ''
+        : ` ${bound.length} agent profile(s) still point to it (${bound.map((summary) => summary.profile.name).join(', ')}) and will stop until you bind them to another account.`;
     const confirm = 'Remove profile';
     const answer = await vscode.window.showWarningMessage(
       `Remove the profile "${profile.name}" from Prometheon?`,
       {
         modal: true,
-        detail: `The credentials in ${profile.configDirectory} are left untouched — delete that folder yourself if you also want to drop the sign-in.`,
+        detail: `The credentials in ${profile.configDirectory} are left untouched — delete that folder yourself if you also want to drop the sign-in.${boundDetail}`,
       },
       confirm,
     );
@@ -1077,6 +1299,7 @@ export class PrometheonCore implements vscode.Disposable {
       await this.disableBypass('Bypass cancelled: the workspace changed.');
     }
     await this.refreshWorkspaceStatus();
+    await this.refreshMcp();
     await this.publish();
   }
 
@@ -1108,7 +1331,7 @@ export class PrometheonCore implements vscode.Disposable {
     return picked?.choice;
   }
 
-  private async openSettings(): Promise<void> {
+  private async openSettingsEditor(): Promise<void> {
     await vscode.commands.executeCommand(
       'workbench.action.openSettings',
       '@ext:prometheon.prometheon-code',

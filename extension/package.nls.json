@@ -1,7 +1,6 @@
 {
   "extension.displayName": "Prometheon Code",
   "extension.description": "Coordinate multiple AI coding agents from one workspace.",
-
   "command.openChat": "Open Chat",
   "command.newLocalChat": "New Local Chat",
   "command.configureWorkspace": "Configure Workspace",
@@ -10,11 +9,10 @@
   "command.selectWorkMode": "Select Work Mode",
   "command.selectAutonomy": "Select Autonomy",
   "command.disableBypassPermissions": "Disable Bypass Permissions",
-  "command.manageAccounts": "Accounts & Usage",
+  "command.openConfiguration": "Configuration",
   "command.addAccount": "Add Account",
   "command.openSettings": "Open Settings",
   "command.showDiagnostics": "Show Diagnostics",
-
   "configuration.hub.url": "Prometheon Hub base URL. HTTPS is required outside `localhost`. Leave it empty to work locally only. Tokens do **not** go here: they go to the VS Code secret storage.",
   "configuration.chat.defaultType": "Chat type opened by default.",
   "configuration.chat.defaultType.local": "Local Chat: works without an account and without a server.",

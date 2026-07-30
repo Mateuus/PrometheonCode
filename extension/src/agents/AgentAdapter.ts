@@ -43,6 +43,30 @@ export interface AgentInput {
 export type AgentEvent =
   | { readonly type: 'status'; readonly status: ActiveAgentStatus }
   | { readonly type: 'delta'; readonly text: string }
+  /**
+   * Ferramenta começou. `toolId` liga este evento ao `tool.completed`
+   * correspondente — é o que permite à interface desenhar o bloco em andamento
+   * antes de a ferramenta terminar. `tool` é o nome exibido em destaque
+   * ("Write", "Bash"), `title` é o alvo ("ProviderProfileService.ts") e
+   * `detail` a linha de apoio ("147 lines", o comando executado).
+   */
+  | {
+      readonly type: 'tool.requested';
+      readonly toolId: string;
+      readonly tool: string;
+      readonly title: string;
+      readonly detail?: string;
+    }
+  /** Ferramenta terminou. `detail` substitui o que veio no início, quando dado. */
+  | {
+      readonly type: 'tool.completed';
+      readonly toolId: string;
+      readonly output?: string;
+      readonly detail?: string;
+      readonly failed?: boolean;
+    }
+  /** Raciocínio já concluído, exibido como "Thought for 3s". */
+  | { readonly type: 'thought'; readonly durationMs: number }
   /** `usage` vem do CLI quando ele reporta; adaptadores sem isso omitem. */
   | { readonly type: 'completed'; readonly text: string; readonly usage?: TokenUsage }
   | { readonly type: 'failed'; readonly error: SerializedError }

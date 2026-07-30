@@ -26,6 +26,8 @@ const ICONS = {
   send: `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12.8V3.6"/><path d="M4.2 7.4 8 3.6l3.8 3.8"/></svg>`,
   account: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="5.6" r="2.8"/><path d="M2.8 13.6a5.2 5.2 0 0 1 10.4 0"/></svg>`,
   mic: `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="1.8" width="4" height="7.4" rx="2"/><path d="M3.6 7.4a4.4 4.4 0 0 0 8.8 0"/><path d="M8 11.8v2.4"/></svg>`,
+  /** Asterisco do indicador de trabalho. Três traços pelo centro, a 60°. */
+  spark: `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 2.4v11.2"/><path d="M3.2 5.2l9.6 5.6"/><path d="M3.2 10.8l9.6-5.6"/></svg>`,
 } as const;
 
 /**
@@ -44,6 +46,18 @@ const MENU_ICONS: Readonly<Record<string, string>> = {
   // Agentes
   agent: `<rect x="3.4" y="3.4" width="9.2" height="9.2" rx="2.2"/><path d="M6.6 1.7v1.7M9.4 1.7v1.7M6.6 12.6v1.7M9.4 12.6v1.7M1.7 6.6h1.7M1.7 9.4h1.7M12.6 6.6h1.7M12.6 9.4h1.7"/>`,
   check: `<path d="M3.4 8.4 6.5 11.4 12.6 4.9"/>`,
+  // Seções do modal de configuração e campos dos formulários
+  person: `<circle cx="8" cy="5.4" r="2.7"/><path d="M2.9 13.4a5.1 5.1 0 0 1 10.2 0"/>`,
+  folder: `<path d="M2.2 4.4a1 1 0 0 1 1-1h2.9l1.4 1.6h5.3a1 1 0 0 1 1 1v5.6a1 1 0 0 1-1 1H3.2a1 1 0 0 1-1-1Z"/>`,
+  plug: `<path d="M6.1 1.9v3.2M9.9 1.9v3.2"/><path d="M4.3 5.1h7.4v2.3a3.7 3.7 0 0 1-7.4 0Z"/><path d="M8 11.1v3"/>`,
+  magnifier: `<circle cx="7.2" cy="7.2" r="4.3"/><path d="M10.4 10.4 13.4 13.4"/>`,
+  beaker: `<path d="M6.3 2.2v4L3.1 11.6a1 1 0 0 0 .9 1.6h8a1 1 0 0 0 .9-1.6L9.7 6.2v-4"/><path d="M5.4 2.2h5.2"/><path d="M4.6 9.5h6.8"/>`,
+  sliders: `<path d="M3 4.6h10M3 8h10M3 11.4h10"/><circle cx="6" cy="4.6" r="1.4"/><circle cx="10" cy="8" r="1.4"/><circle cx="5.2" cy="11.4" r="1.4"/>`,
+  box: `<path d="M8 2.2 13.4 5v6L8 13.8 2.6 11V5Z"/><path d="M2.6 5 8 7.8 13.4 5M8 7.8v6"/>`,
+  cloud: `<path d="M4.7 12.1a2.9 2.9 0 0 1-.3-5.8 3.7 3.7 0 0 1 7.1-.7 2.9 2.9 0 0 1 .2 5.7 2.9 2.9 0 0 1-.4 0Z"/>`,
+  chevron: `<path d="M4.6 6.4 8 9.8l3.4-3.4"/>`,
+  // Marcador dos blocos de ferramenta; gira ao expandir.
+  chevronRight: `<path d="M6.2 3.8 10.6 8l-4.4 4.2"/>`,
 };
 
 function iconTemplates(): string {
@@ -96,7 +110,7 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
       <span class="session-title" id="session-title">Untitled</span>
       <span class="grow"></span>
       <span class="hub-badge" id="hub-badge" title="Prometheon Hub status"></span>
-      <button class="icon-button" type="button" id="open-accounts" title="Accounts &amp; usage" aria-label="Accounts and usage">${ICONS.account}</button>
+      <button class="icon-button" type="button" id="open-settings-modal" title="Configuration" aria-label="Configuration" aria-haspopup="dialog" aria-expanded="false">${ICONS.account}</button>
       <button class="icon-button" type="button" id="toggle-sessions" title="Sessions" aria-label="Sessions" aria-haspopup="dialog" aria-expanded="false">${ICONS.history}</button>
       <button class="icon-button" type="button" id="new-session" title="New chat" aria-label="New chat">${ICONS.plus}</button>
       <button class="icon-button" type="button" id="open-settings" title="Open settings" aria-label="Open settings">${ICONS.gear}</button>
@@ -134,6 +148,12 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
         <button class="primary" type="button" id="connect-hub">Connect to Prometheon Hub</button>
       </div>
     </section>
+
+    <div class="working" id="working" role="status" hidden>
+      <span class="working-glyph">${ICONS.spark}</span>
+      <span class="working-word" id="working-word"></span>
+      <span class="working-elapsed" id="working-elapsed"></span>
+    </div>
 
     <main class="messages" id="messages" aria-live="polite" aria-busy="false"></main>
 
@@ -205,20 +225,18 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
     </footer>
   </div>
 
-  <div class="modal" id="accounts-modal" role="dialog" aria-modal="true" aria-label="Accounts and usage" hidden>
-    <div class="modal-card">
+  <!-- Modal único de configuração: contas, agentes, workspace e MCP. O conteúdo
+       de cada seção é montado pelo cliente com createElement/textContent. -->
+  <div class="modal" id="settings-modal" role="dialog" aria-modal="true" aria-label="Settings" hidden>
+    <div class="modal-card settings-card">
       <header class="modal-header">
-        <h2>Accounts &amp; Usage</h2>
-        <button class="icon-button" type="button" id="close-accounts" title="Close" aria-label="Close">${ICONS.close}</button>
+        <h2 id="settings-title">Settings</h2>
+        <button class="icon-button" type="button" id="close-settings" title="Close" aria-label="Close">${ICONS.close}</button>
       </header>
-      <div class="modal-body" id="accounts-body"></div>
-      <footer class="modal-footer">
-        <p class="modal-note">
-          Token counts are measured by Prometheon on this machine. Subscription
-          limits live in each provider account and are not read from here.
-        </p>
-        <button class="primary" type="button" id="add-account">Add account</button>
-      </footer>
+      <div class="settings-layout">
+        <nav class="settings-nav" id="settings-nav" role="tablist" aria-label="Settings sections"></nav>
+        <div class="settings-pane" id="settings-pane" role="tabpanel" tabindex="-1"></div>
+      </div>
     </div>
   </div>
 

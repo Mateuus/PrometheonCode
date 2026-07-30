@@ -3,11 +3,14 @@ import type {
   AccountSummary,
   ActiveAgentSummary,
   ActivityStatus,
+  AgentProfileSummary,
   AgentSummary,
   Autonomy,
   BypassGrant,
   ChatType,
   HubConnectionStatus,
+  McpStatus,
+  ProviderOption,
   SpeechStatus,
   WorkMode,
   WorkspaceStatus,
@@ -27,6 +30,12 @@ export interface PrometheonViewState {
   readonly speech: SpeechStatus;
   /** Contas de provedor conhecidas nesta máquina, com uso local de tokens. */
   readonly accounts: readonly AccountSummary[];
+  /** Provedores com adaptador registrado, para criar uma conta pelo painel. */
+  readonly providers: readonly ProviderOption[];
+  /** Agent Profiles com o binding `Agent → Provider → Account` já resolvido. */
+  readonly agentProfiles: readonly AgentProfileSummary[];
+  /** Servidores MCP do projeto e por que a seção pode estar indisponível. */
+  readonly mcp: McpStatus;
   readonly activity: ActivityStatus;
   readonly workspace: WorkspaceStatus;
   readonly conversationId: string | null;

@@ -113,8 +113,8 @@
         "category": "Prometheon"
       },
       {
-        "command": "prometheon.manageAccounts",
-        "title": "%command.manageAccounts%",
+        "command": "prometheon.openConfiguration",
+        "title": "%command.openConfiguration%",
         "category": "Prometheon",
         "icon": "$(account)"
       },
@@ -178,7 +178,7 @@
           "group": "3_help@1"
         },
         {
-          "command": "prometheon.manageAccounts",
+          "command": "prometheon.openConfiguration",
           "when": "view == prometheon.chatView || view == prometheon.chatViewSecondary",
           "group": "1_orchestration@5"
         }

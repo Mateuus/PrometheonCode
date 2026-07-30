@@ -1,7 +1,72 @@
 import * as assert from 'node:assert/strict';
+import type {
+  AgentAdapter,
+  AgentCapabilities,
+  AgentEvent,
+  AgentSession,
+} from '../agents/AgentAdapter';
+import { AgentRegistry } from '../agents/AgentRegistry';
+import { LocalChatService } from '../chat/LocalChatService';
+import { MAX_STEP_OUTPUT_CHARS } from '../chat/types';
+import { Logger } from '../logger';
 import { getApi, isPrometheonError } from './helpers';
 
 const hubNotConfigured = isPrometheonError('HubNotConfiguredError', 'hub.not-configured');
+
+/**
+ * Adaptador de roteiro fixo. Existe para exercitar o contrato de passos sem
+ * depender da sequência simulada do MockAgentAdapter, que pode mudar.
+ */
+class ScriptedAdapter implements AgentAdapter {
+  readonly id = 'scripted';
+  readonly displayName = 'Scripted Agent';
+  readonly transport = 'mock' as const;
+  readonly capabilities: AgentCapabilities = {
+    chat: true,
+    edit: false,
+    delegate: false,
+    terminal: false,
+  };
+
+  constructor(private readonly script: readonly AgentEvent[]) {}
+
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  start(): Promise<AgentSession> {
+    return Promise.resolve({ id: 'scripted-session', agentId: this.id, startedAt: Date.now() });
+  }
+
+  async *send(): AsyncIterable<AgentEvent> {
+    for (const event of this.script) {
+      yield await Promise.resolve(event);
+    }
+  }
+
+  interrupt(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  dispose(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+/**
+ * Chat local isolado com um adaptador de roteiro. Usa o mesmo armazenamento da
+ * extensão, mas um registro próprio, para não mexer no registro compartilhado.
+ */
+async function scriptedChat(
+  script: readonly AgentEvent[],
+): Promise<{ chat: LocalChatService; conversationId: string }> {
+  const api = await getApi();
+  const registry = new AgentRegistry();
+  registry.register(new ScriptedAdapter(script));
+  const chat = new LocalChatService(api.localState, registry, new Logger());
+  const conversation = await chat.createConversation({ chatType: 'local' });
+  return { chat, conversationId: conversation.id };
+}
 
 suite('Chat', () => {
   test('alterna entre Local Chat e Web Chat', async () => {
@@ -165,6 +230,154 @@ suite('Chat', () => {
     // Uma mensagem só de imagem também nomeia a sessão.
     const summaries = await api.localChat.listConversations();
     assert.equal(summaries.find((item) => item.id === conversation.id)?.title, '1 image');
+  });
+
+  test('os passos do agente chegam ao consumidor na ordem certa', async () => {
+    const { chat, conversationId } = await scriptedChat([
+      { type: 'status', status: 'working' },
+      { type: 'thought', durationMs: 3200 },
+      { type: 'tool.requested', toolId: 't1', tool: 'Read', title: 'a.ts', detail: '10 lines' },
+      { type: 'tool.completed', toolId: 't1', output: 'const a = 1;' },
+      { type: 'tool.requested', toolId: 't2', tool: 'Bash', title: 'npm test', detail: 'npm test' },
+      { type: 'tool.completed', toolId: 't2', output: 'ok', failed: true },
+      { type: 'completed', text: 'pronto' },
+    ]);
+
+    const seen: string[] = [];
+    for await (const event of chat.sendMessage({
+      conversationId,
+      content: 'vai',
+      workMode: 'edit',
+      autonomy: 'auto',
+      mainAgentId: 'scripted',
+    })) {
+      if (event.type === 'step.started' || event.type === 'step.completed') {
+        seen.push(`${event.type}:${event.step.kind}:${event.step.tool}:${event.step.status}`);
+      }
+    }
+
+    assert.deepEqual(seen, [
+      'step.completed:thought:Thought:done',
+      'step.started:tool:Read:running',
+      'step.completed:tool:Read:done',
+      'step.started:tool:Bash:running',
+      'step.completed:tool:Bash:failed',
+    ]);
+  });
+
+  test('os passos são persistidos e voltam em getMessages', async () => {
+    const { chat, conversationId } = await scriptedChat([
+      { type: 'thought', durationMs: 1500 },
+      {
+        type: 'tool.requested',
+        toolId: 't1',
+        tool: 'Write',
+        title: 'ProviderProfileService.ts',
+        detail: '147 lines',
+      },
+      { type: 'tool.completed', toolId: 't1', output: 'export class ProviderProfileService {}' },
+      { type: 'completed', text: 'feito' },
+    ]);
+
+    for await (const _event of chat.sendMessage({
+      conversationId,
+      content: 'escreve',
+      workMode: 'edit',
+      autonomy: 'auto',
+      mainAgentId: 'scripted',
+    })) {
+      // consome o stream até o fim
+    }
+
+    // Recarregar a conversa precisa devolver os passos junto da mensagem.
+    const messages = await chat.getMessages(conversationId);
+    const steps = messages[1]?.steps ?? [];
+    assert.equal(steps.length, 2);
+    assert.equal(steps[0]?.kind, 'thought');
+    assert.equal(steps[0]?.durationMs, 1500);
+    assert.equal(steps[1]?.tool, 'Write');
+    assert.equal(steps[1]?.title, 'ProviderProfileService.ts');
+    assert.equal(steps[1]?.detail, '147 lines');
+    assert.equal(steps[1]?.status, 'done');
+    assert.equal(steps[1]?.output, 'export class ProviderProfileService {}');
+    assert.equal(steps[1]?.truncated, undefined);
+  });
+
+  test('a saída longa de um passo é truncada antes de persistir', async () => {
+    const long = 'x'.repeat(MAX_STEP_OUTPUT_CHARS + 500);
+    const { chat, conversationId } = await scriptedChat([
+      { type: 'tool.requested', toolId: 't1', tool: 'Bash', title: 'cat big.log' },
+      { type: 'tool.completed', toolId: 't1', output: long },
+      { type: 'completed', text: 'ok' },
+    ]);
+
+    let emitted: { output?: string; truncated?: boolean } | null = null;
+    for await (const event of chat.sendMessage({
+      conversationId,
+      content: 'lê',
+      workMode: 'edit',
+      autonomy: 'auto',
+      mainAgentId: 'scripted',
+    })) {
+      if (event.type === 'step.completed') {
+        emitted = event.step;
+      }
+    }
+
+    assert.equal(emitted?.output?.length, MAX_STEP_OUTPUT_CHARS);
+    assert.equal(emitted?.truncated, true);
+
+    const messages = await chat.getMessages(conversationId);
+    const step = messages[1]?.steps?.[0];
+    assert.equal(step?.output?.length, MAX_STEP_OUTPUT_CHARS);
+    assert.equal(step?.truncated, true);
+  });
+
+  test('um passo em andamento é fechado quando o run falha', async () => {
+    const { chat, conversationId } = await scriptedChat([
+      { type: 'tool.requested', toolId: 't1', tool: 'Bash', title: 'npm run build' },
+      { type: 'failed', error: { name: 'BuildError', message: 'quebrou' } },
+    ]);
+
+    for await (const _event of chat.sendMessage({
+      conversationId,
+      content: 'build',
+      workMode: 'edit',
+      autonomy: 'auto',
+      mainAgentId: 'scripted',
+    })) {
+      // consome o stream até o fim
+    }
+
+    const messages = await chat.getMessages(conversationId);
+    assert.equal(messages[1]?.steps?.[0]?.status, 'failed');
+  });
+
+  test('o mock emite uma sequência de passos visível na interface', async () => {
+    const api = await getApi();
+    const conversation = await api.localChat.createConversation({ chatType: 'local' });
+
+    for await (const _event of api.localChat.sendMessage({
+      conversationId: conversation.id,
+      content: 'mostra os passos',
+      workMode: 'edit',
+      autonomy: 'auto',
+      mainAgentId: 'mock',
+    })) {
+      // consome o stream até o fim
+    }
+
+    const messages = await api.localChat.getMessages(conversation.id);
+    const steps = messages[1]?.steps ?? [];
+    assert.ok(
+      steps.some((step) => step.kind === 'thought'),
+      'esperava um passo de raciocínio',
+    );
+    assert.deepEqual(
+      steps.filter((step) => step.kind === 'tool').map((step) => step.tool),
+      ['Read', 'Write', 'Bash'],
+    );
+    assert.ok(steps.every((step) => step.status === 'done'));
   });
 
   test('limpar a conversa local apaga só as mensagens', async () => {
