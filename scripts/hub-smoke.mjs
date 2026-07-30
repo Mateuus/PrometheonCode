@@ -9,7 +9,7 @@ import process from 'node:process';
 const API = 'http://127.0.0.1:3551';
 const MAIL_DIR = join(tmpdir(), 'prometheon-mail');
 const email = process.argv[2] ?? `smoke-${Date.now()}@exemplo.test`;
-const password = 'Senha-Muito-Forte-123';
+const password = 'Senha-Muito-Forte-123'; // secret-scan:ignore — conta criada e apagada pelo próprio script
 
 let failures = 0;
 
@@ -155,6 +155,7 @@ const write = await call('POST', '/v1/organizations', {
 report('escrita depois da verificação é aceita', write.status < 300, `HTTP ${write.status}`);
 
 // 7 — senha errada
+// secret-scan:ignore — senha propositalmente errada
 const wrong = await call('POST', '/v1/auth/login', { body: { email, password: 'senha-errada-123' } });
 report('senha errada é recusada', wrong.status >= 400, `HTTP ${wrong.status}`);
 

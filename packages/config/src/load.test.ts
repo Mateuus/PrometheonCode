@@ -292,7 +292,7 @@ describe('loadConfig in test', () => {
 describe('redactedConfig', () => {
   it('replaces every secret with a presence marker', () => {
     const config = load({
-      VALKEY_URL: 'redis://valkey:sup3r-s3cret-p4ss@127.0.0.1:6379',
+      VALKEY_URL: 'redis://valkey:sup3r-s3cret-p4ss@127.0.0.1:6379', // secret-scan:ignore — URL inventada para provar a redação
       VALKEY_PASSWORD: 'sup3r-s3cret-p4ss',
       SMTP_USER: 'mailer',
       SMTP_PASSWORD: 'mailer-p4ssword',
@@ -322,7 +322,7 @@ describe('redactedConfig', () => {
 
   it('scrubs credentials embedded in the redis url', () => {
     const redacted = redactedConfig(
-      load({ VALKEY_URL: 'redis://user:p4ssw0rd-goes-here@cache.internal:6379' }),
+      load({ VALKEY_URL: 'redis://user:p4ssw0rd-goes-here@cache.internal:6379' }), // secret-scan:ignore — URL inventada para provar a redação
     );
 
     expect(redacted.redis.url).toBe('redis://***:***@cache.internal:6379');

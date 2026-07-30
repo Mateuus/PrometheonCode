@@ -70,6 +70,10 @@ const RULES = [
   {
     id: "generic-secret-assignment",
     label: "Atribuição de segredo em texto puro",
+    // Senha inventada em teste é o padrão do ofício, não vazamento. As regras de
+    // chave de provedor (sk-ant, ghp_, AKIA…) continuam valendo nos testes: se
+    // alguém colar uma credencial de verdade lá, ela é apontada.
+    skipInTests: true,
     pattern:
       /\b(?:api[_-]?key|secret|passwd|password|token|client[_-]?secret|access[_-]?token|refresh[_-]?token|auth[_-]?token|private[_-]?key)\b\s*[:=]\s*['"][^'"\s]{16,}['"]/i,
     entropy: 3.0,
@@ -89,9 +93,14 @@ const PLACEHOLDERS = [
   /^\$\{?[A-Z0-9_]+\}?$/,
   /^(?:your|my|the)[-_]?/i,
   /example|placeholder|dummy|sample|redacted|changeme|todo|fake|test[-_]?only|xxxx|000000|aaaa/i,
+  // Chave pontuada de tradução ou de configuração: `auth.error.shortPassword`.
+  // Não é senha, e aparece com frequência em campo chamado `password`.
+  /^[a-z][a-zA-Z0-9]*(?:\.[a-z][a-zA-Z0-9]*){2,}$/,
 ];
 
-/** Arquivos onde credenciais de exemplo são esperadas. */
+/** Arquivos de teste e fixtures, onde valor inventado é esperado. */
+const TEST_PATH = /(^|\/)(?:src\/)?(?:test|tests|__tests__|fixtures)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/;
+
 const EXEMPT_PATHS = [
   /(^|\/)\.env\.example$/,
   /(^|\/)scripts\/scan-secrets\.mjs$/,
@@ -196,7 +205,9 @@ function scan(lines) {
     if (EXEMPT_PATHS.some((pattern) => pattern.test(entry.file))) continue;
     if (entry.text.includes(IGNORE_MARKER)) continue;
 
+    const isTest = TEST_PATH.test(entry.file);
     for (const rule of RULES) {
+      if (rule.skipInTests && isTest) continue;
       const match = rule.pattern.exec(entry.text);
       if (!match) continue;
       if (looksLikePlaceholder(match[0])) continue;
