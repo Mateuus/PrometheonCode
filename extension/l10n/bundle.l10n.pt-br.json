@@ -4,14 +4,12 @@
   "Open settings": "Abrir configurações",
   "Accounts and usage": "Contas e uso",
   "Untitled": "Sem título",
-
   "Local": "Local",
   "Web": "Web",
   "Search sessions…": "Buscar sessões…",
   "No sessions yet.": "Nenhuma sessão ainda.",
   "No session matches this search.": "Nenhuma sessão corresponde a esta busca.",
   "Web sessions need a connected Hub.": "As sessões Web precisam de um Hub conectado.",
-
   "Ask Prometheon…  (Enter to send · paste to attach an image)": "Pergunte ao Prometheon…  (Enter para enviar · cole para anexar uma imagem)",
   "Attach image": "Anexar imagem",
   "Send": "Enviar",
@@ -19,18 +17,15 @@
   "Clear this local conversation": "Limpar esta conversa local",
   "Stop": "Interromper",
   "Remove image": "Remover imagem",
-
   "Dictate — tap or hold Ctrl+D to record": "Ditar — toque ou segure Ctrl+D para gravar",
   "Listening… tap Ctrl+D to stop": "Ouvindo… toque Ctrl+D para parar",
   "Transcribing…": "Transcrevendo…",
   "Dictation unavailable.": "Ditado indisponível.",
   "No speech engine configured yet.": "Nenhum motor de voz configurado ainda.",
   "No speech engine is configured. Dictation stays off until one is available.": "Nenhum motor de voz está configurado. O ditado fica desligado até haver um disponível.",
-
   "Work mode": "Modo de trabalho",
   "Autonomy": "Autonomia",
   "Main agent": "Agente principal",
-
   "Plan": "Planejar",
   "Edit": "Editar",
   "Agent Team": "Equipe de agentes",
@@ -43,19 +38,16 @@
   "Ask for approval on relevant actions.": "Pedir aprovação nas ações relevantes.",
   "Approve safe actions and pause on risky ones.": "Aprovar ações seguras e pausar nas arriscadas.",
   "No interactive approval inside the authorized scope.": "Sem aprovação interativa dentro do escopo autorizado.",
-
   "You": "Você",
   "No messages yet. Ask something to see the mesh respond.": "Nenhuma mensagem ainda. Pergunte algo para ver a malha responder.",
   "Image preview": "Visualizar imagem",
   "Close": "Fechar",
-
   "Settings": "Configurações",
   "General": "Geral",
   "Accounts": "Contas",
   "Agents": "Agentes",
   "Workspace": "Workspace",
   "MCP": "MCP",
-
   "Interface language": "Idioma da interface",
   "Applies to this panel. Menus and commands contributed to VS Code follow the editor language.": "Vale para este painel. Menus e comandos contribuídos ao VS Code seguem o idioma do editor.",
   "Follow VS Code": "Seguir o VS Code",
@@ -66,7 +58,6 @@
   "Source language of the interface.": "Idioma-fonte da interface.",
   "Interface in Brazilian Portuguese.": "Interface em português do Brasil.",
   "Interface in Spanish.": "Interface em espanhol.",
-
   "Question from the agent": "Pergunta do agente",
   "Other": "Outro",
   "Type your answer…": "Escreva sua resposta…",
@@ -75,9 +66,7 @@
   "Asked": "Perguntou",
   "Cancelled": "Cancelada",
   "The answer did not match the question and was discarded.": "A resposta não corresponde à pergunta e foi descartada.",
-
   "Active Agents": "Agentes ativos",
-
   "Accounts & Usage": "Contas e uso",
   "Add account": "Adicionar conta",
   "No account yet. Add one to give an agent its own CLI sign-in, isolated from the others.": "Nenhuma conta ainda. Adicione uma para dar a um agente o próprio login de CLI, isolado dos demais.",
@@ -94,21 +83,17 @@
   "Sign out": "Sair",
   "Remove": "Remover",
   "Token counts are measured by Prometheon on this machine. Subscription limits live in each provider account and are not read from here.": "As contagens de tokens são medidas pelo Prometheon nesta máquina. Os limites da assinatura vivem na conta de cada provedor e não são lidos daqui.",
-
   "Tokens measured locally": "Tokens medidos localmente",
   "Today": "Hoje",
   "Last 7 days": "Últimos 7 dias",
   "All time": "Desde o início",
-
   "Set up Prometheon for this workspace": "Configurar o Prometheon para este workspace",
   "Initialize in current workspace": "Inicializar no workspace atual",
   "Choose Prometheon workspace folder": "Escolher a pasta de workspace do Prometheon",
   "Continue without shared workspace": "Continuar sem workspace compartilhado",
-
   "Web Chat": "Chat Web",
   "Web Chat keeps conversations and approved context synchronized through Prometheon Hub. Connect a Hub to continue.": "O Chat Web mantém conversas e contexto aprovado sincronizados pelo Prometheon Hub. Conecte um Hub para continuar.",
   "Connect to Prometheon Hub": "Conectar ao Prometheon Hub",
-
   "Wait for the current run to finish before switching sessions.": "Aguarde a execução atual terminar antes de trocar de sessão.",
   "Session not found.": "Sessão não encontrada.",
   "Open a folder first to create the Prometheon workspace.": "Abra uma pasta antes de criar o workspace do Prometheon.",
@@ -120,7 +105,6 @@
   "Unsupported image format: {0}": "Formato de imagem não suportado: {0}",
   "Prometheon: the command failed. See the Prometheon output channel.": "Prometheon: o comando falhou. Veja o canal de saída do Prometheon.",
   "Prometheon: bypass is not active.": "Prometheon: o bypass não está ativo.",
-
   "Name": "Nome",
   "Cancel": "Cancelar",
   "Edit {0}": "Editar {0}",
@@ -242,7 +226,6 @@
   "Thought for {0}": "Pensou por {0}",
   "Available · {0}": "Disponível · {0}",
   "Unavailable · {0}": "Indisponível · {0}",
-
   "Local only": "Somente local",
   "Disconnected": "Desconectado",
   "Connecting": "Conectando",
@@ -257,10 +240,18 @@
   "blocked": "bloqueado",
   "completed": "concluído",
   "stopped": "interrompido",
-
   "Chat type": "Tipo de conversa",
   "Message": "Mensagem",
   "Remove {0}": "Remover {0}",
   "Open {0}": "Abrir {0}",
-  "{0} input tokens · {1} output tokens": "{0} tokens de entrada · {1} tokens de saída"
+  "{0} input tokens · {1} output tokens": "{0} tokens de entrada · {1} tokens de saída",
+  "Reset Prometheon to a clean state?": "Limpar o Prometheon e voltar ao estado inicial?",
+  "This deletes local conversations, provider and agent profiles, workspace preferences and the Hub credentials stored on this machine. It cannot be undone.": "Isso apaga as conversas locais, os perfis de provedor e de agente, as preferências do workspace e as credenciais do Hub guardadas nesta máquina. Não há como desfazer.",
+  "Reset": "Limpar",
+  "Also delete the CLI sign-ins?": "Apagar também os logins dos CLIs?",
+  "Each profile keeps its own CLI credentials in an isolated folder. Deleting them means signing in again in every provider. Keeping them is safe: without the profiles, Prometheon no longer points to those folders.": "Cada perfil guarda as credenciais do CLI numa pasta isolada. Apagá-las obriga a entrar de novo em cada provedor. Mantê-las é seguro: sem os perfis, o Prometheon não aponta mais para essas pastas.",
+  "Delete sign-ins": "Apagar logins",
+  "Keep them": "Manter",
+  "Prometheon was reset. Reload the window to finish.": "O Prometheon foi limpo. Recarregue a janela para concluir.",
+  "Reload window": "Recarregar janela"
 }

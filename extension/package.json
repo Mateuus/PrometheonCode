@@ -133,6 +133,11 @@
         "command": "prometheon.showDiagnostics",
         "title": "%command.showDiagnostics%",
         "category": "Prometheon"
+      },
+      {
+        "command": "prometheon.resetLocalState",
+        "title": "%command.resetLocalState%",
+        "category": "Prometheon"
       }
     ],
     "menus": {

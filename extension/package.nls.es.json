@@ -22,5 +22,6 @@
   "configuration.chat.defaultType": "Tipo de conversación abierto por defecto.",
   "configuration.chat.defaultType.local": "Chat Local: funciona sin cuenta y sin servidor.",
   "configuration.chat.defaultType.web": "Chat Web: requiere un Prometheon Hub configurado.",
-  "configuration.workspace.promptOnOpen": "Mostrar la pantalla de configuración cuando la carpeta abierta no tenga .prometheon/prometheon.yaml."
+  "configuration.workspace.promptOnOpen": "Mostrar la pantalla de configuración cuando la carpeta abierta no tenga .prometheon/prometheon.yaml.",
+  "command.resetLocalState": "Restablecer estado local…"
 }

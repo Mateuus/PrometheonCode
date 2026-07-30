@@ -31,6 +31,24 @@ export class LocalStateStore {
     return this.context.workspaceState;
   }
 
+  /**
+   * Apaga tudo que esta extensão gravou, nos dois escopos.
+   *
+   * Cada chave é removida pelo nome, e não por uma varredura: `globalState` e
+   * `workspaceState` são compartilhados com as outras extensões, e limpar em
+   * bloco levaria junto o que não é nosso.
+   *
+   * As duas listas são percorridas mesmo quando a chave só existe num dos
+   * escopos — remover o que não está lá não custa nada, e depender de lembrar
+   * qual chave mora onde é como uma delas sobreviveria ao reset.
+   */
+  async clearAll(): Promise<void> {
+    for (const key of LOCAL_STATE_KEYS) {
+      await this.global.update(key, undefined);
+      await this.workspace.update(key, undefined);
+    }
+  }
+
   getChatType(): ChatType {
     return pick(this.global.get<string>(KEYS.chatType), CHAT_TYPES, 'local');
   }
@@ -130,3 +148,14 @@ const KEYS = {
 function pick<T extends string>(value: string | undefined, allowed: readonly T[], fallback: T): T {
   return allowed.find((candidate) => candidate === value) ?? fallback;
 }
+
+/**
+ * Todas as chaves gravadas por esta extensão.
+ *
+ * Exportada para o reset conseguir apagar exatamente o que o Prometheon
+ * escreveu — nem mais, nem menos. O `globalState` e o `workspaceState` do VS
+ * Code são compartilhados, e varrer tudo levaria junto o que é de outra
+ * extensão. Chave nova precisa entrar aqui, senão sobrevive a um reset e
+ * ressuscita como configuração fantasma na instalação seguinte.
+ */
+export const LOCAL_STATE_KEYS = Object.values(KEYS);

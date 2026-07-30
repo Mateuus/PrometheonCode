@@ -192,7 +192,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(CHAT_VIEW_ID, provider, viewOptions),
     vscode.window.registerWebviewViewProvider(CHAT_VIEW_SECONDARY_ID, provider, viewOptions),
-    ...registerCommands({ core, provider, logger }),
+    ...registerCommands({ core, provider, logger, secrets, local: localState, profiles, agentProfiles }),
   );
 
   await core.initialize();
