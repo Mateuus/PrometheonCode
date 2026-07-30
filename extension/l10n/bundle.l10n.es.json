@@ -49,6 +49,15 @@
   "Image preview": "Vista previa de la imagen",
   "Close": "Cerrar",
 
+  "Question from the agent": "Pregunta del agente",
+  "Other": "Otro",
+  "Type your answer…": "Escribe tu respuesta…",
+  "Submit answers": "Enviar respuestas",
+  "Esc to cancel": "Esc para cancelar",
+  "Asked": "Preguntó",
+  "Cancelled": "Cancelada",
+  "The answer did not match the question and was discarded.": "La respuesta no corresponde a la pregunta y se descartó.",
+
   "Active Agents": "Agentes activos",
 
   "Accounts & Usage": "Cuentas y uso",

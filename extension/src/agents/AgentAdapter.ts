@@ -6,6 +6,7 @@ import type {
   SerializedError,
   WorkMode,
 } from '../core/types';
+import type { AgentQuestionOutcome, AgentQuestionRequest } from './questions';
 
 export type AgentTransport = 'cli' | 'api' | 'mock';
 
@@ -67,6 +68,22 @@ export type AgentEvent =
     }
   /** Raciocínio já concluído, exibido como "Thought for 3s". */
   | { readonly type: 'thought'; readonly durationMs: number }
+  /**
+   * O agente parou para perguntar. O run só continua quando a resposta chega
+   * por `answer` — nada é decidido no lugar do usuário. Só um pedido pode ficar
+   * aberto por sessão.
+   *
+   * Quem emite isto precisa estar pronto para receber a resposta **antes** de
+   * emitir: a espera se arma primeiro, o evento sai depois. Consumidor nenhum é
+   * obrigado a esperar um instante antes de responder.
+   */
+  | { readonly type: 'question.asked'; readonly request: AgentQuestionRequest }
+  /** O pedido acima foi resolvido: respondido, cancelado ou abandonado. */
+  | {
+      readonly type: 'question.answered';
+      readonly requestId: string;
+      readonly outcome: AgentQuestionOutcome;
+    }
   /** `usage` vem do CLI quando ele reporta; adaptadores sem isso omitem. */
   | { readonly type: 'completed'; readonly text: string; readonly usage?: TokenUsage }
   | { readonly type: 'failed'; readonly error: SerializedError }
@@ -85,6 +102,13 @@ export interface AgentAdapter {
   isAvailable(): Promise<boolean>;
   start(input: StartAgentInput): Promise<AgentSession>;
   send(sessionId: string, message: AgentInput): AsyncIterable<AgentEvent>;
+  /**
+   * Entrega a resposta de um `question.asked`. Só quem emite o evento precisa
+   * implementar — um adaptador que nunca pergunta pode omitir o método.
+   * Um `requestId` desconhecido é ignorado, e não um erro: a resposta pode ter
+   * chegado depois de o run acabar.
+   */
+  answer?(sessionId: string, requestId: string, outcome: AgentQuestionOutcome): Promise<void>;
   interrupt(sessionId: string): Promise<void>;
   dispose(sessionId: string): Promise<void>;
 }

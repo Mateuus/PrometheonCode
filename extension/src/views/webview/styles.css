@@ -1730,3 +1730,165 @@ button.ghost:hover:not(:disabled) {
   overflow-y: auto;
 }
 
+
+/* ---------- Pergunta do agente ---------- */
+
+/* Fica acima do modal de configuração: o run está parado esperando por ela. */
+.question-modal {
+  z-index: 60;
+}
+
+.question-card {
+  width: min(520px, 100%);
+}
+
+.question-header {
+  gap: 4px;
+  padding: 10px 10px 6px;
+  border-bottom: 1px solid var(--prom-border);
+}
+
+.question-tabs {
+  flex: 1 1 auto;
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.question-tab {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--vscode-foreground);
+  font-size: 0.88em;
+  opacity: 0.7;
+}
+
+.question-tab:hover:not(:disabled) {
+  background: transparent;
+  opacity: 1;
+}
+
+.question-tab.active {
+  opacity: 1;
+  font-weight: 600;
+  border-bottom-color: var(--prom-accent);
+}
+
+/* Pergunta já respondida: o ponto marca o que falta sem contar quantos. */
+.question-tab.answered::after {
+  content: '';
+  display: inline-block;
+  margin-left: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--prom-accent);
+  vertical-align: middle;
+}
+
+.question-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.question-body:focus-visible {
+  outline: 1px solid var(--prom-accent-soft);
+  outline-offset: -2px;
+}
+
+.question-prompt {
+  margin: 0;
+  font-size: 1em;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.question-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--am-radius);
+  cursor: pointer;
+}
+
+.question-option:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.question-option.selected {
+  background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
+  border-color: var(--prom-accent-soft);
+}
+
+.question-option input {
+  flex: 0 0 auto;
+  margin: 0.25em 0 0;
+  accent-color: var(--prom-accent);
+}
+
+.question-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.question-option-label {
+  font-size: 0.94em;
+  font-weight: 600;
+}
+
+.question-option-description {
+  font-size: 0.86em;
+  line-height: 1.35;
+  color: var(--prom-text-dim);
+}
+
+/* Texto livre do "Other": só aparece quando a opção está escolhida. */
+.question-custom {
+  margin: 2px 0 0 28px;
+  padding: 5px 8px;
+  border-radius: var(--am-radius);
+  border: 1px solid var(--prom-border);
+  background: var(--prom-surface-input);
+  color: var(--vscode-input-foreground);
+  font-family: inherit;
+  font-size: 0.92em;
+}
+
+.question-custom:focus-visible {
+  outline: 1px solid var(--prom-accent-soft);
+  outline-offset: -1px;
+}
+
+.question-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--prom-border);
+}
+
+.question-hint {
+  font-size: 0.84em;
+  color: var(--prom-text-dim);
+}

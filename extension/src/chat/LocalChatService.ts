@@ -1,4 +1,9 @@
 import type { AgentRegistry } from '../agents/AgentRegistry';
+import {
+  questionTitle,
+  summarizeAnswers,
+  type AgentQuestionOutcome,
+} from '../agents/questions';
 import type { Logger } from '../logger';
 import type { LocalStateStore } from '../storage/LocalStateStore';
 import { PrometheonError, serializeError } from '../utils/errors';
@@ -25,6 +30,8 @@ interface RunState {
   readonly sessionId: string;
   readonly agentId: string;
   readonly messageId: string;
+  /** Pergunta aberta neste run, esperando resposta do usuário. */
+  pendingQuestionId: string | null;
 }
 
 /** Nome de uma sessão que ainda não recebeu a primeira mensagem. */
@@ -138,11 +145,13 @@ export class LocalChatService implements ChatService {
       status: 'streaming',
       timestamp: Date.now(),
     });
-    this.runs.set(runId, {
+    const run: RunState = {
       sessionId: session.id,
       agentId: adapter.id,
       messageId: agentMessage.id,
-    });
+      pendingQuestionId: null,
+    };
+    this.runs.set(runId, run);
     yield { type: 'message.created', runId, message: agentMessage };
     yield {
       type: 'agent.status',
@@ -260,6 +269,51 @@ export class LocalChatService implements ChatService {
             break;
           }
 
+          case 'question.asked': {
+            // O passo nasce em andamento e só fecha quando a resposta chega:
+            // é ele que registra a pergunta no histórico da conversa.
+            run.pendingQuestionId = event.request.requestId;
+            const step: AgentStep = {
+              id: event.request.requestId,
+              kind: 'question',
+              tool: 'Question',
+              title: questionTitle(event.request),
+              status: 'running',
+              startedAt: Date.now(),
+            };
+            await upsertStep(step);
+            yield { type: 'step.started', runId, messageId: agentMessage.id, step };
+            yield {
+              type: 'question.asked',
+              runId,
+              messageId: agentMessage.id,
+              request: event.request,
+            };
+            break;
+          }
+
+          case 'question.answered': {
+            if (run.pendingQuestionId === event.requestId) {
+              run.pendingQuestionId = null;
+            }
+            const asked = steps.find((item) => item.id === event.requestId);
+            const startedAt = asked?.startedAt ?? Date.now();
+            const step: AgentStep = {
+              id: event.requestId,
+              kind: 'question',
+              tool: 'Question',
+              title: asked?.title ?? '',
+              detail: summarizeAnswers(event.outcome),
+              status: event.outcome.type === 'cancelled' ? 'failed' : 'done',
+              startedAt,
+              durationMs: Date.now() - startedAt,
+            };
+            await upsertStep(step);
+            yield { type: 'step.completed', runId, messageId: agentMessage.id, step };
+            yield { type: 'question.closed', runId, requestId: event.requestId };
+            break;
+          }
+
           case 'thought': {
             // Raciocínio chega já concluído: só o par tempo/ordem interessa.
             const step: AgentStep = {
@@ -339,7 +393,37 @@ export class LocalChatService implements ChatService {
     if (run === undefined) {
       return;
     }
+    // Uma pergunta aberta some junto do run: o agente não pode ficar esperando
+    // uma resposta que a interface já não mostra.
+    if (run.pendingQuestionId !== null) {
+      await this.answerQuestion(run.pendingQuestionId, { type: 'cancelled' });
+    }
     await this.registry.require(run.agentId).interrupt(run.sessionId);
+  }
+
+  /**
+   * Entrega ao agente a resposta de uma pergunta aberta. Um `requestId` que não
+   * pertence a nenhum run em andamento é descartado — o run pode ter terminado
+   * entre o clique do usuário e a chegada da mensagem.
+   */
+  async answerQuestion(requestId: string, outcome: AgentQuestionOutcome): Promise<void> {
+    const run = [...this.runs.values()].find((item) => item.pendingQuestionId === requestId);
+    if (run === undefined) {
+      this.logger.info(`Resposta descartada: pergunta ${requestId} não está aberta.`);
+      return;
+    }
+    const adapter = this.registry.require(run.agentId);
+    if (adapter.answer === undefined) {
+      this.logger.warn(`Agente ${adapter.id} perguntou mas não sabe receber a resposta.`);
+      return;
+    }
+    run.pendingQuestionId = null;
+    await adapter.answer(run.sessionId, requestId, outcome);
+  }
+
+  /** Pergunta aberta de um run, quando há uma. */
+  pendingQuestionOf(runId: string): string | null {
+    return this.runs.get(runId)?.pendingQuestionId ?? null;
   }
 
   private find(conversationId: string): Conversation | undefined {

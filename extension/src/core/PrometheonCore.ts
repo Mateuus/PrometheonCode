@@ -1,6 +1,11 @@
 import * as vscode from 'vscode';
 import type { AgentProfileService } from '../agents/AgentProfileService';
 import type { AgentRegistry } from '../agents/AgentRegistry';
+import {
+  answerValues,
+  type AgentQuestionAnswer,
+  type AgentQuestionRequest,
+} from '../agents/questions';
 import type { LocalChatService } from '../chat/LocalChatService';
 import type { WebChatService } from '../chat/WebChatService';
 import { UNTITLED } from '../chat/LocalChatService';
@@ -112,6 +117,8 @@ export class PrometheonCore implements vscode.Disposable {
   private sessions: readonly ConversationSummary[] = [];
   private busy = false;
   private currentRunId: string | null = null;
+  /** Pergunta aberta do agente; some quando é respondida ou o run acaba. */
+  private pendingQuestion: AgentQuestionRequest | null = null;
   private hubStatus: HubConnectionStatus = { state: 'local-only' };
   private speechStatus: SpeechStatus = {
     available: false,
@@ -204,6 +211,7 @@ export class PrometheonCore implements vscode.Disposable {
       messages: this.messages,
       sessions: this.sessions,
       busy: this.busy,
+      pendingQuestion: this.pendingQuestion,
     };
   }
 
@@ -243,6 +251,12 @@ export class PrometheonCore implements vscode.Disposable {
         return;
       case 'chat.attachImages':
         await this.attachImages();
+        return;
+      case 'question.answer':
+        await this.answerQuestion(message.payload.requestId, message.payload.answers);
+        return;
+      case 'question.cancel':
+        await this.cancelQuestion(message.payload.requestId);
         return;
       case 'speech.start':
         await this.startDictation();
@@ -363,6 +377,15 @@ export class PrometheonCore implements vscode.Disposable {
           this.setActivity('thinking', 'Thinking…');
           this.deps.bus.emit('activity.changed', this.activity);
         }
+        if (event.type === 'question.asked') {
+          // A pergunta entra no estado antes de ir para a interface: se a view
+          // for reconstruída enquanto o agente espera, o modal volta com ela.
+          this.pendingQuestion = event.request;
+          this.deps.bus.emit('question.ask', event.request);
+        }
+        if (event.type === 'question.closed') {
+          this.clearPendingQuestion(event.requestId);
+        }
         if (event.type === 'message.completed' && event.usage !== undefined) {
           // O uso é contabilizado no perfil que executou, não no agente.
           await this.deps.usage.record(this.usageProfileId(), event.usage);
@@ -377,6 +400,8 @@ export class PrometheonCore implements vscode.Disposable {
       this.deps.logger.error(`Falha ao enviar mensagem: ${String(error)}`);
       this.deps.bus.emit('chat.error', serializeError(error));
     } finally {
+      // Um run que acabou não tem pergunta aberta, aconteça o que acontecer.
+      this.clearPendingQuestion(this.pendingQuestion?.requestId ?? null);
       this.busy = false;
       this.currentRunId = null;
       this.activity = IDLE_ACTIVITY;
@@ -388,6 +413,50 @@ export class PrometheonCore implements vscode.Disposable {
 
   async cancel(runId: string): Promise<void> {
     await this.deps.localChat.cancel(runId);
+  }
+
+  // ---------- Perguntas do agente ----------
+
+  /**
+   * Entrega a resposta ao agente que perguntou. A checagem aqui não é
+   * formalidade: a webview poderia mandar rótulo que ninguém ofereceu, e o
+   * agente receberia isso como se tivesse vindo do usuário.
+   */
+  async answerQuestion(
+    requestId: string,
+    answers: readonly AgentQuestionAnswer[],
+  ): Promise<void> {
+    const request = this.pendingQuestion;
+    if (request === null || request.requestId !== requestId) {
+      this.deps.logger.warn(`Resposta para uma pergunta que não está aberta: ${requestId}.`);
+      return;
+    }
+    if (!matchesRequest(request, answers)) {
+      this.deps.logger.warn(`Resposta descartada: não corresponde à pergunta ${requestId}.`);
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: 'The answer did not match the question and was discarded.',
+      });
+      return;
+    }
+    await this.deps.localChat.answerQuestion(requestId, { type: 'answered', answers });
+  }
+
+  /** O usuário fechou o modal: o agente recebe "cancelado" e segue o run. */
+  async cancelQuestion(requestId: string): Promise<void> {
+    if (this.pendingQuestion?.requestId !== requestId) {
+      return;
+    }
+    await this.deps.localChat.answerQuestion(requestId, { type: 'cancelled' });
+  }
+
+  /** Tira a pergunta do estado e fecha o modal, se ainda for a mesma. */
+  private clearPendingQuestion(requestId: string | null): void {
+    if (requestId === null || this.pendingQuestion?.requestId !== requestId) {
+      return;
+    }
+    this.pendingQuestion = null;
+    this.deps.bus.emit('question.close', requestId);
   }
 
   async stopAgent(sessionId: string): Promise<void> {
@@ -1377,6 +1446,36 @@ export class PrometheonCore implements vscode.Disposable {
       disposable.dispose();
     }
   }
+}
+
+/**
+ * A resposta corresponde ao que foi perguntado: uma entrada por pergunta, na
+ * mesma ordem, com rótulos que estavam entre as opções e escolha única onde a
+ * pergunta é de escolha única. Texto livre é a única resposta que pode não
+ * constar da lista — foi o usuário quem escreveu.
+ */
+function matchesRequest(
+  request: AgentQuestionRequest,
+  answers: readonly AgentQuestionAnswer[],
+): boolean {
+  if (answers.length !== request.questions.length) {
+    return false;
+  }
+  return request.questions.every((question, index) => {
+    const answer = answers[index];
+    if (answer === undefined || answer.header !== question.header) {
+      return false;
+    }
+    const labels = question.options.map((option) => option.label);
+    if (answer.selected.some((choice) => !labels.includes(choice))) {
+      return false;
+    }
+    const values = answerValues(answer);
+    if (values.length === 0) {
+      return false;
+    }
+    return question.multiSelect || values.length === 1;
+  });
 }
 
 const IMAGE_EXTENSIONS: Record<string, ImageMimeType> = {

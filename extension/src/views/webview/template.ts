@@ -1,4 +1,13 @@
 import * as vscode from 'vscode';
+import { activeLanguage, t, webviewStrings } from '../../i18n';
+
+/**
+ * JSON embutido no HTML. `<` é o único caractere capaz de encerrar a tag antes
+ * da hora, e escapá-lo mantém o conteúdo válido para o `JSON.parse` do cliente.
+ */
+function escapeJson(json: string): string {
+  return json.replace(/</g, '\\u003c');
+}
 
 /** Nonce de uso único para liberar exatamente um script na CSP. */
 export function createNonce(): string {
@@ -76,6 +85,9 @@ function iconTemplates(): string {
  */
 export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   const nonce = createNonce();
+  // Dicionário do idioma ativo, indexado pelo texto em inglês. Vai como JSON
+  // inerte: a webview lê o conteúdo, e nada aqui é executado como script.
+  const strings = escapeJson(JSON.stringify(webviewStrings()));
   const asset = (...segments: string[]): vscode.Uri =>
     webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, ...segments));
 
@@ -94,8 +106,12 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
     `script-src 'nonce-${nonce}'`,
   ].join('; ');
 
+  // Texto do HTML já traduzido. Em atributo, aspas viram entidade: tradução é
+  // conteúdo, não markup.
+  const label = (text: string): string => t(text).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${activeLanguage()}">
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="${csp}" />
@@ -107,45 +123,45 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
   <div class="app">
     <header class="header">
       <img class="logo" src="${logoUri.toString()}" alt="" width="18" height="18" />
-      <span class="session-title" id="session-title">Untitled</span>
+      <span class="session-title" id="session-title">${t('Untitled')}</span>
       <span class="grow"></span>
       <span class="hub-badge" id="hub-badge" title="Prometheon Hub status"></span>
-      <button class="icon-button" type="button" id="open-settings-modal" title="Configuration" aria-label="Configuration" aria-haspopup="dialog" aria-expanded="false">${ICONS.account}</button>
-      <button class="icon-button" type="button" id="toggle-sessions" title="Sessions" aria-label="Sessions" aria-haspopup="dialog" aria-expanded="false">${ICONS.history}</button>
-      <button class="icon-button" type="button" id="new-session" title="New chat" aria-label="New chat">${ICONS.plus}</button>
-      <button class="icon-button" type="button" id="open-settings" title="Open settings" aria-label="Open settings">${ICONS.gear}</button>
+      <button class="icon-button" type="button" id="open-settings-modal" title="${label('Accounts and usage')}" aria-label="${label('Accounts and usage')}" aria-haspopup="dialog" aria-expanded="false">${ICONS.account}</button>
+      <button class="icon-button" type="button" id="toggle-sessions" title="${label('Sessions')}" aria-label="${label('Sessions')}" aria-haspopup="dialog" aria-expanded="false">${ICONS.history}</button>
+      <button class="icon-button" type="button" id="new-session" title="${label('New chat')}" aria-label="${label('New chat')}">${ICONS.plus}</button>
+      <button class="icon-button" type="button" id="open-settings" title="${label('Open settings')}" aria-label="${label('Open settings')}">${ICONS.gear}</button>
     </header>
 
-    <div class="popover" id="sessions-popover" role="dialog" aria-label="Sessions" hidden>
+    <div class="popover" id="sessions-popover" role="dialog" aria-label="${label('Sessions')}" hidden>
       <div class="segmented" role="tablist" aria-label="Chat type">
-        <button class="segment" role="tab" type="button" data-chat-type="local">${ICONS.local}<span>Local</span></button>
-        <button class="segment" role="tab" type="button" data-chat-type="web">${ICONS.web}<span>Web</span></button>
+        <button class="segment" role="tab" type="button" data-chat-type="local">${ICONS.local}<span>${t('Local')}</span></button>
+        <button class="segment" role="tab" type="button" data-chat-type="web">${ICONS.web}<span>${t('Web')}</span></button>
       </div>
       <div class="search">
         ${ICONS.search}
-        <input id="session-search" type="text" placeholder="Search sessions…" aria-label="Search sessions" autocomplete="off" spellcheck="false" />
+        <input id="session-search" type="text" placeholder="${label('Search sessions…')}" aria-label="${label('Search sessions…')}" autocomplete="off" spellcheck="false" />
       </div>
-      <ul class="session-list" id="session-list" role="listbox" aria-label="Sessions"></ul>
-      <p class="session-empty" id="session-empty" hidden>No sessions yet.</p>
+      <ul class="session-list" id="session-list" role="listbox" aria-label="${label('Sessions')}"></ul>
+      <p class="session-empty" id="session-empty" hidden>${t('No sessions yet.')}</p>
     </div>
 
     <div class="banner" id="bypass-banner" hidden></div>
 
     <section class="panel" id="setup-panel" hidden>
-      <h2>Set up Prometheon for this workspace</h2>
+      <h2>${t('Set up Prometheon for this workspace')}</h2>
       <p id="setup-description"></p>
       <div class="panel-actions">
-        <button class="primary" type="button" data-setup="current">Initialize in current workspace</button>
-        <button type="button" data-setup="external">Choose Prometheon workspace folder</button>
-        <button class="link" type="button" data-setup="skip">Continue without shared workspace</button>
+        <button class="primary" type="button" data-setup="current">${t('Initialize in current workspace')}</button>
+        <button type="button" data-setup="external">${t('Choose Prometheon workspace folder')}</button>
+        <button class="link" type="button" data-setup="skip">${t('Continue without shared workspace')}</button>
       </div>
     </section>
 
     <section class="panel" id="web-panel" hidden>
-      <h2>Web Chat</h2>
-      <p>Web Chat keeps conversations and approved context synchronized through Prometheon Hub. Connect a Hub to continue.</p>
+      <h2>${t('Web Chat')}</h2>
+      <p>${t('Web Chat keeps conversations and approved context synchronized through Prometheon Hub. Connect a Hub to continue.')}</p>
       <div class="panel-actions">
-        <button class="primary" type="button" id="connect-hub">Connect to Prometheon Hub</button>
+        <button class="primary" type="button" id="connect-hub">${t('Connect to Prometheon Hub')}</button>
       </div>
     </section>
 
@@ -158,11 +174,11 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
     <main class="messages" id="messages" aria-live="polite" aria-busy="false"></main>
 
     <div class="empty-state" id="empty-state" hidden>
-      <p>No messages yet. Ask something to see the mesh respond.</p>
+      <p>${t('No messages yet. Ask something to see the mesh respond.')}</p>
     </div>
 
     <details class="agents" id="agents-section">
-      <summary>Active Agents <span class="count" id="agents-count">0</span></summary>
+      <summary>${t('Active Agents')} <span class="count" id="agents-count">0</span></summary>
       <ul class="agents-list" id="agents-list"></ul>
     </details>
 
@@ -179,18 +195,18 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
         <textarea
           id="composer-input"
           rows="1"
-          placeholder="Ask Prometheon…  (Enter to send · paste to attach an image)"
+          placeholder="${label('Ask Prometheon…  (Enter to send · paste to attach an image)')}"
           aria-label="Message"
         ></textarea>
         <div class="composer-bar">
-          <button class="icon-button" type="button" id="attach-image" title="Attach image" aria-label="Attach image">${ICONS.attach}</button>
+          <button class="icon-button" type="button" id="attach-image" title="${label('Attach image')}" aria-label="${label('Attach image')}">${ICONS.attach}</button>
 
           <div class="menu-anchor">
             <button class="pill" type="button" id="work-mode-button" aria-haspopup="menu" aria-expanded="false">
               <span class="pill-icon" data-slot="icon"></span><span data-slot="label"></span>
             </button>
-            <div class="menu" id="work-mode-menu" role="menu" aria-label="Work mode" hidden>
-              <div class="menu-title">Work mode</div>
+            <div class="menu" id="work-mode-menu" role="menu" aria-label="${label('Work mode')}" hidden>
+              <div class="menu-title">${t('Work mode')}</div>
               <div class="menu-items" data-slot="items"></div>
             </div>
           </div>
@@ -199,8 +215,8 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
             <button class="pill" type="button" id="autonomy-button" aria-haspopup="menu" aria-expanded="false">
               <span class="pill-icon" data-slot="icon"></span><span data-slot="label"></span>
             </button>
-            <div class="menu" id="autonomy-menu" role="menu" aria-label="Autonomy" hidden>
-              <div class="menu-title">Autonomy</div>
+            <div class="menu" id="autonomy-menu" role="menu" aria-label="${label('Autonomy')}" hidden>
+              <div class="menu-title">${t('Autonomy')}</div>
               <div class="menu-items" data-slot="items"></div>
             </div>
           </div>
@@ -209,17 +225,17 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
             <button class="pill" type="button" id="main-agent-button" aria-haspopup="menu" aria-expanded="false">
               <span class="pill-icon" data-slot="icon"></span><span data-slot="label"></span>
             </button>
-            <div class="menu" id="main-agent-menu" role="menu" aria-label="Main agent" hidden>
-              <div class="menu-title">Main agent</div>
+            <div class="menu" id="main-agent-menu" role="menu" aria-label="${label('Main agent')}" hidden>
+              <div class="menu-title">${t('Main agent')}</div>
               <div class="menu-items" data-slot="items"></div>
             </div>
           </div>
 
           <span class="grow"></span>
-          <button class="ghost" type="button" id="clear-chat" title="Clear this local conversation">Clear</button>
-          <button class="ghost danger" type="button" id="stop-run" hidden>Stop</button>
-          <button class="icon-button mic" type="button" id="dictate" aria-label="Dictate" aria-pressed="false">${ICONS.mic}</button>
-          <button class="send" type="button" id="send-message" title="Send" aria-label="Send">${ICONS.send}</button>
+          <button class="ghost" type="button" id="clear-chat" title="${label('Clear this local conversation')}">${t('Clear')}</button>
+          <button class="ghost danger" type="button" id="stop-run" hidden>${t('Stop')}</button>
+          <button class="icon-button mic" type="button" id="dictate" aria-label="${label('Dictate — tap or hold Ctrl+D to record')}" aria-pressed="false">${ICONS.mic}</button>
+          <button class="send" type="button" id="send-message" title="${label('Send')}" aria-label="${label('Send')}">${ICONS.send}</button>
         </div>
       </div>
     </footer>
@@ -227,25 +243,43 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
 
   <!-- Modal único de configuração: contas, agentes, workspace e MCP. O conteúdo
        de cada seção é montado pelo cliente com createElement/textContent. -->
-  <div class="modal" id="settings-modal" role="dialog" aria-modal="true" aria-label="Settings" hidden>
+  <div class="modal" id="settings-modal" role="dialog" aria-modal="true" aria-label="${label('Settings')}" hidden>
     <div class="modal-card settings-card">
       <header class="modal-header">
-        <h2 id="settings-title">Settings</h2>
-        <button class="icon-button" type="button" id="close-settings" title="Close" aria-label="Close">${ICONS.close}</button>
+        <h2 id="settings-title">${t('Settings')}</h2>
+        <button class="icon-button" type="button" id="close-settings" title="${label('Close')}" aria-label="${label('Close')}">${ICONS.close}</button>
       </header>
       <div class="settings-layout">
-        <nav class="settings-nav" id="settings-nav" role="tablist" aria-label="Settings sections"></nav>
+        <nav class="settings-nav" id="settings-nav" role="tablist" aria-label="${label('Settings')}"></nav>
         <div class="settings-pane" id="settings-pane" role="tabpanel" tabindex="-1"></div>
       </div>
     </div>
   </div>
 
+  <!-- Pergunta do agente. Fica aberto enquanto o run espera a resposta; abas,
+       enunciado e opções são montados pelo cliente com createElement. -->
+  <div class="modal question-modal" id="question-modal" role="dialog" aria-modal="true" aria-label="${label('Question from the agent')}" hidden>
+    <div class="modal-card question-card">
+      <header class="modal-header question-header">
+        <nav class="question-tabs" id="question-tabs" role="tablist" aria-label="${label('Question from the agent')}"></nav>
+        <button class="icon-button" type="button" id="close-question" title="${label('Close')}" aria-label="${label('Close')}">${ICONS.close}</button>
+      </header>
+      <div class="question-body" id="question-body" role="tabpanel" tabindex="-1"></div>
+      <footer class="question-footer">
+        <button class="primary" type="button" id="submit-answers">${t('Submit answers')}</button>
+        <span class="question-hint">${t('Esc to cancel')}</span>
+      </footer>
+    </div>
+  </div>
+
+  <script type="application/json" id="webview-strings">${strings}</script>
+
   <template id="icon-templates">
       ${iconTemplates()}
   </template>
 
-  <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Image preview" hidden>
-    <button class="lightbox-close" type="button" id="lightbox-close" title="Close" aria-label="Close">${ICONS.close}</button>
+  <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="${label('Image preview')}" hidden>
+    <button class="lightbox-close" type="button" id="lightbox-close" title="${label('Close')}" aria-label="${label('Close')}">${ICONS.close}</button>
     <img id="lightbox-image" alt="" />
     <span class="lightbox-caption" id="lightbox-caption"></span>
   </div>

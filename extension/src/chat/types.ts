@@ -1,3 +1,4 @@
+import type { AgentQuestionRequest } from '../agents/questions';
 import type {
   ActiveAgentSummary,
   Autonomy,
@@ -36,14 +37,14 @@ export interface ImageAttachment {
   readonly height?: number;
 }
 
-export type AgentStepKind = 'tool' | 'thought';
+export type AgentStepKind = 'tool' | 'thought' | 'question';
 export type AgentStepStatus = 'running' | 'done' | 'failed';
 
 /**
  * Um passo do trabalho do agente, exibido como item de timeline no chat: uso de
- * ferramenta (Write, Edit, Bash, Read…) ou um bloco de raciocínio. Fica dentro
- * da `ChatMessage` para sobreviver ao reload da conversa — o evento sozinho é
- * efêmero e se perderia ao reabrir a sessão.
+ * ferramenta (Write, Edit, Bash, Read…), um bloco de raciocínio ou uma pergunta
+ * feita ao usuário. Fica dentro da `ChatMessage` para sobreviver ao reload da
+ * conversa — o evento sozinho é efêmero e se perderia ao reabrir a sessão.
  */
 export interface AgentStep {
   /** Igual ao `toolId` do adaptador; liga início e fim do mesmo passo. */
@@ -161,6 +162,15 @@ export type ChatEvent =
       readonly messageId: string;
       readonly step: AgentStep;
     }
+  /** O agente parou para perguntar; a interface abre o modal e o run espera. */
+  | {
+      readonly type: 'question.asked';
+      readonly runId: string;
+      readonly messageId: string;
+      readonly request: AgentQuestionRequest;
+    }
+  /** O pedido saiu de cena — respondido, cancelado ou interrompido pelo run. */
+  | { readonly type: 'question.closed'; readonly runId: string; readonly requestId: string }
   | { readonly type: 'run.failed'; readonly runId: string; readonly error: SerializedError }
   | { readonly type: 'run.cancelled'; readonly runId: string; readonly messageId: string }
   /** Progresso do agente, usado para alimentar o painel Active Agents. */

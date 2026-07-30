@@ -126,6 +126,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
       provider.post({ type: 'attachments.added', payload: { attachments } }),
     ),
     bus.on('activity.changed', (payload) => provider.post({ type: 'activity', payload })),
+    bus.on('question.ask', (payload) => provider.post({ type: 'question.ask', payload })),
+    bus.on('question.close', (requestId) =>
+      provider.post({ type: 'question.close', payload: { requestId } }),
+    ),
     bus.on('speech.transcript', (text) =>
       provider.post({ type: 'speech.transcript', payload: { text } }),
     ),

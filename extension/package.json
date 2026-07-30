@@ -193,11 +193,29 @@
     "configuration": {
       "title": "Prometheon",
       "properties": {
+        "prometheon.language": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "en",
+            "pt-br",
+            "es"
+          ],
+          "enumDescriptions": [
+            "%configuration.language.auto%",
+            "%configuration.language.en%",
+            "%configuration.language.ptbr%",
+            "%configuration.language.es%"
+          ],
+          "default": "auto",
+          "description": "%configuration.language%",
+          "order": 1
+        },
         "prometheon.hub.url": {
           "type": "string",
           "default": "",
           "markdownDescription": "%configuration.hub.url%",
-          "order": 1
+          "order": 2
         },
         "prometheon.chat.defaultType": {
           "type": "string",
@@ -211,13 +229,13 @@
           ],
           "default": "local",
           "description": "%configuration.chat.defaultType%",
-          "order": 2
+          "order": 3
         },
         "prometheon.workspace.promptOnOpen": {
           "type": "boolean",
           "default": true,
           "description": "%configuration.workspace.promptOnOpen%",
-          "order": 3
+          "order": 4
         }
       }
     }

@@ -8,6 +8,7 @@ import type {
   AgentSession,
   StartAgentInput,
 } from './AgentAdapter';
+import { formatAnswers, type AgentQuestion, type AgentQuestionOutcome } from './questions';
 
 /** Intervalo entre pedaços do streaming simulado. Curto o suficiente para não travar a UI. */
 const CHUNK_DELAY_MS = 22;
@@ -89,6 +90,53 @@ const SIMULATED_STEPS: readonly {
 ];
 
 /**
+ * Perguntas simuladas. Existem para exercitar o modal de verdade: uma escolha
+ * única e uma de múltipla escolha, que é o par que a interface precisa desenhar.
+ */
+const SIMULATED_QUESTIONS: readonly AgentQuestion[] = [
+  {
+    header: 'Escopo',
+    question: 'Por onde devo começar esta tarefa?',
+    multiSelect: false,
+    options: [
+      {
+        label: 'Pelos testes',
+        description: 'Escrever o teste que falha antes de mexer no código.',
+      },
+      {
+        label: 'Pela implementação',
+        description: 'Fazer a mudança primeiro e cobrir com teste depois.',
+      },
+      {
+        label: 'Só analisar',
+        description: 'Levantar o que precisa mudar sem editar nada ainda.',
+      },
+    ],
+  },
+  {
+    header: 'Verificação',
+    question: 'O que devo rodar antes de considerar a tarefa pronta?',
+    multiSelect: true,
+    options: [
+      { label: 'Testes', description: 'npm test' },
+      { label: 'Lint', description: 'npm run lint' },
+      { label: 'Tipos', description: 'npm run check-types' },
+    ],
+  },
+];
+
+/** Pergunta aberta de uma sessão simulada, esperando a resposta do usuário. */
+interface PendingQuestion {
+  readonly requestId: string;
+  readonly resolve: (outcome: AgentQuestionOutcome) => void;
+}
+
+interface MockSession {
+  cancelled: boolean;
+  pending: PendingQuestion | null;
+}
+
+/**
  * Adaptador simulado. Existe para validar toda a cadeia chat → core → agente sem
  * depender de nenhuma CLI externa. Os adaptadores reais implementarão a mesma
  * interface e podem substituí-lo sem mudanças na interface.
@@ -104,7 +152,7 @@ export class MockAgentAdapter implements AgentAdapter {
     terminal: false,
   };
 
-  private readonly sessions = new Map<string, { cancelled: boolean }>();
+  private readonly sessions = new Map<string, MockSession>();
 
   isAvailable(): Promise<boolean> {
     return Promise.resolve(true);
@@ -116,7 +164,7 @@ export class MockAgentAdapter implements AgentAdapter {
       agentId: this.id,
       startedAt: Date.now(),
     };
-    this.sessions.set(session.id, { cancelled: false });
+    this.sessions.set(session.id, { cancelled: false, pending: null });
     return Promise.resolve(session);
   }
 
@@ -136,6 +184,25 @@ export class MockAgentAdapter implements AgentAdapter {
     // Sequência simulada: um raciocínio e três ferramentas, para a timeline do
     // chat funcionar sem nenhuma CLI instalada. Nada é lido nem executado.
     yield { type: 'thought', durationMs: 3200 };
+
+    // Antes de trabalhar, o agente pergunta — e fica parado até a resposta.
+    // A espera é armada antes do `yield`: quem consome pode responder na hora,
+    // e uma resposta imediata não pode cair no vazio.
+    const requestId = newId('ask');
+    const answered = new Promise<AgentQuestionOutcome>((resolve) => {
+      session.pending = { requestId, resolve };
+    });
+    yield { type: 'status', status: 'waiting' };
+    yield { type: 'question.asked', request: { requestId, questions: SIMULATED_QUESTIONS } };
+    const outcome = await answered;
+    yield { type: 'question.answered', requestId, outcome };
+
+    if (outcome.type === 'cancelled' || session.cancelled) {
+      yield { type: 'cancelled' };
+      yield { type: 'status', status: 'stopped' };
+      return;
+    }
+    yield { type: 'status', status: 'working' };
 
     for (const [index, step] of SIMULATED_STEPS.entries()) {
       await delay(STEP_DELAY_MS);
@@ -167,7 +234,8 @@ export class MockAgentAdapter implements AgentAdapter {
       `Prometheon está funcionando. Recebi sua mensagem no modo ` +
       `${WORK_MODE_LABELS[message.workMode]}, com autonomia ` +
       `${AUTONOMY_LABELS[message.autonomy]}.` +
-      (images === 0 ? '' : ` Vieram ${images} imagem(ns) anexada(s).`);
+      (images === 0 ? '' : ` Vieram ${images} imagem(ns) anexada(s).`) +
+      `\n\nSuas respostas:\n${formatAnswers(outcome.answers)}`;
 
     let emitted = '';
     for (const chunk of toChunks(reply)) {
@@ -194,15 +262,32 @@ export class MockAgentAdapter implements AgentAdapter {
     yield { type: 'status', status: 'completed' };
   }
 
+  answer(sessionId: string, requestId: string, outcome: AgentQuestionOutcome): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (session?.pending?.requestId !== requestId) {
+      // Pedido antigo ou de outra sessão: a resposta simplesmente não vale mais.
+      return Promise.resolve();
+    }
+    const { resolve } = session.pending;
+    session.pending = null;
+    resolve(outcome);
+    return Promise.resolve();
+  }
+
   interrupt(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (session !== undefined) {
       session.cancelled = true;
+      // Parar com pergunta aberta destrava o run: ele segue para o encerramento.
+      session.pending?.resolve({ type: 'cancelled' });
+      session.pending = null;
     }
     return Promise.resolve();
   }
 
   dispose(sessionId: string): Promise<void> {
+    // Uma sessão descartada não pode deixar o run preso numa promessa eterna.
+    this.sessions.get(sessionId)?.pending?.resolve({ type: 'cancelled' });
     this.sessions.delete(sessionId);
     return Promise.resolve();
   }

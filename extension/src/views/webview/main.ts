@@ -1,3 +1,9 @@
+import {
+  MAX_CUSTOM_ANSWER_LENGTH,
+  type AgentQuestion,
+  type AgentQuestionAnswer,
+  type AgentQuestionRequest,
+} from '../../agents/questions';
 import type {
   AgentStep,
   ChatMessage,
@@ -124,6 +130,11 @@ const dom = {
   clearChat: element<HTMLButtonElement>('clear-chat'),
   stopRun: element<HTMLButtonElement>('stop-run'),
   sendMessage: element<HTMLButtonElement>('send-message'),
+  questionModal: element<HTMLDivElement>('question-modal'),
+  questionTabs: element<HTMLElement>('question-tabs'),
+  questionBody: element<HTMLDivElement>('question-body'),
+  closeQuestion: element<HTMLButtonElement>('close-question'),
+  submitAnswers: element<HTMLButtonElement>('submit-answers'),
   lightbox: element<HTMLDivElement>('lightbox'),
   lightboxImage: element<HTMLImageElement>('lightbox-image'),
   lightboxCaption: element<HTMLSpanElement>('lightbox-caption'),
@@ -2183,6 +2194,249 @@ function renderSessionItem(session: ConversationSummary): HTMLElement {
   return item;
 }
 
+// ---------- Perguntas do agente ----------
+
+/**
+ * Rótulo da escolha livre. Nunca vai no `selected` da resposta: o que o usuário
+ * escreve viaja em `custom`, e o núcleo só aceita rótulos que ele mesmo ofereceu.
+ */
+const OTHER_LABEL = 'Other';
+
+interface QuestionDraft {
+  /** Rótulos marcados entre as opções oferecidas pelo agente. */
+  selected: string[];
+  /** "Other" está marcado; o texto digitado é que vale como resposta. */
+  other: boolean;
+  custom: string;
+}
+
+let question: AgentQuestionRequest | null = null;
+let questionAt = 0;
+let questionDrafts: QuestionDraft[] = [];
+
+function isQuestionOpen(): boolean {
+  return !dom.questionModal.hidden;
+}
+
+/** Abre o modal com um pedido novo; reabrir o mesmo preserva o que foi marcado. */
+function openQuestion(request: AgentQuestionRequest): void {
+  if (question?.requestId !== request.requestId) {
+    question = request;
+    questionAt = 0;
+    questionDrafts = request.questions.map(() => ({ selected: [], other: false, custom: '' }));
+  }
+  dom.questionModal.hidden = false;
+  renderQuestion();
+  dom.questionBody.focus();
+}
+
+/** Tira o modal da tela sem avisar a extensão — quem fecha por lá já sabe. */
+function hideQuestion(): void {
+  question = null;
+  questionDrafts = [];
+  questionAt = 0;
+  dom.questionModal.hidden = true;
+  dom.questionTabs.replaceChildren();
+  dom.questionBody.replaceChildren();
+}
+
+/** O usuário desistiu: o agente recebe "cancelado" e o run segue sem resposta. */
+function cancelQuestion(): void {
+  const requestId = question?.requestId;
+  hideQuestion();
+  if (requestId !== undefined) {
+    post({ type: 'question.cancel', payload: { requestId } });
+  }
+}
+
+function isAnswered(draft: QuestionDraft): boolean {
+  return draft.selected.length > 0 || (draft.other && draft.custom.trim() !== '');
+}
+
+function renderQuestion(): void {
+  const request = question;
+  if (request === null) {
+    return;
+  }
+  const current = request.questions[questionAt];
+  if (current === undefined) {
+    return;
+  }
+
+  // Abas só quando há mais de uma pergunta: uma aba sozinha não navega nada.
+  dom.questionTabs.hidden = request.questions.length < 2;
+  dom.questionTabs.replaceChildren(
+    ...request.questions.map((item, index) => {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = 'question-tab';
+      tab.setAttribute('role', 'tab');
+      tab.textContent = item.header;
+      const active = index === questionAt;
+      tab.classList.toggle('active', active);
+      tab.classList.toggle('answered', isAnswered(questionDrafts[index] ?? emptyDraft()));
+      tab.setAttribute('aria-selected', String(active));
+      tab.addEventListener('click', () => {
+        questionAt = index;
+        renderQuestion();
+      });
+      return tab;
+    }),
+  );
+
+  dom.questionBody.replaceChildren(renderQuestionOptions(current, questionAt));
+  dom.submitAnswers.disabled = !questionDrafts.every(isAnswered);
+}
+
+function emptyDraft(): QuestionDraft {
+  return { selected: [], other: false, custom: '' };
+}
+
+function renderQuestionOptions(item: AgentQuestion, index: number): DocumentFragment {
+  const draft = questionDrafts[index] ?? emptyDraft();
+
+  const prompt = document.createElement('p');
+  prompt.className = 'question-prompt';
+  prompt.textContent = item.question;
+
+  const list = document.createElement('div');
+  list.className = 'question-options';
+  list.setAttribute('role', item.multiSelect ? 'group' : 'radiogroup');
+
+  for (const option of item.options) {
+    list.append(
+      optionRow(item, index, option.label, option.description, draft.selected.includes(option.label)),
+    );
+  }
+  list.append(optionRow(item, index, OTHER_LABEL, undefined, draft.other));
+
+  if (draft.other) {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'question-custom';
+    input.value = draft.custom;
+    input.maxLength = MAX_CUSTOM_ANSWER_LENGTH;
+    input.placeholder = 'Type your answer…';
+    input.setAttribute('aria-label', item.question);
+    input.addEventListener('input', () => {
+      draft.custom = input.value;
+      // Só o rodapé e as abas mudam: redesenhar o campo perderia o cursor.
+      dom.submitAnswers.disabled = !questionDrafts.every(isAnswered);
+      updateQuestionTabs();
+    });
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        submitAnswers();
+      }
+    });
+    list.append(input);
+  }
+
+  return fragment([prompt, list]);
+}
+
+function optionRow(
+  item: AgentQuestion,
+  index: number,
+  label: string,
+  description: string | undefined,
+  checked: boolean,
+): HTMLElement {
+  const row = document.createElement('label');
+  row.className = 'question-option';
+  row.classList.toggle('selected', checked);
+
+  const input = document.createElement('input');
+  input.type = item.multiSelect ? 'checkbox' : 'radio';
+  input.name = `question-${index}`;
+  input.checked = checked;
+  input.addEventListener('change', () => toggleOption(item, index, label, input.checked));
+
+  const text = document.createElement('span');
+  text.className = 'question-option-text';
+
+  const title = document.createElement('span');
+  title.className = 'question-option-label';
+  title.textContent = label;
+  text.append(title);
+
+  if (description !== undefined && description !== '') {
+    const hint = document.createElement('span');
+    hint.className = 'question-option-description';
+    hint.textContent = description;
+    text.append(hint);
+  }
+
+  row.append(input, text);
+  return row;
+}
+
+function toggleOption(item: AgentQuestion, index: number, label: string, checked: boolean): void {
+  const draft = questionDrafts[index];
+  if (draft === undefined) {
+    return;
+  }
+  const other = label === OTHER_LABEL;
+
+  if (!item.multiSelect) {
+    // Escolha única: a marcação nova substitui a anterior, inclusive o "Other".
+    draft.selected = other || !checked ? [] : [label];
+    draft.other = other && checked;
+  } else if (other) {
+    draft.other = checked;
+  } else {
+    draft.selected = checked
+      ? [...draft.selected, label]
+      : draft.selected.filter((choice) => choice !== label);
+  }
+  if (!draft.other) {
+    draft.custom = '';
+  }
+
+  renderQuestion();
+  // Escolha única já resolvida avança sozinha para a próxima pendente; com
+  // "Other" o usuário ainda precisa digitar, então a aba fica onde está.
+  if (!item.multiSelect && checked && !other) {
+    goToNextUnanswered();
+  }
+}
+
+function goToNextUnanswered(): void {
+  const next = questionDrafts.findIndex((draft, index) => index !== questionAt && !isAnswered(draft));
+  if (next !== -1) {
+    questionAt = next;
+    renderQuestion();
+  }
+}
+
+/** Marca no cabeçalho quais perguntas já têm resposta, sem remontar o corpo. */
+function updateQuestionTabs(): void {
+  const tabs = Array.from(dom.questionTabs.querySelectorAll<HTMLElement>('.question-tab'));
+  tabs.forEach((tab, index) => {
+    tab.classList.toggle('answered', isAnswered(questionDrafts[index] ?? emptyDraft()));
+  });
+}
+
+function submitAnswers(): void {
+  const request = question;
+  if (request === null || !questionDrafts.every(isAnswered)) {
+    return;
+  }
+  const answers = request.questions.map<AgentQuestionAnswer>((item, index) => {
+    const draft = questionDrafts[index] ?? emptyDraft();
+    const custom = draft.other ? draft.custom.trim() : '';
+    return {
+      header: item.header,
+      selected: [...draft.selected],
+      ...(custom === '' ? {} : { custom }),
+    };
+  });
+  const requestId = request.requestId;
+  hideQuestion();
+  post({ type: 'question.answer', payload: { requestId, answers } });
+}
+
 // ---------- Passos do agente ----------
 
 /**
@@ -2205,7 +2459,7 @@ function renderStep(step: AgentStep): HTMLElement {
 
   const tool = document.createElement('span');
   tool.className = 'step-tool';
-  tool.textContent = step.tool;
+  tool.textContent = step.kind === 'question' ? 'Asked' : step.tool;
 
   const target = document.createElement('span');
   target.className = 'step-target';
@@ -2496,6 +2750,16 @@ function render(next: PrometheonViewState): void {
     dom.bypassBanner.textContent = `Bypass permissions active — scope: ${bypass.scope}, duration: ${bypass.duration}. Expires when the extension restarts.`;
   }
 
+  // O snapshot manda no modal: uma view reconstruída no meio do run reabre a
+  // pergunta que o agente ainda está esperando.
+  if (next.pendingQuestion === null) {
+    if (isQuestionOpen()) {
+      hideQuestion();
+    }
+  } else {
+    openQuestion(next.pendingQuestion);
+  }
+
   renderActivity(next.activity);
   renderSettings();
   renderDictation(next.speech);
@@ -2737,6 +3001,11 @@ document.addEventListener('keydown', (event) => {
     closeLightbox();
     return;
   }
+  // A pergunta vem antes da configuração: é ela que está segurando o run.
+  if (isQuestionOpen()) {
+    cancelQuestion();
+    return;
+  }
   if (isSettingsOpen()) {
     closeSettings();
     dom.openSettingsModal.focus();
@@ -2746,6 +3015,15 @@ document.addEventListener('keydown', (event) => {
   if (isPopoverOpen()) {
     closePopover();
     dom.toggleSessions.focus();
+  }
+});
+
+dom.submitAnswers.addEventListener('click', submitAnswers);
+dom.closeQuestion.addEventListener('click', cancelQuestion);
+dom.questionModal.addEventListener('click', (event) => {
+  // Clicar fora do cartão equivale a fechar: o agente segue sem a resposta.
+  if (event.target === dom.questionModal) {
+    cancelQuestion();
   }
 });
 
@@ -2804,6 +3082,14 @@ window.addEventListener('message', (event: MessageEvent<ExtensionToWebviewMessag
       break;
     case 'activity':
       renderActivity(message.payload);
+      break;
+    case 'question.ask':
+      openQuestion(message.payload);
+      break;
+    case 'question.close':
+      if (question?.requestId === message.payload.requestId) {
+        hideQuestion();
+      }
       break;
     case 'settings.open':
       openSettings(message.payload.section, message.payload.focus);

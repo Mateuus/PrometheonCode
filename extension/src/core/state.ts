@@ -1,3 +1,4 @@
+import type { AgentQuestionRequest } from '../agents/questions';
 import type { ChatMessage, ConversationSummary } from '../chat/types';
 import type {
   AccountSummary,
@@ -46,4 +47,9 @@ export interface PrometheonViewState {
   readonly sessions: readonly ConversationSummary[];
   /** Há um run em andamento; a UI mostra o botão de interromper. */
   readonly busy: boolean;
+  /**
+   * Pergunta do agente esperando resposta. Fica no snapshot para uma view
+   * reconstruída reabrir o modal — o run continua parado do outro lado.
+   */
+  readonly pendingQuestion: AgentQuestionRequest | null;
 }

@@ -65,6 +65,37 @@ export const WEBVIEW_STRINGS = {
   'chat.imagePreview': 'Image preview',
   'chat.close': 'Close',
 
+  // Modal de configuração
+  'settings.title': 'Settings',
+  'settings.general': 'General',
+  'settings.accounts': 'Accounts',
+  'settings.agents': 'Agents',
+  'settings.workspace': 'Workspace',
+  'settings.mcp': 'MCP',
+
+  // Idioma da interface
+  'language.field': 'Interface language',
+  'language.hint':
+    'Applies to this panel. Menus and commands contributed to VS Code follow the editor language.',
+  'language.auto': 'Follow VS Code',
+  'language.en': 'English',
+  'language.ptbr': 'Português (Brasil)',
+  'language.es': 'Español',
+  'language.auto.description': 'Use the display language of the editor.',
+  'language.en.description': 'Source language of the interface.',
+  'language.ptbr.description': 'Interface in Brazilian Portuguese.',
+  'language.es.description': 'Interface in Spanish.',
+
+  // Perguntas do agente
+  'question.title': 'Question from the agent',
+  'question.other': 'Other',
+  'question.customPlaceholder': 'Type your answer…',
+  'question.submit': 'Submit answers',
+  'question.cancelHint': 'Esc to cancel',
+  'question.step': 'Asked',
+  'question.cancelled': 'Cancelled',
+  'question.mismatch': 'The answer did not match the question and was discarded.',
+
   // Agentes ativos
   'agents.title': 'Active Agents',
   'agents.stop': 'Stop',

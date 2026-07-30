@@ -1,3 +1,12 @@
+import {
+  MAX_CUSTOM_ANSWER_LENGTH,
+  MAX_OPTION_LABEL_LENGTH,
+  MAX_QUESTIONS,
+  MAX_QUESTION_HEADER_LENGTH,
+  MAX_QUESTION_OPTIONS,
+  type AgentQuestionAnswer,
+  type AgentQuestionRequest,
+} from '../agents/questions';
 import { IMAGE_MIME_TYPES, type ChatEvent, type ImageAttachment } from '../chat/types';
 import type { PrometheonViewState } from '../core/state';
 import {
@@ -83,6 +92,16 @@ export type WebviewToExtensionMessage =
   | { readonly type: 'chat.clearLocal' }
   | { readonly type: 'chat.openSession'; readonly payload: { readonly conversationId: string } }
   | { readonly type: 'chat.attachImages' }
+  /** Resposta do usuário à pergunta aberta do agente. */
+  | {
+      readonly type: 'question.answer';
+      readonly payload: {
+        readonly requestId: string;
+        readonly answers: readonly AgentQuestionAnswer[];
+      };
+    }
+  /** O modal foi fechado sem resposta; o agente segue sem ela. */
+  | { readonly type: 'question.cancel'; readonly payload: { readonly requestId: string } }
   | { readonly type: 'speech.start' }
   | { readonly type: 'speech.stop' }
   | { readonly type: 'speech.cancel' }
@@ -141,6 +160,9 @@ export type ExtensionToWebviewMessage =
     }
   /** Texto ditado, para o cliente inserir no rascunho onde está o cursor. */
   | { readonly type: 'speech.transcript'; readonly payload: { readonly text: string } }
+  /** Abre o modal de pergunta do agente; o run espera do outro lado. */
+  | { readonly type: 'question.ask'; readonly payload: AgentQuestionRequest }
+  | { readonly type: 'question.close'; readonly payload: { readonly requestId: string } }
   | { readonly type: 'activity'; readonly payload: ActivityStatus }
   /**
    * Abre o modal de configuração da webview já na seção pedida. `focus: 'new'`
@@ -371,6 +393,54 @@ function parseAgentProfileDraft(raw: unknown): AgentProfileDraft | null {
   };
 }
 
+/**
+ * Resposta a uma pergunta do agente. Aqui só se verifica a forma — se os
+ * rótulos correspondem ao que foi perguntado é o núcleo que decide, porque só
+ * ele conhece o pedido que está aberto.
+ */
+function parseQuestionAnswer(raw: unknown): AgentQuestionAnswer | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const header = nonEmptyString(raw['header'], MAX_QUESTION_HEADER_LENGTH);
+  const rawSelected = raw['selected'];
+  if (header === null || !Array.isArray(rawSelected) || rawSelected.length > MAX_QUESTION_OPTIONS) {
+    return null;
+  }
+  const selected: string[] = [];
+  for (const entry of rawSelected) {
+    const label = nonEmptyString(entry, MAX_OPTION_LABEL_LENGTH);
+    if (label === null || selected.includes(label)) {
+      return null;
+    }
+    selected.push(label);
+  }
+  const custom = optionalText(raw['custom'], MAX_CUSTOM_ANSWER_LENGTH);
+  if (custom === null) {
+    return null;
+  }
+  // Sem escolha e sem texto livre não é resposta, é modal fechado.
+  if (selected.length === 0 && custom === undefined) {
+    return null;
+  }
+  return { header, selected, ...(custom === undefined ? {} : { custom }) };
+}
+
+function parseQuestionAnswers(raw: unknown): readonly AgentQuestionAnswer[] | null {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_QUESTIONS) {
+    return null;
+  }
+  const answers: AgentQuestionAnswer[] = [];
+  for (const entry of raw) {
+    const answer = parseQuestionAnswer(entry);
+    if (answer === null) {
+      return null;
+    }
+    answers.push(answer);
+  }
+  return answers;
+}
+
 /** Nome de servidor: é chave de objeto no `.mcp.json`, então nada de espaço. */
 const MCP_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -576,6 +646,19 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
     case 'chat.cancel': {
       const runId = payload === undefined ? null : nonEmptyString(payload['runId']);
       return runId === null ? null : { type: 'chat.cancel', payload: { runId } };
+    }
+
+    case 'question.answer': {
+      const requestId = payload === undefined ? null : nonEmptyString(payload['requestId'], 128);
+      const answers = payload === undefined ? null : parseQuestionAnswers(payload['answers']);
+      return requestId === null || answers === null
+        ? null
+        : { type: 'question.answer', payload: { requestId, answers } };
+    }
+
+    case 'question.cancel': {
+      const requestId = payload === undefined ? null : nonEmptyString(payload['requestId'], 128);
+      return requestId === null ? null : { type: 'question.cancel', payload: { requestId } };
     }
 
     case 'chat.selectType': {

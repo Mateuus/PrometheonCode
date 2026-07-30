@@ -501,6 +501,60 @@ suite('Validação das mensagens da webview', () => {
     assert.equal(parseWebviewMessage({ type: 'settings.open' }), null);
   });
 
+  test('question.answer só passa com resposta bem formada', () => {
+    const answer = (answers: unknown): unknown =>
+      parseWebviewMessage({ type: 'question.answer', payload: { requestId: 'ask_1', answers } });
+
+    assert.deepEqual(answer([{ header: 'Escopo', selected: ['Pelos testes'] }]), {
+      type: 'question.answer',
+      payload: {
+        requestId: 'ask_1',
+        answers: [{ header: 'Escopo', selected: ['Pelos testes'] }],
+      },
+    });
+
+    // Texto livre chega separado das opções, e sozinho já é resposta.
+    assert.deepEqual(answer([{ header: 'Escopo', selected: [], custom: '  pelo build  ' }]), {
+      type: 'question.answer',
+      payload: {
+        requestId: 'ask_1',
+        answers: [{ header: 'Escopo', selected: [], custom: 'pelo build' }],
+      },
+    });
+
+    assert.equal(answer([]), null, 'resposta vazia não é resposta');
+    assert.equal(answer([{ header: 'Escopo', selected: [] }]), null, 'sem escolha e sem texto');
+    assert.equal(answer([{ header: 'Escopo' }]), null);
+    assert.equal(answer([{ selected: ['Pelos testes'] }]), null);
+    assert.equal(
+      answer([{ header: 'Escopo', selected: ['a', 'a'] }]),
+      null,
+      'rótulo repetido indica cliente quebrado',
+    );
+    assert.equal(answer([{ header: 'Escopo', selected: 'Pelos testes' }]), null);
+    assert.equal(
+      answer(Array.from({ length: 5 }, () => ({ header: 'x', selected: ['y'] }))),
+      null,
+      'mais respostas do que perguntas cabem num pedido',
+    );
+    assert.equal(
+      parseWebviewMessage({ type: 'question.answer', payload: { answers: [] } }),
+      null,
+    );
+  });
+
+  test('question.cancel exige o identificador do pedido', () => {
+    assert.deepEqual(
+      parseWebviewMessage({ type: 'question.cancel', payload: { requestId: 'ask_1' } }),
+      { type: 'question.cancel', payload: { requestId: 'ask_1' } },
+    );
+    assert.equal(parseWebviewMessage({ type: 'question.cancel' }), null);
+    assert.equal(
+      parseWebviewMessage({ type: 'question.cancel', payload: { requestId: '' } }),
+      null,
+    );
+  });
+
   test('chat.openSession exige um identificador utilizável', () => {
     assert.deepEqual(
       parseWebviewMessage({ type: 'chat.openSession', payload: { conversationId: 'conv_1' } }),

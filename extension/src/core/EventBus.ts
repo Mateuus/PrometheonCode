@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { AgentQuestionRequest } from '../agents/questions';
 import type { ChatEvent, ImageAttachment } from '../chat/types';
 import type { PrometheonViewState } from './state';
 import type {
@@ -19,6 +20,10 @@ export interface PrometheonEventMap {
   'attachments.added': readonly ImageAttachment[];
   'speech.transcript': string;
   'activity.changed': ActivityStatus;
+  /** Abre o modal de pergunta do agente. */
+  'question.ask': AgentQuestionRequest;
+  /** Fecha o modal, respondido ou não. */
+  'question.close': string;
   notification: UiNotification;
 }
 

@@ -5,11 +5,12 @@ import type {
   AgentEvent,
   AgentSession,
 } from '../agents/AgentAdapter';
+import { formatAnswers, type AgentQuestionOutcome } from '../agents/questions';
 import { AgentRegistry } from '../agents/AgentRegistry';
 import { LocalChatService } from '../chat/LocalChatService';
 import { MAX_STEP_OUTPUT_CHARS } from '../chat/types';
 import { Logger } from '../logger';
-import { getApi, isPrometheonError } from './helpers';
+import { autoAnswer, getApi, isPrometheonError } from './helpers';
 
 const hubNotConfigured = isPrometheonError('HubNotConfiguredError', 'hub.not-configured');
 
@@ -51,6 +52,97 @@ class ScriptedAdapter implements AgentAdapter {
   dispose(): Promise<void> {
     return Promise.resolve();
   }
+}
+
+const REQUEST_ID = 'ask_test';
+
+/**
+ * Adaptador que faz uma pergunta e fica parado até a resposta chegar. É o
+ * contrato inteiro num arquivo só: perguntar, esperar, seguir com o que veio.
+ */
+class AskingAdapter implements AgentAdapter {
+  readonly id = 'asking';
+  readonly displayName = 'Asking Agent';
+  readonly transport = 'mock' as const;
+  readonly capabilities: AgentCapabilities = {
+    chat: true,
+    edit: false,
+    delegate: false,
+    terminal: false,
+  };
+
+  /** Último desfecho recebido; é o que prova que a resposta chegou ao agente. */
+  received: AgentQuestionOutcome | null = null;
+  private resolve: ((outcome: AgentQuestionOutcome) => void) | null = null;
+
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  start(): Promise<AgentSession> {
+    return Promise.resolve({ id: 'asking-session', agentId: this.id, startedAt: Date.now() });
+  }
+
+  async *send(): AsyncIterable<AgentEvent> {
+    // A espera é armada antes de perguntar: responder na mesma volta do laço
+    // é legítimo, e a resposta não pode se perder.
+    const answered = new Promise<AgentQuestionOutcome>((resolve) => {
+      this.resolve = resolve;
+    });
+    yield {
+      type: 'question.asked',
+      request: {
+        requestId: REQUEST_ID,
+        questions: [
+          {
+            header: 'Escopo',
+            question: 'Por onde começar?',
+            multiSelect: false,
+            options: [{ label: 'Pelos testes' }, { label: 'Pela implementação' }],
+          },
+        ],
+      },
+    };
+    const outcome = await answered;
+    this.received = outcome;
+    yield { type: 'question.answered', requestId: REQUEST_ID, outcome };
+    yield {
+      type: 'completed',
+      text: outcome.type === 'answered' ? formatAnswers(outcome.answers) : 'segui sem resposta',
+    };
+  }
+
+  answer(_sessionId: string, requestId: string, outcome: AgentQuestionOutcome): Promise<void> {
+    if (requestId === REQUEST_ID) {
+      this.resolve?.(outcome);
+      this.resolve = null;
+    }
+    return Promise.resolve();
+  }
+
+  interrupt(): Promise<void> {
+    this.resolve?.({ type: 'cancelled' });
+    this.resolve = null;
+    return Promise.resolve();
+  }
+
+  dispose(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+async function askingChat(): Promise<{
+  chat: LocalChatService;
+  conversationId: string;
+  adapter: AskingAdapter;
+}> {
+  const api = await getApi();
+  const registry = new AgentRegistry();
+  const adapter = new AskingAdapter();
+  registry.register(adapter);
+  const chat = new LocalChatService(api.localState, registry, new Logger());
+  const conversation = await chat.createConversation({ chatType: 'local' });
+  return { chat, conversationId: conversation.id, adapter };
 }
 
 /**
@@ -123,6 +215,7 @@ suite('Chat', () => {
       autonomy: 'auto',
       mainAgentId: 'mock',
     })) {
+      autoAnswer(api.localChat, event);
       switch (event.type) {
         case 'run.started':
           userMessageId = event.message.id;
@@ -168,14 +261,14 @@ suite('Chat', () => {
     const conversation = await api.localChat.createConversation({ chatType: 'local' });
     assert.equal(conversation.title, 'Untitled');
 
-    for await (const _event of api.localChat.sendMessage({
+    for await (const event of api.localChat.sendMessage({
       conversationId: conversation.id,
       content: 'Como está o build?\nsegunda linha',
       workMode: 'plan',
       autonomy: 'manual',
       mainAgentId: 'mock',
     })) {
-      // consome o stream até o fim
+      autoAnswer(api.localChat, event);
     }
 
     const summaries = await api.localChat.listConversations();
@@ -217,6 +310,7 @@ suite('Chat', () => {
       autonomy: 'manual',
       mainAgentId: 'mock',
     })) {
+      autoAnswer(api.localChat, event);
       if (event.type === 'message.completed') {
         completed = event.content;
       }
@@ -357,14 +451,14 @@ suite('Chat', () => {
     const api = await getApi();
     const conversation = await api.localChat.createConversation({ chatType: 'local' });
 
-    for await (const _event of api.localChat.sendMessage({
+    for await (const event of api.localChat.sendMessage({
       conversationId: conversation.id,
       content: 'mostra os passos',
       workMode: 'edit',
       autonomy: 'auto',
       mainAgentId: 'mock',
     })) {
-      // consome o stream até o fim
+      autoAnswer(api.localChat, event);
     }
 
     const messages = await api.localChat.getMessages(conversation.id);
@@ -380,18 +474,93 @@ suite('Chat', () => {
     assert.ok(steps.every((step) => step.status === 'done'));
   });
 
+  test('a pergunta do agente chega ao chat e a resposta volta para ele', async () => {
+    const { chat, conversationId, adapter } = await askingChat();
+
+    const seen: string[] = [];
+    let completed = '';
+    for await (const event of chat.sendMessage({
+      conversationId,
+      content: 'começa',
+      workMode: 'edit',
+      autonomy: 'manual',
+      mainAgentId: 'asking',
+    })) {
+      if (event.type === 'question.asked') {
+        seen.push(`asked:${event.request.questions[0]?.header}`);
+        await chat.answerQuestion(event.request.requestId, {
+          type: 'answered',
+          answers: [{ header: 'Escopo', selected: ['Pelos testes'] }],
+        });
+      }
+      if (event.type === 'question.closed') {
+        seen.push(`closed:${event.requestId}`);
+      }
+      if (event.type === 'message.completed') {
+        completed = event.content;
+      }
+    }
+
+    assert.deepEqual(seen, ['asked:Escopo', `closed:${REQUEST_ID}`]);
+    assert.deepEqual(adapter.received, {
+      type: 'answered',
+      answers: [{ header: 'Escopo', selected: ['Pelos testes'] }],
+    });
+    assert.equal(completed, 'Escopo: Pelos testes');
+
+    // A pergunta vira um passo da timeline e sobrevive ao reload da conversa.
+    const step = (await chat.getMessages(conversationId))[1]?.steps?.[0];
+    assert.equal(step?.kind, 'question');
+    assert.equal(step?.title, 'Por onde começar?');
+    assert.equal(step?.detail, 'Pelos testes');
+    assert.equal(step?.status, 'done');
+  });
+
+  test('interromper o run cancela a pergunta aberta', async () => {
+    const { chat, conversationId, adapter } = await askingChat();
+
+    let runId: string | null = null;
+    for await (const event of chat.sendMessage({
+      conversationId,
+      content: 'começa',
+      workMode: 'edit',
+      autonomy: 'manual',
+      mainAgentId: 'asking',
+    })) {
+      if (event.type === 'run.started') {
+        runId = event.runId;
+      }
+      if (event.type === 'question.asked') {
+        assert.ok(runId, 'esperava conhecer o run antes da pergunta');
+        await chat.cancel(runId);
+      }
+    }
+
+    assert.deepEqual(adapter.received, { type: 'cancelled' });
+    const step = (await chat.getMessages(conversationId))[1]?.steps?.[0];
+    assert.equal(step?.status, 'failed');
+    assert.equal(step?.detail, 'Cancelled');
+  });
+
+  test('uma resposta para pergunta que não está aberta é descartada', async () => {
+    const { chat, adapter } = await askingChat();
+
+    await chat.answerQuestion('ask_inexistente', { type: 'answered', answers: [] });
+    assert.equal(adapter.received, null);
+  });
+
   test('limpar a conversa local apaga só as mensagens', async () => {
     const api = await getApi();
     const conversation = await api.localChat.createConversation({ chatType: 'local' });
 
-    for await (const _event of api.localChat.sendMessage({
+    for await (const event of api.localChat.sendMessage({
       conversationId: conversation.id,
       content: 'algo',
       workMode: 'plan',
       autonomy: 'manual',
       mainAgentId: 'mock',
     })) {
-      // consome o stream até o fim
+      autoAnswer(api.localChat, event);
     }
     assert.ok((await api.localChat.getMessages(conversation.id)).length > 0);
 
