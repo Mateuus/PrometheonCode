@@ -7,6 +7,7 @@ import {
   activeAgentListSchema,
   auditPageSchema,
   conversationPageSchema,
+  deviceSessionListSchema,
   knowledgePageSchema,
   memberPageSchema,
   meResponseSchema,
@@ -26,6 +27,7 @@ import type {
   AuditLog,
   Conversation,
   DashboardSummary,
+  DeviceSession,
   KnowledgeItemSummary,
   Message,
   OrganizationMember,
@@ -123,6 +125,17 @@ export async function getViewer(): Promise<ApiResult<Viewer>> {
  */
 export async function listSessions(): Promise<ApiResult<Session[]>> {
   return items(await get('/v1/me/sessions', sessionPageSchema, { query: { limit: PAGE_LIMIT } }));
+}
+
+/**
+ * Dispositivos conectados — a extensão do VS Code.
+ *
+ * Vive na mesma tela das sessões: as duas listas respondem "onde eu estou
+ * logado?", e separá-las faria alguém fechar as sessões, achar que terminou, e
+ * deixar o editor conectado com uma credencial que vale 90 dias.
+ */
+export async function listDevices(): Promise<ApiResult<DeviceSession[]>> {
+  return items(await get('/v1/me/devices', deviceSessionListSchema));
 }
 
 export async function listOrganizations(): Promise<ApiResult<OrganizationWithAccess[]>> {

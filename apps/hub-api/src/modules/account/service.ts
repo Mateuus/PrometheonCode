@@ -19,7 +19,7 @@ import type { Database } from '@prometheon/database';
 
 import type { RedisClient } from '../../plugins/redis.js';
 import { buildPage, decodeCursor, type CursorPage } from '../../shared/cursor.js';
-import { toIso } from '../../shared/time.js';
+import { toIso, toIsoOrNull } from '../../shared/time.js';
 import { sessionRevoked } from '../auth/errors.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { AuthRepository } from '../auth/repository.js';
@@ -28,6 +28,7 @@ import { denySession } from '../auth/token-store.js';
 import type { CurrentUserView, RequestOrigin } from '../auth/types.js';
 import {
   currentPasswordInvalid,
+  deviceNotFound,
   emptyProfileUpdate,
   passwordUnchanged,
   sessionNotFound,
@@ -47,6 +48,19 @@ export interface SessionView {
   createdAt: string;
   lastUsedAt: string;
   expiresAt: string;
+}
+
+/** Um dispositivo como o contrato público o descreve. */
+export interface DeviceView {
+  id: string;
+  name: string;
+  platform: string;
+  client: string;
+  clientVersion: string | null;
+  ipAddress: string | null;
+  lastSeenAt: string | null;
+  connectedAt: string;
+  credentialExpiresAt: string | null;
 }
 
 export interface AccountServiceDeps {
@@ -165,10 +179,12 @@ export class AccountService {
    * tem. Quando a chamada vem de uma credencial de dispositivo (sem sessão),
    * não há o que preservar e todas as sessões caem.
    *
-   * O que **não** cai: as credenciais de dispositivo (`device_tokens`) da
-   * extensão. É o mesmo comportamento do reset por e-mail, e mudá-lo só aqui
-   * criaria dois significados para "troquei minha senha". Está registrado como
-   * lacuna em `Docs/HUB_PLANO_DE_EXECUCAO.md`.
+   * **Os dispositivos também caem**, com as credenciais deles. A extensão no VS
+   * Code é uma porta como qualquer outra; deixá-la aberta faria a troca de senha
+   * prometer mais do que entrega — a pessoa sai da tela achando que expulsou
+   * todo mundo enquanto o acesso pelo editor continua de pé. Vale para os dois
+   * caminhos, a troca autenticada e o reset por e-mail, para que "troquei minha
+   * senha" tenha um significado só.
    */
   async changePassword(input: {
     userId: string;
@@ -176,7 +192,7 @@ export class AccountService {
     currentPassword: string;
     newPassword: string;
     origin: RequestOrigin;
-  }): Promise<{ revokedSessions: number }> {
+  }): Promise<{ revokedSessions: number; revokedDevices: number }> {
     const user = await this.auth.findUserById(input.userId);
 
     if (user === undefined) {
@@ -215,21 +231,105 @@ export class AccountService {
     });
 
     await Promise.all(revoked.map((id) => denySession(this.redis, id)));
+
+    // Os dispositivos caem depois das sessões, e não em paralelo: se esta
+    // escrita falhar, o erro sobe com as sessões já derrubadas — o lado seguro
+    // de uma falha parcial. Na ordem inversa, a falha deixaria as sessões vivas.
+    const revokedDevices = await this.auth.revokeDevices({
+      userId: input.userId,
+      reason: 'password_changed',
+    });
+
     await this.auth.recordSecurityEvent({
       type: 'password_changed',
       severity: 'medium',
       userId: input.userId,
       ip: input.origin.ip,
       userAgent: input.origin.userAgent,
-      details: { revokedSessions: revoked.length, keptSession: input.currentSessionId },
+      details: {
+        revokedSessions: revoked.length,
+        revokedDevices: revokedDevices.length,
+        keptSession: input.currentSessionId,
+      },
     });
 
     logger.info(
-      { userId: input.userId, revokedSessions: revoked.length },
-      'password changed; other sessions revoked',
+      {
+        userId: input.userId,
+        revokedSessions: revoked.length,
+        revokedDevices: revokedDevices.length,
+      },
+      'password changed; other sessions and all devices revoked',
     );
 
-    return { revokedSessions: revoked.length };
+    return { revokedSessions: revoked.length, revokedDevices: revokedDevices.length };
+  }
+
+  // -------------------------------------------------------------------------
+  // Dispositivos
+  // -------------------------------------------------------------------------
+
+  /**
+   * Dispositivos que ainda conseguem agir em nome da pessoa.
+   *
+   * Anda junto das sessões na mesma tela porque respondem à mesma pergunta —
+   * "onde eu estou logado?". Separá-las faria alguém fechar as sessões, achar
+   * que terminou, e deixar o editor conectado.
+   */
+  async listDevices(userId: string): Promise<DeviceView[]> {
+    const rows = await this.repository.listDevices(userId);
+
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      platform: row.platform,
+      client: row.client,
+      clientVersion: row.clientVersion,
+      // Mesma regra das sessões: a rede basta para reconhecer, o endereço exato
+      // vira histórico de localização para quem estiver lendo a tela.
+      ipAddress: maskIp(row.lastIp),
+      lastSeenAt: toIsoOrNull(row.lastSeenAt),
+      connectedAt: toIso(row.createdAt),
+      credentialExpiresAt: toIsoOrNull(row.credentialExpiresAt),
+    }));
+  }
+
+  /**
+   * Desconecta um dispositivo.
+   *
+   * Tem efeito imediato: a credencial da extensão é conferida no banco a cada
+   * requisição, então não existe janela em que um token já emitido continue
+   * valendo — ao contrário das sessões de navegador, que precisam da denylist.
+   *
+   * Dispositivo de outra pessoa responde igual a dispositivo inexistente. Um
+   * 404 e um 403 diferentes contariam a quem tem uma conta qualquer se um
+   * identificador existe.
+   */
+  async revokeDevice(input: {
+    userId: string;
+    deviceId: string;
+    origin: RequestOrigin;
+  }): Promise<void> {
+    const revoked = await this.auth.revokeDevices({
+      userId: input.userId,
+      deviceId: input.deviceId,
+      reason: 'device_revoked_by_user',
+    });
+
+    if (revoked.length === 0) {
+      throw deviceNotFound();
+    }
+
+    await this.auth.recordSecurityEvent({
+      type: 'device_revoked_by_user',
+      severity: 'medium',
+      userId: input.userId,
+      ip: input.origin.ip,
+      userAgent: input.origin.userAgent,
+      details: { deviceId: input.deviceId },
+    });
+
+    logger.info({ userId: input.userId, deviceId: input.deviceId }, 'device revoked by owner');
   }
 
   // -------------------------------------------------------------------------

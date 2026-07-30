@@ -27,6 +27,7 @@ export type {
   Conversation,
   ConversationParticipant,
   CurrentUser,
+  DeviceSession,
   Invitation,
   KnowledgeItemSummary,
   KnowledgeStatus,

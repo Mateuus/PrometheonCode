@@ -416,12 +416,14 @@ export const CATALOG = {
   'account.security': 'Security',
   'account.changePassword': 'Change password',
   'account.changePasswordHint':
-    'Changing the password signs out every other session. This one stays open.',
+    'Changing the password signs out every other session and disconnects every device. This one stays open.',
   'account.currentPassword': 'Current password',
   'account.newPassword': 'New password',
   'account.confirmPassword': 'Confirm new password',
   'account.passwordChanged': 'Password changed.',
   'account.passwordChangedAndRevoked': 'Password changed. Every other session was signed out.',
+  'account.passwordChangedAndDevicesRevoked':
+    'Password changed. Every other session was signed out and every device was disconnected — you will need to sign in again in VS Code.',
   'account.forgotCurrentPassword': 'Do not remember your current password?',
   'account.error.invalidTimeZone': 'We do not know that time zone.',
   'account.error.currentPasswordRequired': 'Enter your current password.',
@@ -442,6 +444,15 @@ export const CATALOG = {
   'sessions.revokeCurrent': 'Sign out here',
   'sessions.privacyNote':
     'The Hub shows the network an access came from, never the exact address, and a short client label instead of the full browser signature.',
+  'devices.list': 'Connected devices',
+  'devices.empty': 'No device is connected.',
+  'devices.hint':
+    'Prometheon Code in VS Code signs in with its own credential, valid for 90 days. Disconnecting takes effect on the next request the device makes.',
+  'devices.connectedAt': 'Connected',
+  'devices.lastSeenAt': 'Last seen',
+  'devices.expiresAt': 'Credential expires',
+  'devices.never': 'Never used',
+  'devices.revoke': 'Disconnect',
 
   // ------------------------------------------------------- administração
   'admin.title': 'Administration',

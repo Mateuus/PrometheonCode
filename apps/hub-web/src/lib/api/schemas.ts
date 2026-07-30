@@ -4,6 +4,7 @@ import {
   changePasswordResponseSchema,
   conversationSchema,
   cursorPageSchema,
+  deviceSessionSchema,
   knowledgeItemSummarySchema,
   messageSchema,
   meResponseSchema,
@@ -76,13 +77,24 @@ export const emptyResultSchema = z.object({}).loose();
 
 // ------------------------------------------------------------------- conta
 
-export { changePasswordResponseSchema, sessionSchema, updateProfileResponseSchema };
+export {
+  changePasswordResponseSchema,
+  deviceSessionSchema,
+  sessionSchema,
+  updateProfileResponseSchema,
+};
 
 /** `GET /v1/me/sessions`. */
 export const sessionPageSchema = cursorPageSchema(sessionSchema);
 
 /** `DELETE /v1/sessions/:id` — diz se a sessão derrubada era a desta aba. */
 export const revokeSessionResultSchema = z.object({ current: z.boolean() });
+
+/** `GET /v1/me/devices` — sem paginação: uma pessoa tem meia dúzia de máquinas. */
+export const deviceSessionListSchema = z.object({ items: z.array(deviceSessionSchema) });
+
+/** `DELETE /v1/devices/:id`. */
+export const revokeDeviceResultSchema = z.object({ revoked: z.boolean() });
 
 // ------------------------------------------------------------------ domínio
 

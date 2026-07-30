@@ -5,6 +5,8 @@
  * | ----------------------------- | ----------------------------------- |
  * | `GET /me/sessions`            | qualquer credencial autenticada     |
  * | `DELETE /sessions/:sessionId` | o dono da sessão, e só ele          |
+ * | `GET /me/devices`             | qualquer credencial autenticada     |
+ * | `DELETE /devices/:deviceId`   | o dono do dispositivo, e só ele     |
  * | `POST /me/password`           | quem souber a senha atual           |
  * | `PATCH /me`                   | qualquer credencial autenticada     |
  *
@@ -31,7 +33,10 @@ import {
   accountErrorResponses,
   changePasswordEnvelope,
   changePasswordRequestSchema,
+  deviceListEnvelope,
+  deviceParamsSchema,
   profileEnvelope,
+  revokeDeviceEnvelope,
   revokeSessionEnvelope,
   sessionListQuerySchema,
   sessionPageEnvelope,
@@ -146,6 +151,78 @@ export const accountRoutes: FastifyPluginCallbackZod<AccountRoutesOptions> = (
     },
   );
 
+  app.get(
+    '/me/devices',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['auth'],
+        summary: 'List the devices connected to this account',
+        description:
+          'One entry per device whose credential can still be used. Shown next to the sessions because both answer the same question: where am I signed in?',
+        security: [{ bearerAuth: [] }],
+        response: { 200: deviceListEnvelope, ...accountErrorResponses },
+      },
+    },
+    async (request) => {
+      const auth = request.auth;
+
+      if (auth === undefined) {
+        throw unauthenticated();
+      }
+
+      return ok(request, { items: await service.listDevices(auth.userId) });
+    },
+  );
+
+  app.delete(
+    '/devices/:deviceId',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['auth'],
+        summary: 'Disconnect one device from this account',
+        description:
+          'Takes effect on the next request the device makes: its credential is checked against the database every time, so nothing keeps working until it expires. A device that belongs to somebody else answers 404, the same as one that does not exist.',
+        security: [{ bearerAuth: [] }],
+        params: deviceParamsSchema,
+        response: { 200: revokeDeviceEnvelope, ...accountErrorResponses },
+      },
+    },
+    async (request) => {
+      const auth = request.auth;
+
+      if (auth === undefined) {
+        throw unauthenticated();
+      }
+
+      const origin = requestOrigin(request);
+
+      await service.revokeDevice({
+        userId: auth.userId,
+        deviceId: request.params.deviceId,
+        origin,
+      });
+
+      if (auth.organizationId !== null) {
+        await recordAudit(app.db, {
+          organizationId: auth.organizationId,
+          actorType: auth.kind === 'device' ? 'device' : 'user',
+          actorId: auth.userId,
+          actorLabel: auth.email,
+          action: 'account.device.revoked',
+          resourceType: 'device',
+          resourceId: request.params.deviceId,
+          requestId: request.id,
+          ip: origin.ip,
+          userAgent: origin.userAgent,
+        });
+      }
+
+      return ok(request, { revoked: true });
+    },
+  );
+
   app.post(
     '/me/password',
     {
@@ -155,7 +232,7 @@ export const accountRoutes: FastifyPluginCallbackZod<AccountRoutesOptions> = (
         tags: ['auth'],
         summary: 'Change the password from inside the session',
         description:
-          'Requires the current password. Every other session of the account is revoked; the one making the call survives.',
+          'Requires the current password. Every other session of the account is revoked and every device is disconnected; the session making the call survives.',
         security: [{ bearerAuth: [] }],
         body: changePasswordRequestSchema,
         response: { 200: changePasswordEnvelope, ...accountErrorResponses },

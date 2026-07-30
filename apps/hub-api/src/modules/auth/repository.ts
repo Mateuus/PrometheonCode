@@ -329,6 +329,71 @@ export class AuthRepository {
     return ids;
   }
 
+  /**
+   * Revoga dispositivos do usuário e as credenciais deles.
+   *
+   * Sem `deviceId`, derruba todos — é o que a troca de senha e o reset por
+   * e-mail fazem. Com `deviceId`, derruba um só, e o `user_id` no `WHERE` do
+   * `SELECT` é o que impede alguém de desconectar dispositivo alheio: a consulta
+   * não encontra linha, em vez de depender de uma conferência posterior que
+   * alguém pode esquecer de escrever na próxima chamada.
+   *
+   * Dispositivo e credencial caem na **mesma transação**, pelo mesmo motivo que
+   * sessão e refresh token: entre um `UPDATE` e o outro existe uma janela, e é
+   * nela que quem está sendo expulso ainda passaria.
+   *
+   * Não precisa de denylist no Redis. A credencial de dispositivo é conferida no
+   * banco a cada requisição (ver `resolveDeviceCredential` em `plugins/auth.ts`),
+   * então a revogação vale na chamada seguinte — diferente do access token de
+   * sessão, que é assinado e sobrevive até expirar.
+   */
+  async revokeDevices(input: {
+    userId: string;
+    deviceId?: string;
+    reason: string;
+  }): Promise<string[]> {
+    return runInTransaction(this.db, async (tx) => {
+      const doomed = tx
+        .createQueryBuilder(devices, 'device')
+        .select('device.id')
+        .where('device.userId = :userId', { userId: input.userId })
+        .andWhere('device.revokedAt IS NULL');
+
+      if (input.deviceId !== undefined) {
+        doomed.andWhere('device.id = :deviceId', { deviceId: input.deviceId });
+      }
+
+      const ids = (await doomed.getMany()).map((row) => row.id);
+
+      if (ids.length === 0) {
+        return [];
+      }
+
+      const now = new Date();
+
+      await tx
+        .createQueryBuilder()
+        .update(devices)
+        .set({ status: 'revoked', revokedAt: now, updatedAt: now })
+        .where('id IN (:...ids)', { ids })
+        .andWhere('revoked_at IS NULL')
+        .execute();
+
+      // A credencial é o que a extensão manda a cada chamada. Sem derrubá-la, o
+      // status `revoked` do dispositivo seria a única barreira — e bastaria uma
+      // consulta nova que esquecesse de conferi-lo para o acesso voltar.
+      await tx
+        .createQueryBuilder()
+        .update(deviceTokens)
+        .set({ revokedAt: now, revokedReason: input.reason, updatedAt: now })
+        .where('device_id IN (:...ids)', { ids })
+        .andWhere('revoked_at IS NULL')
+        .execute();
+
+      return ids;
+    });
+  }
+
   async insertRefreshToken(input: {
     sessionId: string;
     userId: string;

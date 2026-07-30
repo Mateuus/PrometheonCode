@@ -4,7 +4,8 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { MIN_PASSWORD_LENGTH } from '@prometheon/contracts';
-import { changePassword, revokeAccountSession, updateProfile } from '@/lib/api/commands';
+import { changePassword, revokeAccountDevice,
+  revokeAccountSession, updateProfile } from '@/lib/api/commands';
 import type { ApiFailure } from '@/lib/api/result';
 import { clearSession, readSession, writeSession } from '@/lib/auth/session';
 import { formError, formSuccess, type FormState } from './form-state';
@@ -122,8 +123,17 @@ export async function changePasswordAction(
   }
 
   // A API preserva a sessão que trocou a senha, então não há cookie a mexer
-  // aqui. O que muda é a lista de sessões, que acabou de encolher.
+  // aqui. O que muda são as listas de sessões e dispositivos, que acabaram de
+  // encolher.
   revalidatePath('/settings/sessions');
+
+  // O aviso sobre dispositivos vem antes do de sessões porque é o que exige
+  // ação: entrar de novo no VS Code. Descobrir isso só na próxima vez que abrir
+  // o editor é a pior hora possível.
+  if (result.data.revokedDevices > 0) {
+    return formSuccess('account.passwordChangedAndDevicesRevoked');
+  }
+
   return formSuccess(
     result.data.revokedSessions > 0 ? 'account.passwordChangedAndRevoked' : 'account.passwordChanged',
   );
@@ -147,5 +157,19 @@ export async function revokeSessionAction(formData: FormData): Promise<void> {
     redirect('/login');
   }
 
+  revalidatePath('/settings/sessions');
+}
+
+// -------------------------------------------------------------- dispositivos
+
+export async function revokeDeviceAction(formData: FormData): Promise<void> {
+  const deviceId = field(formData, 'deviceId');
+  if (deviceId === '') {
+    return;
+  }
+
+  await revokeAccountDevice(deviceId);
+
+  // Nada de `clearSession()` aqui: o dispositivo da lista nunca é esta aba.
   revalidatePath('/settings/sessions');
 }

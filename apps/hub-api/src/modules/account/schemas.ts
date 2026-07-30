@@ -10,6 +10,7 @@ import {
   changePasswordRequestSchema,
   changePasswordResponseSchema,
   cursorPageQuerySchema,
+  deviceSessionListSchema,
   errorEnvelopeSchema,
   sessionPageSchema,
   successEnvelope,
@@ -51,6 +52,20 @@ export const profileEnvelope = successEnvelope(updateProfileResponseSchema);
 export const revokeSessionEnvelope = successEnvelope(
   z.object({ current: z.boolean() }),
 );
+
+export const deviceParamsSchema = z.object({
+  deviceId: ulidSchema,
+});
+
+/**
+ * Lista de dispositivos sem paginação.
+ *
+ * Uma pessoa tem meia dúzia de máquinas, não milhares — paginar aqui seria
+ * cerimônia sem uso, e a tela mostra tudo de uma vez ao lado das sessões.
+ */
+export const deviceListEnvelope = successEnvelope(deviceSessionListSchema);
+
+export const revokeDeviceEnvelope = successEnvelope(z.object({ revoked: z.boolean() }));
 
 export const accountErrorResponses = {
   400: errorEnvelopeSchema,

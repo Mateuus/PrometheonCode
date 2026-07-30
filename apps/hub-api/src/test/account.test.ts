@@ -13,7 +13,10 @@
  *   identificador existe;
  * - trocar a senha exige a senha atual, faz a antiga parar de valer e derruba as
  *   outras sessões preservando a de quem trocou;
- * - o perfil é editável e o e-mail não.
+ * - o perfil é editável e o e-mail não;
+ * - os dispositivos aparecem ao lado das sessões, desconectar um corta o acesso
+ *   dele na chamada seguinte, e trocar a senha derruba todos — senão a troca
+ *   prometeria ter expulsado todo mundo enquanto o editor continua conectado.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -42,6 +45,13 @@ interface SessionItem {
   createdAt: string;
   lastUsedAt: string;
   expiresAt: string;
+}
+
+interface DeviceItem {
+  id: string;
+  name: string;
+  ipAddress: string | null;
+  credentialExpiresAt: string | null;
 }
 
 interface Tokens {
@@ -554,7 +564,178 @@ describe.skipIf(!probe.ok)('gestão da conta', () => {
 
     expect(badAvatar.statusCode).toBe(400);
   });
+
+  // -------------------------------------------------------------------------
+  // Dispositivos
+  // -------------------------------------------------------------------------
+
+  it('lista o dispositivo conectado ao lado das sessões', async () => {
+    const user = await newUser('disp-lista');
+    const device = await issueDeviceCredential(harness, user);
+
+    const listed = await harness.app.inject({
+      method: 'GET',
+      url: '/v1/me/devices',
+      headers: { authorization: `Bearer ${user.accessToken}` },
+    });
+
+    expect(listed.statusCode).toBe(200);
+
+    const items = body<{ data: { items: DeviceItem[] } }>(listed).data.items;
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.id).toBe(device.deviceId);
+    // Mesma regra de privacidade das sessões.
+    expect(JSON.stringify(items)).not.toContain('Mozilla');
+    expect(items[0]?.ipAddress === null || items[0]?.ipAddress?.endsWith('.0')).toBe(true);
+  });
+
+  it('desconectar o dispositivo corta o acesso dele na chamada seguinte', async () => {
+    const user = await newUser('disp-revoga');
+    const device = await issueDeviceCredential(harness, user);
+
+    // A credencial funciona antes.
+    const antes = await harness.app.inject({
+      method: 'GET',
+      url: '/v1/me',
+      headers: { authorization: `Bearer ${device.deviceToken}` },
+    });
+
+    expect(antes.statusCode).toBe(200);
+
+    const revoked = await harness.app.inject({
+      method: 'DELETE',
+      url: `/v1/devices/${device.deviceId}`,
+      headers: { authorization: `Bearer ${user.accessToken}` },
+    });
+
+    expect(revoked.statusCode).toBe(200);
+
+    // E para de funcionar na chamada seguinte, sem esperar expirar. É o ponto
+    // todo da revogação: a credencial vale 90 dias, então "expira sozinha" não
+    // seria resposta para quem perdeu o notebook.
+    const depois = await harness.app.inject({
+      method: 'GET',
+      url: '/v1/me',
+      headers: { authorization: `Bearer ${device.deviceToken}` },
+    });
+
+    expect(depois.statusCode).toBe(401);
+    expect(body<{ error: { code: string } }>(depois).error.code).toBe('DEVICE_REVOKED');
+
+    // E some da lista: continuar aparecendo faria a pessoa revogar de novo,
+    // sem saber se a primeira vez funcionou.
+    const listed = await harness.app.inject({
+      method: 'GET',
+      url: '/v1/me/devices',
+      headers: { authorization: `Bearer ${user.accessToken}` },
+    });
+
+    expect(body<{ data: { items: DeviceItem[] } }>(listed).data.items).toHaveLength(0);
+  });
+
+  it('não deixa ninguém desconectar dispositivo de outra pessoa', async () => {
+    const dona = await newUser('disp-dona');
+    const device = await issueDeviceCredential(harness, dona);
+    const intrusa = await newUser('disp-intrusa');
+
+    const alheio = await harness.app.inject({
+      method: 'DELETE',
+      url: `/v1/devices/${device.deviceId}`,
+      headers: { authorization: `Bearer ${intrusa.accessToken}` },
+    });
+
+    const inexistente = await harness.app.inject({
+      method: 'DELETE',
+      url: '/v1/devices/01ARZ3NDEKTSV4RRFFQ69G5FAV',
+      headers: { authorization: `Bearer ${intrusa.accessToken}` },
+    });
+
+    // Respostas idênticas: distinguir contaria a quem tem uma conta qualquer se
+    // um identificador de dispositivo existe.
+    expect(alheio.statusCode).toBe(404);
+    expect(inexistente.statusCode).toBe(404);
+    expect(body<{ error: { code: string } }>(alheio).error.code).toBe(
+      body<{ error: { code: string } }>(inexistente).error.code,
+    );
+
+    // E o dispositivo da dona continua funcionando.
+    const intacto = await harness.app.inject({
+      method: 'GET',
+      url: '/v1/me',
+      headers: { authorization: `Bearer ${device.deviceToken}` },
+    });
+
+    expect(intacto.statusCode).toBe(200);
+  });
+
+  it('trocar a senha desconecta os dispositivos junto com as sessões', async () => {
+    const user = await newUser('disp-senha');
+    const device = await issueDeviceCredential(harness, user);
+
+    const changed = await harness.app.inject({
+      method: 'POST',
+      url: '/v1/me/password',
+      headers: { authorization: `Bearer ${user.accessToken}` },
+      payload: { currentPassword: user.password, newPassword: 'outra-senha-bem-longa-02' },
+    });
+
+    expect(changed.statusCode).toBe(200);
+    expect(body<{ data: { revokedDevices: number } }>(changed).data.revokedDevices).toBe(1);
+
+    // O ponto: quem trocou a senha saiu da tela achando que expulsou todo mundo.
+    // Se a extensão continuasse dentro, a troca teria prometido mais do que
+    // entregou — que é pior do que não ter prometido nada.
+    const depois = await harness.app.inject({
+      method: 'GET',
+      url: '/v1/me',
+      headers: { authorization: `Bearer ${device.deviceToken}` },
+    });
+
+    expect(depois.statusCode).toBe(401);
+  });
 });
+
+/** Percorre o device flow e devolve a credencial que a extensão usaria. */
+async function issueDeviceCredential(
+  harness: TestHarness,
+  owner: RegisteredUser,
+): Promise<{ deviceId: string; deviceToken: string }> {
+  const started = await harness.app.inject({
+    method: 'POST',
+    url: '/v1/auth/device/authorize',
+    payload: {
+      deviceName: 'VS Code do teste',
+      deviceKind: 'vscode',
+      platform: 'windows',
+      clientVersion: '0.1.0',
+    },
+  });
+
+  const { deviceCode, userCode } = body<{ data: { deviceCode: string; userCode: string } }>(started).data;
+
+  const decision = await harness.app.inject({
+    method: 'POST',
+    url: '/v1/auth/device/decision',
+    headers: { authorization: `Bearer ${owner.accessToken}` },
+    payload: { userCode, decision: 'approve', organizationId: owner.organizationId },
+  });
+
+  expect(decision.statusCode).toBe(200);
+
+  // O intervalo mínimo de polling precisa vencer antes da primeira tentativa.
+  await new Promise((resolve) => setTimeout(resolve, 5_200));
+
+  const issued = await harness.app.inject({
+    method: 'POST',
+    url: '/v1/auth/device/token',
+    payload: { deviceCode },
+  });
+
+  expect(issued.statusCode).toBe(200);
+
+  return body<{ data: { deviceId: string; deviceToken: string } }>(issued).data;
+}
 
 describe.skipIf(probe.ok)('gestão da conta (pulado)', () => {
   it(`dependências indisponíveis: ${probe.reason}`, () => {

@@ -570,8 +570,12 @@ export class AuthService {
   /**
    * Confirma a nova senha.
    *
-   * Trocar a senha derruba todas as sessões: se o motivo do reset foi um
-   * comprometimento, deixar a sessão do invasor viva anularia o efeito.
+   * Trocar a senha derruba todas as sessões **e todos os dispositivos**: se o
+   * motivo do reset foi um comprometimento, deixar qualquer porta viva anularia
+   * o efeito. A extensão no VS Code é uma porta como as outras — e mais durável,
+   * porque a credencial dela vale 90 dias contra os 15 minutos de um access
+   * token. É o mesmo que `AccountService.changePassword()` faz, para que
+   * "troquei minha senha" signifique uma coisa só nos dois caminhos.
    */
   async confirmPasswordReset(token: string, password: string): Promise<{ userId: string }> {
     const userId = await consumeSingleUseToken(this.deps.redis, 'password-reset', token);
@@ -585,11 +589,17 @@ export class AuthService {
     const revoked = await this.repository.revokeAllSessions(userId, 'password_reset');
 
     await Promise.all(revoked.map((id) => denySession(this.deps.redis, id)));
+
+    const revokedDevices = await this.repository.revokeDevices({
+      userId,
+      reason: 'password_reset',
+    });
+
     await this.repository.recordSecurityEvent({
       type: 'password_reset_completed',
       severity: 'medium',
       userId,
-      details: { revokedSessions: revoked.length },
+      details: { revokedSessions: revoked.length, revokedDevices: revokedDevices.length },
     });
 
     return { userId };

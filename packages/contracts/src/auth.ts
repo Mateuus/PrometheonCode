@@ -187,6 +187,15 @@ export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>;
  */
 export const changePasswordResponseSchema = z.object({
   revokedSessions: z.int().nonnegative(),
+  /**
+   * Dispositivos desconectados — **todos**, sem exceção.
+   *
+   * A extensão no VS Code é uma porta como as outras, e mais durável: a
+   * credencial dela vale 90 dias. Deixá-la aberta faria a troca prometer mais do
+   * que entrega. A interface mostra o número porque quem trocou a senha precisa
+   * saber que vai ter de entrar de novo no editor.
+   */
+  revokedDevices: z.int().nonnegative(),
 });
 
 export type ChangePasswordResponse = z.infer<typeof changePasswordResponseSchema>;
@@ -297,6 +306,44 @@ export type Session = z.infer<typeof sessionSchema>;
 export const sessionPageSchema = cursorPageSchema(sessionSchema);
 
 export type SessionPage = z.infer<typeof sessionPageSchema>;
+
+/**
+ * Um dispositivo conectado — hoje, a extensão do VS Code.
+ *
+ * Anda ao lado das sessões porque responde à mesma pergunta: onde eu estou
+ * logado? Duas telas separadas fariam alguém fechar as sessões, achar que
+ * terminou, e deixar o editor conectado com uma credencial de 90 dias.
+ *
+ * Vale a mesma regra de privacidade das sessões: nada de impressão digital do
+ * cliente, e o endereço vai truncado na rede.
+ */
+export const deviceSessionSchema = z.object({
+  id: ulidSchema,
+  /** Nome que o próprio dispositivo declarou no registro. */
+  name: shortTextSchema,
+  platform: z.string().max(32),
+  client: z.string().max(64),
+  clientVersion: z.string().max(32).nullable(),
+  /** Rede de origem do último acesso, não o endereço exato. */
+  ipAddress: z.string().max(45).nullable(),
+  lastSeenAt: isoDateTimeSchema.nullable(),
+  connectedAt: isoDateTimeSchema,
+  /**
+   * Quando a credencial deixa de valer por conta própria.
+   *
+   * É o que diferencia "esqueci este notebook conectado" de "isto expira
+   * sozinho semana que vem" — e portanto se vale a pena revogar agora.
+   */
+  credentialExpiresAt: isoDateTimeSchema.nullable(),
+});
+
+export type DeviceSession = z.infer<typeof deviceSessionSchema>;
+
+export const deviceSessionListSchema = z.object({
+  items: z.array(deviceSessionSchema),
+});
+
+export type DeviceSessionList = z.infer<typeof deviceSessionListSchema>;
 
 // ---------------------------------------------------------------------------
 // Device flow (`Docs/09`): a extensão pede um código, o usuário autoriza no

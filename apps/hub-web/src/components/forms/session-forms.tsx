@@ -2,7 +2,7 @@
 
 import { useTranslate } from '@/i18n/provider';
 import { logoutEverywhereAction } from '@/lib/actions/auth-actions';
-import { revokeSessionAction } from '@/lib/actions/account-actions';
+import { revokeDeviceAction, revokeSessionAction } from '@/lib/actions/account-actions';
 import { SubmitButton } from './disclosure-form';
 
 /**
@@ -36,6 +36,22 @@ export function RevokeSessionForm({ sessionId, current }: { sessionId: string; c
         label={current ? t('sessions.revokeCurrent') : t('sessions.revoke')}
         variant={current ? 'outline' : 'danger'}
       />
+    </form>
+  );
+}
+
+/**
+ * Desconecta um dispositivo (`DELETE /v1/devices/:id`).
+ *
+ * Não tem a variante "daqui" da sessão: o dispositivo da lista nunca é esta aba
+ * — quem está ali é a extensão do VS Code.
+ */
+export function RevokeDeviceForm({ deviceId }: { deviceId: string }) {
+  const t = useTranslate();
+  return (
+    <form action={revokeDeviceAction}>
+      <input type="hidden" name="deviceId" value={deviceId} />
+      <SubmitButton label={t('devices.revoke')} variant="danger" />
     </form>
   );
 }

@@ -9,6 +9,7 @@ import {
   conversationSchema,
   messageSchema,
   projectSchema,
+  revokeDeviceResultSchema,
   revokeSessionResultSchema,
   taskSchema,
   updateProfileResponseSchema,
@@ -63,9 +64,14 @@ export async function updateProfile(input: {
 /**
  * Troca a senha estando logado (`POST /v1/me/password`).
  *
- * A API exige a senha atual e derruba as outras sessões da conta, preservando
- * esta. Não há nada a fazer com o cookie local: a sessão que fez a chamada
- * continua valendo, e é justamente por isso que a pessoa não é deslogada.
+ * A API exige a senha atual, derruba as outras sessões da conta preservando
+ * esta, e desconecta **todos** os dispositivos. Não há nada a fazer com o cookie
+ * local: a sessão que fez a chamada continua valendo, e é justamente por isso
+ * que a pessoa não é deslogada.
+ *
+ * A resposta traz quantos caíram de cada tipo, e a tela precisa dizer os dois —
+ * quem trocou a senha vai ter de entrar de novo no VS Code, e descobrir isso na
+ * próxima vez que abrir o editor é a pior hora.
  */
 export async function changePassword(input: {
   currentPassword: string;
@@ -85,6 +91,21 @@ export async function revokeAccountSession(
   sessionId: string,
 ): Promise<ApiResult<z.infer<typeof revokeSessionResultSchema>>> {
   return send(`/v1/sessions/${encodeURIComponent(sessionId)}`, revokeSessionResultSchema, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Desconecta um dispositivo.
+ *
+ * Não devolve `current` como a revogação de sessão: o Hub Web nunca é o
+ * dispositivo da lista — quem está ali é a extensão do VS Code. Derrubar um não
+ * pode deslogar esta aba.
+ */
+export async function revokeAccountDevice(
+  deviceId: string,
+): Promise<ApiResult<z.infer<typeof revokeDeviceResultSchema>>> {
+  return send(`/v1/devices/${encodeURIComponent(deviceId)}`, revokeDeviceResultSchema, {
     method: 'DELETE',
   });
 }

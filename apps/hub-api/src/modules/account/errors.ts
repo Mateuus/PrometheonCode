@@ -38,6 +38,11 @@ export function sessionNotFound(): ApiError {
   return notFound('NOT_FOUND', 'This session does not exist.');
 }
 
+/** Dispositivo inexistente **ou de outra pessoa** — mesmo motivo da sessão. */
+export function deviceNotFound(): ApiError {
+  return notFound('NOT_FOUND', 'This device does not exist.');
+}
+
 /** Fuso horário com forma válida que a base de fusos do runtime não conhece. */
 export function timeZoneUnknown(value: string): ApiError {
   return badRequest('VALIDATION_FAILED', `Unknown time zone: ${value}.`, {
