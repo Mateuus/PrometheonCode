@@ -263,7 +263,8 @@ services:
         # O certificado é emitido para o nome público. Sem este alias, a API
         # teria de conectar em `mailserver` e o TLS falharia por divergência —
         # e desligar a verificação para contornar seria pior que o problema.
-        aliases: [${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}]
+        aliases:
+          - ${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}
 
 volumes:
   mysql-data:
