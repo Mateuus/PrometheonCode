@@ -102,6 +102,23 @@ export const ERROR_CODES = [
   'PLAN_LIMIT_EXCEEDED',
   'SUBSCRIPTION_NOT_FOUND',
 
+  // Login por provedor externo
+  /** O provedor não está configurado neste Hub. */
+  'PROVIDER_NOT_CONFIGURED',
+  /** O provedor não respondeu, ou respondeu em forma inesperada. */
+  'PROVIDER_UNAVAILABLE',
+  /** O provedor recusou a autorização — código inválido, expirado ou já usado. */
+  'PROVIDER_REJECTED',
+  /**
+   * O e-mail da conta do provedor já pertence a alguém aqui, mas não há prova
+   * suficiente para vincular sozinho.
+   *
+   * Vincular por e-mail coincidente entregaria a conta a quem cadastrasse o
+   * endereço de outra pessoa e nunca o confirmasse. A saída é entrar com a senha
+   * e ligar o provedor de dentro da conta.
+   */
+  'IDENTITY_LINK_REQUIRED',
+
   // Infraestrutura
   'INTERNAL_ERROR',
   'SERVICE_UNAVAILABLE',

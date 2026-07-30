@@ -48,6 +48,7 @@ import { authRoutes } from './modules/auth/routes.js';
 import { DeviceRepository } from './modules/devices/repository.js';
 import { deviceRoutes } from './modules/devices/routes.js';
 import { DeviceService } from './modules/devices/service.js';
+import type { GitHubClient } from './modules/auth/github.js';
 import { AuthService } from './modules/auth/service.js';
 import { billingRoutes } from './modules/billing/routes.js';
 import { BillingService } from './modules/billing/service.js';
@@ -90,6 +91,12 @@ export interface BuildAppOptions {
    * revalidação de acesso). O teste os desliga para controlar o relógio.
    */
   readonly realtimeTimers?: boolean | undefined;
+  /**
+   * Cliente do provedor de identidade. Só o teste passa: em produção ele é
+   * construído a partir da configuração, e um teste que fala com o GitHub de
+   * verdade falha por motivos que nada dizem sobre o código.
+   */
+  readonly githubClient?: GitHubClient | undefined;
 }
 
 export interface BuiltApp {
@@ -170,6 +177,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<BuiltApp>
     redis: app.redis,
     mailer,
     config,
+    ...(options.githubClient === undefined ? {} : { githubClient: options.githubClient }),
   });
 
   const accountService = new AccountService({ db: app.db, redis: app.redis });

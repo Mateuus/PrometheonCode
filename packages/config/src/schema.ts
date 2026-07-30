@@ -209,6 +209,31 @@ export const envSchema = z.object({
   /** Diretório da captura. Vazio usa o temporário do sistema, fora do repositório. */
   MAIL_CAPTURE_DIR: z.string().optional(),
 
+  // -- Login com GitHub -----------------------------------------------------
+
+  /**
+   * Credenciais do OAuth App. Sem as duas, o login com GitHub simplesmente não
+   * é oferecido — é o que permite subir o Hub sem provedor externo nenhum.
+   */
+  GITHUB_OAUTH_CLIENT_ID: z.string().trim().min(1).optional(),
+  GITHUB_OAUTH_CLIENT_SECRET: z.string().trim().min(1).optional(),
+  /**
+   * Precisa bater **exatamente** com a callback registrada no OAuth App. O
+   * GitHub compara a string inteira; uma barra a mais recusa a autorização.
+   */
+  GITHUB_OAUTH_CALLBACK_URL: z.string().trim().min(1).optional(),
+  /**
+   * Escopos pedidos no consentimento. O padrão é o mínimo para saber quem a
+   * pessoa é: `user:email` existe porque quem esconde o e-mail no perfil não
+   * aparece em `/user`, e sem ele o cadastro quebraria justamente para quem
+   * cuida da privacidade.
+   *
+   * Ler repositório é outro consentimento, com credencial cifrada em
+   * `git_connections`. Pedir `repo` aqui faria a tela de entrada exigir acesso
+   * ao código para apenas dizer um nome.
+   */
+  GITHUB_OAUTH_SCOPES: z.string().trim().default('read:user user:email'),
+
   // -- Operação -------------------------------------------------------------
 
   /**

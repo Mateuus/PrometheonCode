@@ -48,6 +48,17 @@ export interface RedactedConfigShape {
     readonly password: RedactedValue;
     readonly from: string;
   };
+  readonly github: {
+    readonly enabled: boolean;
+    /**
+     * O client id é público — aparece na URL de autorização que o navegador
+     * mostra. O secret não, e por isso só a presença dele é registrada.
+     */
+    readonly clientId: string | undefined;
+    readonly clientSecret: RedactedValue;
+    readonly callbackUrl: string | undefined;
+    readonly scopes: string;
+  };
   readonly meta: ConfigMeta;
 }
 
@@ -119,6 +130,13 @@ export function redactedConfig(config: AppConfig): RedactedConfigShape {
       user: config.smtp.user,
       password: presence(config.smtp.password),
       from: config.smtp.from,
+    },
+    github: {
+      enabled: config.github.enabled,
+      clientId: config.github.clientId,
+      clientSecret: presence(config.github.clientSecret),
+      callbackUrl: config.github.callbackUrl,
+      scopes: config.github.scopes,
     },
     meta: config.meta,
   } satisfies RedactedConfigShape);

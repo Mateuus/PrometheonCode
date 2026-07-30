@@ -27,6 +27,7 @@ import { buildApp } from '../app.js';
 import { createDatabaseHandles } from '../plugins/database.js';
 import { createMailService } from '../mail/index.js';
 import type { MailService } from '../mail/types.js';
+import type { GitHubClient } from '../modules/auth/github.js';
 import type { AuthService } from '../modules/auth/service.js';
 
 export interface Probe {
@@ -38,7 +39,7 @@ let baseConfig: AppConfig | undefined;
 
 /** Configuração do `.env` da raiz, forçada para `test`. */
 export function testConfig(overrides: { databaseName?: string } = {}): AppConfig {
-  baseConfig ??= loadConfig({ nodeEnv: 'test' });
+  baseConfig ??= withTestProviders(loadConfig({ nodeEnv: 'test' }));
 
   if (overrides.databaseName === undefined) {
     return baseConfig;
@@ -47,6 +48,27 @@ export function testConfig(overrides: { databaseName?: string } = {}): AppConfig
   return {
     ...baseConfig,
     database: { ...baseConfig.database, name: overrides.databaseName },
+  };
+}
+
+/**
+ * Liga o login por provedor com credenciais de mentira.
+ *
+ * Quem fala com o GitHub nos testes é um cliente injetado, então estes valores
+ * nunca saem da máquina. Fixá-los aqui é o que faz a suíte passar igual numa
+ * máquina que tem as credenciais reais no `.env` e numa que não tem — sem isso,
+ * o teste passaria no laptop de quem configurou e falharia no CI.
+ */
+function withTestProviders(config: AppConfig): AppConfig {
+  return {
+    ...config,
+    github: {
+      enabled: true,
+      clientId: 'test-client-id',
+      clientSecret: 'test-client-secret', // secret-scan:ignore — valor fixo de teste
+      callbackUrl: 'http://127.0.0.1:3551/v1/auth/oauth/github/callback',
+      scopes: 'read:user user:email',
+    },
   };
 }
 
@@ -112,7 +134,9 @@ export interface TestHarness {
  * registro não consegue criar organização — o que é o comportamento certo, e
  * não algo para o teste contornar.
  */
-export async function createHarness(options: { prefix?: string } = {}): Promise<TestHarness> {
+export async function createHarness(
+  options: { prefix?: string; githubClient?: GitHubClient } = {},
+): Promise<TestHarness> {
   const base = testConfig();
   const databaseName = `${options.prefix ?? 'prometheon_apitest'}_${newId().slice(-12).toLowerCase()}`;
 
@@ -148,7 +172,12 @@ export async function createHarness(options: { prefix?: string } = {}): Promise<
     captureDirectory: mailDirectory,
   });
 
-  const { app, authService } = await buildApp({ config, database, mailer });
+  const { app, authService } = await buildApp({
+    config,
+    database,
+    mailer,
+    ...(options.githubClient === undefined ? {} : { githubClient: options.githubClient }),
+  });
 
   await app.ready();
 

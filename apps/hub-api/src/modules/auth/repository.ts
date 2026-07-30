@@ -18,12 +18,14 @@ import {
   roles,
   runInTransaction,
   securityEvents,
+  userIdentities,
   userSessions,
   users,
   writable,
   type Database,
   type DeviceStatus,
   type Executor,
+  type IdentityProvider,
   type Invitation,
   type OrganizationMember,
   type RefreshToken,
@@ -151,6 +153,123 @@ export class AuthRepository {
         tx,
         userId,
         input.organizationName,
+      );
+
+      return { userId, organizationId };
+    });
+  }
+
+  /** Identidade externa já vinculada, se houver. */
+  async findIdentity(
+    provider: IdentityProvider,
+    providerAccountId: string,
+  ): Promise<{ id: string; userId: string } | undefined> {
+    const rows = await this.db.manager
+      .createQueryBuilder(userIdentities, 'identity')
+      .select('identity.id', 'id')
+      .addSelect('identity.userId', 'userId')
+      .where('identity.provider = :provider', { provider })
+      .andWhere('identity.providerAccountId = :providerAccountId', { providerAccountId })
+      .limit(1)
+      .getRawMany<{ id: string; userId: string }>();
+
+    return rows[0];
+  }
+
+  async touchIdentity(identityId: string): Promise<void> {
+    await this.db.manager.update(
+      userIdentities,
+      { id: identityId },
+      { lastAuthenticatedAt: new Date(), updatedAt: new Date() },
+    );
+  }
+
+  /**
+   * Liga uma conta do provedor a um usuário do Hub.
+   *
+   * Não guarda token do provedor — a coluna nem existe. O que a identidade
+   * responde é "esta conta do GitHub é daquela pessoa"; agir no GitHub em nome
+   * dela é outro consentimento, com credencial cifrada em `git_connections`.
+   */
+  async linkIdentity(input: {
+    userId: string;
+    provider: IdentityProvider;
+    providerAccountId: string;
+    email: string | null;
+    displayName: string | null;
+  }): Promise<string> {
+    const id = newId();
+    const now = new Date();
+
+    await this.db.manager.insert(userIdentities, {
+      id,
+      userId: input.userId,
+      provider: input.provider,
+      providerAccountId: input.providerAccountId,
+      email: input.email,
+      displayName: input.displayName,
+      lastAuthenticatedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return id;
+  }
+
+  /**
+   * Cria a conta de quem chegou por um provedor externo.
+   *
+   * Nasce **sem senha** e já verificada: o provedor confirmou o endereço, e
+   * exigir que a pessoa confirme de novo um e-mail que ela acabou de provar
+   * possuir seria cerimônia. Quem quiser senha depois usa a recuperação, que já
+   * exige acesso à caixa postal.
+   *
+   * A identidade entra na mesma transação que o usuário. Separadas, uma falha no
+   * meio deixaria uma conta órfã que ninguém consegue acessar — nem por senha,
+   * que não existe, nem pelo provedor, que não está vinculado.
+   */
+  async createUserFromProvider(input: {
+    email: string;
+    displayName: string;
+    provider: IdentityProvider;
+    providerAccountId: string;
+    avatarUrl: string | null;
+  }): Promise<{ userId: string; organizationId: string | null }> {
+    const userId = newId();
+
+    return runInTransaction(this.db, async (tx) => {
+      const now = new Date();
+
+      await tx.insert(users, {
+        id: userId,
+        email: input.email,
+        displayName: input.displayName,
+        passwordHash: null,
+        avatarUrl: input.avatarUrl,
+        emailVerifiedAt: now,
+        locale: 'en',
+        timezone: 'UTC',
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      await tx.insert(userIdentities, {
+        id: newId(),
+        userId,
+        provider: input.provider,
+        providerAccountId: input.providerAccountId,
+        email: input.email,
+        displayName: input.displayName,
+        lastAuthenticatedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const organizationId = await createOrganizationFor(
+        tx,
+        userId,
+        `${input.displayName}'s workspace`,
       );
 
       return { userId, organizationId };

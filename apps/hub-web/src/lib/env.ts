@@ -11,6 +11,15 @@ const schema = z.object({
   HUB_WEB_PORT: z.coerce.number().int().positive().default(3550),
   HUB_WEB_URL: z.string().url().default('http://127.0.0.1:3550'),
   HUB_API_URL: z.string().url().default('http://127.0.0.1:3551'),
+  /**
+   * Só a presença, para decidir se o botão aparece.
+   *
+   * O client id é público — vai na URL de autorização de qualquer forma. O
+   * **secret** não passa por aqui e nem poderia: quem troca o código por token é
+   * a API. Ler a mesma variável que a API usa evita a dessincronia clássica de
+   * um sinalizador separado que alguém esquece de virar junto.
+   */
+  GITHUB_OAUTH_CLIENT_ID: z.string().trim().min(1).optional(),
 });
 
 let cached: z.infer<typeof schema> | undefined;

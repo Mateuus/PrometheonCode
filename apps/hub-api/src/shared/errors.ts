@@ -120,3 +120,14 @@ export function internalError(message = 'Unexpected error.', cause?: unknown): A
 export function serviceUnavailable(message: string, cause?: unknown): ApiError {
   return new ApiError(503, 'SERVICE_UNAVAILABLE', message, { cause });
 }
+
+/**
+ * Falha de um serviço externo do qual esta requisição dependia.
+ *
+ * 502 e não 500: o Hub funcionou, quem não respondeu foi o outro lado. A
+ * distinção importa em produção — 500 manda alguém procurar bug no código,
+ * enquanto 502 aponta para fora.
+ */
+export function badGateway(message: string, code: ErrorCode = 'SERVICE_UNAVAILABLE'): ApiError {
+  return new ApiError(502, code, message);
+}

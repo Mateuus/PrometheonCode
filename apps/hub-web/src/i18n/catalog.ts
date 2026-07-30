@@ -120,6 +120,14 @@ export const CATALOG = {
   'auth.login.title': 'Sign in to Prometheon',
   'auth.login.subtitle': 'Use the account your organization invited.',
   'auth.login.noAccount': 'No account yet?',
+  'auth.provider.github': 'Continue with GitHub',
+  'auth.provider.or': 'or',
+  'auth.provider.linkRequired':
+    'An account already uses that email address. Sign in with your password to connect GitHub to it.',
+  'auth.provider.rejected':
+    'GitHub could not confirm your identity. Make sure your GitHub account has a verified email address.',
+  'auth.provider.unavailable': 'GitHub did not answer. Try again in a moment.',
+  'auth.provider.failed': 'That sign-in could not be completed. Try again.',
   'auth.register.title': 'Create your account',
   'auth.register.subtitle': 'You can create an organization right after.',
   'auth.register.hasAccount': 'Already have an account?',

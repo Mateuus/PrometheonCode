@@ -69,6 +69,137 @@ export async function consumeSingleUseToken(
 }
 
 // ---------------------------------------------------------------------------
+// `state` do login por provedor externo
+// ---------------------------------------------------------------------------
+
+const OAUTH_STATE_PREFIX = 'auth:oauth-state:';
+
+/**
+ * Dez minutos: o suficiente para a pessoa ler a tela de consentimento do
+ * provedor e decidir, curto o bastante para um `state` capturado não servir
+ * depois. O fluxo inteiro leva segundos.
+ */
+const OAUTH_STATE_TTL_SECONDS = 600;
+
+export interface OAuthStatePayload {
+  /** Para onde mandar o navegador quando o login terminar. */
+  readonly redirectTo: string;
+  /**
+   * Quem pediu, quando o fluxo é de **vinculação** — alguém já autenticado
+   * ligando o GitHub à conta que já tem. Nulo é login comum.
+   *
+   * Guardar aqui, e não num parâmetro da URL de volta, é o que impede alguém de
+   * trocar o alvo da vinculação no meio do caminho.
+   */
+  readonly userId: string | null;
+}
+
+/**
+ * Emite o `state` que amarra o callback ao pedido que o originou.
+ *
+ * Sem isso, qualquer site consegue mandar o navegador de uma vítima ao callback
+ * com um `code` do atacante — e a conta do Hub da vítima acabaria vinculada ao
+ * GitHub de outra pessoa, que passaria a entrar nela quando quisesse.
+ *
+ * Como nos outros tokens deste arquivo, a chave é o hash: quem ler o Redis não
+ * consegue montar um callback válido.
+ */
+export async function issueOAuthState(
+  redis: RedisClient,
+  payload: OAuthStatePayload,
+): Promise<string> {
+  const state = randomToken();
+
+  await redis.set(
+    `${OAUTH_STATE_PREFIX}${hashToken(state)}`,
+    JSON.stringify(payload),
+    'EX',
+    OAUTH_STATE_TTL_SECONDS,
+  );
+
+  return state;
+}
+
+/** Consome o `state`. Uso único, pelo mesmo `GETDEL` atômico dos demais. */
+export async function consumeOAuthState(
+  redis: RedisClient,
+  state: string,
+): Promise<OAuthStatePayload | null> {
+  const raw = await redis.getdel(`${OAUTH_STATE_PREFIX}${hashToken(state)}`);
+
+  if (raw === null) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(raw);
+
+    if (typeof parsed !== 'object' || parsed === null) {
+      return null;
+    }
+
+    const { redirectTo, userId } = parsed as Record<string, unknown>;
+
+    return {
+      redirectTo: typeof redirectTo === 'string' ? redirectTo : '/',
+      userId: typeof userId === 'string' ? userId : null,
+    };
+  } catch {
+    // Valor corrompido vale o mesmo que ausente: o fluxo recomeça.
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Entrega da sessão ao cliente que iniciou o login
+// ---------------------------------------------------------------------------
+
+const OAUTH_HANDOFF_PREFIX = 'auth:oauth-handoff:';
+
+/**
+ * Trinta segundos: o tempo de um redirecionamento, não mais.
+ *
+ * O código aparece na barra de endereços, e daí vai para o histórico do
+ * navegador e para o log de qualquer proxy no caminho. Uma vida curta é o que
+ * garante que, quando ele vazar por um desses lugares, já não valha nada.
+ */
+const OAUTH_HANDOFF_TTL_SECONDS = 30;
+
+/**
+ * Guarda a identidade já confirmada atrás de um código de uso único.
+ *
+ * O callback do provedor termina na API, mas quem precisa da sessão é o Hub Web,
+ * que roda em outro host — cookie posto pela API não chega lá. Mandar o token na
+ * URL do redirecionamento resolveria e seria péssimo: o access token ficaria no
+ * histórico do navegador e no `Referer` de toda requisição seguinte.
+ *
+ * O que viaja na URL é um código que morre em trinta segundos e só funciona uma
+ * vez. E ele não guarda token nenhum, só o identificador do usuário: a sessão
+ * nasce no `exchange`, exatamente como no login por senha. Guardar tokens
+ * prontos no Redis significaria segredo utilizável em texto puro fora do banco,
+ * que é o que este arquivo inteiro existe para evitar.
+ */
+export async function issueOAuthHandoff(redis: RedisClient, userId: string): Promise<string> {
+  const code = randomToken();
+
+  await redis.set(
+    `${OAUTH_HANDOFF_PREFIX}${hashToken(code)}`,
+    userId,
+    'EX',
+    OAUTH_HANDOFF_TTL_SECONDS,
+  );
+
+  return code;
+}
+
+export async function consumeOAuthHandoff(
+  redis: RedisClient,
+  code: string,
+): Promise<string | null> {
+  return redis.getdel(`${OAUTH_HANDOFF_PREFIX}${hashToken(code)}`);
+}
+
+// ---------------------------------------------------------------------------
 // Denylist de sessão
 // ---------------------------------------------------------------------------
 

@@ -18,7 +18,7 @@
 
 import type { Role } from '@prometheon/permissions';
 import { child } from '@prometheon/logger';
-import { newId, type Database } from '@prometheon/database';
+import { newId, type Database, type IdentityProvider } from '@prometheon/database';
 
 import { AUTH_SETTINGS, type AppConfig } from '../../config/index.js';
 import {
@@ -31,7 +31,7 @@ import {
 } from '../../mail/index.js';
 import type { RedisClient } from '../../plugins/redis.js';
 import { hashToken, normalizeUserCode, randomToken } from '../../shared/crypto.js';
-import { ApiError } from '../../shared/errors.js';
+import { ApiError, internalError } from '../../shared/errors.js';
 import { addSeconds, toIso } from '../../shared/time.js';
 import {
   deviceAuthorizationDenied,
@@ -41,7 +41,11 @@ import {
   invalidCredentials,
   invitationExpired,
   invitationInvalid,
+  identityLinkRequired,
+  oauthStateInvalid,
   organizationAccessDenied,
+  providerEmailRequired,
+  providerNotConfigured,
   refreshTokenInvalid,
   resetTokenInvalid,
   sessionRevoked,
@@ -55,11 +59,16 @@ import {
   registerPoll,
   startDeviceFlow,
 } from './device-flow.js';
+import { authorizationUrl, createGitHubClient, type GitHubClient } from './github.js';
 import { hashPassword, needsRehash, verifyDummyPassword, verifyPassword } from './password.js';
 import { AuthRepository, type MembershipRow } from './repository.js';
 import {
+  consumeOAuthHandoff,
+  consumeOAuthState,
   consumeSingleUseToken,
   denySession,
+  issueOAuthHandoff,
+  issueOAuthState,
   issueSingleUseToken,
 } from './token-store.js';
 import { DEVICE_TOKEN_PREFIX, issueAccessToken } from './tokens.js';
@@ -91,6 +100,30 @@ export interface AuthServiceDeps {
   readonly redis: RedisClient;
   readonly mailer: MailService;
   readonly config: AppConfig;
+  /**
+   * Cliente do GitHub. Ausente em produção — é construído a partir da
+   * configuração. O teste injeta o dele para não depender da rede: um teste que
+   * chama o GitHub de verdade falha quando a internet cai, quando o rate limit
+   * estoura e quando alguém revoga o app, e nenhuma dessas falhas diz nada sobre
+   * o código.
+   */
+  readonly githubClient?: GitHubClient;
+}
+
+/**
+ * Destino seguro para depois do login.
+ *
+ * Só caminho interno, começando com uma barra e sem uma segunda barra logo em
+ * seguida — `//evil.com` é uma URL absoluta protocol-relative, e o navegador
+ * obedece. Sem esta poda, o Hub viraria um redirecionador aberto: um link do
+ * domínio legítimo levando a pessoa a um site de phishing.
+ */
+function safeRedirect(value: string | undefined): string {
+  if (value === undefined || !value.startsWith('/') || value.startsWith('//')) {
+    return '/app';
+  }
+
+  return value;
 }
 
 export class AuthService {
@@ -105,8 +138,11 @@ export class AuthService {
    */
   private readonly pendingMail = new Set<Promise<unknown>>();
 
+  private readonly githubClient: GitHubClient | undefined;
+
   constructor(private readonly deps: AuthServiceDeps) {
     this.repository = new AuthRepository(deps.db);
+    this.githubClient = deps.githubClient;
   }
 
   /** Espera as entregas em voo. Usado no shutdown e nos testes. */
@@ -353,6 +389,268 @@ export class AuthService {
     logger.info({ userId: user.id, sessionId: session.sessionId }, 'login succeeded');
 
     return { user: toCurrentUser(user), session };
+  }
+
+  // -------------------------------------------------------------------------
+  // Login por provedor externo
+  // -------------------------------------------------------------------------
+
+  /**
+   * Começa o fluxo: guarda o `state` e devolve para onde mandar o navegador.
+   *
+   * `redirectTo` é conferido aqui, e não lá na volta: um destino externo aceito
+   * agora viraria um redirecionador aberto — um link do próprio Hub que leva a
+   * pessoa a um site de phishing, com a credibilidade do domínio junto.
+   */
+  async startProviderSignIn(input: {
+    provider: IdentityProvider;
+    redirectTo: string | undefined;
+    userId: string | null;
+  }): Promise<string> {
+    const github = this.deps.config.github;
+
+    if (input.provider !== 'github' || !github.enabled) {
+      throw providerNotConfigured();
+    }
+
+    const state = await issueOAuthState(this.deps.redis, {
+      redirectTo: safeRedirect(input.redirectTo),
+      userId: input.userId,
+    });
+
+    return authorizationUrl({
+      clientId: github.clientId ?? '',
+      callbackUrl: github.callbackUrl ?? '',
+      scopes: github.scopes,
+      state,
+    });
+  }
+
+  /**
+   * Recebe a volta do provedor e devolve o código de handoff.
+   *
+   * O `state` é consumido antes de qualquer outra coisa: se ele não valer, nem
+   * chega a existir uma conversa com o GitHub, e um callback forjado morre sem
+   * custo nenhum.
+   */
+  async completeProviderSignIn(
+    input: { provider: IdentityProvider; code: string; state: string },
+    origin: RequestOrigin,
+  ): Promise<{ handoffCode: string; redirectTo: string }> {
+    const github = this.deps.config.github;
+
+    if (input.provider !== 'github' || !github.enabled) {
+      throw providerNotConfigured();
+    }
+
+    const stored = await consumeOAuthState(this.deps.redis, input.state);
+
+    if (stored === null) {
+      throw oauthStateInvalid();
+    }
+
+    const client =
+      this.githubClient ??
+      createGitHubClient({
+        clientId: github.clientId ?? '',
+        clientSecret: github.clientSecret ?? '',
+        callbackUrl: github.callbackUrl ?? '',
+      });
+
+    const providerToken = await client.exchangeCode(input.code);
+    const identity = await client.fetchIdentity(providerToken);
+
+    const { userId } = await this.signInWithProvider(
+      {
+        provider: 'github',
+        providerAccountId: identity.providerAccountId,
+        email: identity.email,
+        // O GitHub deixa o nome vazio; o `login` sempre existe e é reconhecível.
+        displayName: identity.displayName ?? identity.username,
+        avatarUrl: identity.avatarUrl,
+      },
+      origin,
+    );
+
+    return {
+      handoffCode: await issueOAuthHandoff(this.deps.redis, userId),
+      redirectTo: stored.redirectTo,
+    };
+  }
+
+  /** Troca o código de handoff por uma sessão de verdade. */
+  async exchangeProviderHandoff(
+    code: string,
+    origin: RequestOrigin,
+  ): Promise<{ user: CurrentUserView; session: IssuedSession }> {
+    const userId = await consumeOAuthHandoff(this.deps.redis, code);
+
+    if (userId === null) {
+      throw oauthStateInvalid();
+    }
+
+    const user = await this.repository.findUserById(userId);
+
+    if (user === undefined || user.status === 'suspended' || user.status === 'disabled') {
+      throw invalidCredentials();
+    }
+
+    return { user: toCurrentUser(user), session: await this.startSessionFor(user.id, origin) };
+  }
+
+  /**
+   * Entra (ou cadastra) com uma identidade confirmada por um provedor.
+   *
+   * A ordem das três perguntas é o coração do desenho, e a terceira é onde mora
+   * o risco:
+   *
+   * 1. **Esta conta do provedor já está vinculada?** É o caminho comum: a pessoa
+   *    já entrou aqui com o GitHub antes. Entra direto.
+   *
+   * 2. **Não está vinculada e o e-mail é novo?** Cria a conta. Nasce verificada
+   *    porque o provedor confirmou o endereço.
+   *
+   * 3. **Não está vinculada, mas o e-mail já pertence a alguém aqui?** É a
+   *    pergunta perigosa. Vincular automaticamente entregaria a conta a quem
+   *    cadastrasse o endereço de outra pessoa e nunca o confirmasse: bastaria
+   *    registrar `voce@exemplo.com` com senha, esperar, e a sua entrada pelo
+   *    GitHub cairia dentro da conta do atacante. Por isso a vinculação
+   *    automática exige **as duas pontas verificadas** — o provedor confirmou o
+   *    endereço, e a conta local também já o tinha confirmado. Fora disso, a
+   *    resposta é `IDENTITY_LINK_REQUIRED`: entre com a senha e ligue o provedor
+   *    de dentro da conta, onde a posse já está provada.
+   *
+   * Identidade sem e-mail (a pessoa não tem endereço verificado no provedor) não
+   * cria conta: sem endereço não há recuperação, não há convite, não há aviso de
+   * segurança — seria uma conta que ninguém consegue reaver.
+   */
+  async signInWithProvider(
+    input: {
+      provider: IdentityProvider;
+      providerAccountId: string;
+      email: string | null;
+      displayName: string;
+      avatarUrl: string | null;
+    },
+    origin: RequestOrigin,
+  ): Promise<{ userId: string }> {
+    const linked = await this.repository.findIdentity(input.provider, input.providerAccountId);
+
+    if (linked !== undefined) {
+      const user = await this.repository.findUserById(linked.userId);
+
+      if (user === undefined || user.status === 'suspended' || user.status === 'disabled') {
+        await this.repository.recordSecurityEvent({
+          type: 'login_blocked',
+          severity: 'medium',
+          userId: linked.userId,
+          ip: origin.ip,
+          userAgent: origin.userAgent,
+          details: { provider: input.provider, status: user?.status ?? 'missing' },
+        });
+
+        throw invalidCredentials();
+      }
+
+      await this.repository.touchIdentity(linked.id);
+
+      return { userId: user.id };
+    }
+
+    if (input.email === null) {
+      await this.repository.recordSecurityEvent({
+        type: 'provider_login_without_email',
+        severity: 'low',
+        ip: origin.ip,
+        userAgent: origin.userAgent,
+        details: { provider: input.provider },
+      });
+
+      throw providerEmailRequired();
+    }
+
+    const existing = await this.repository.findUserByEmail(input.email);
+
+    if (existing === undefined) {
+      const created = await this.repository.createUserFromProvider({
+        email: input.email,
+        displayName: input.displayName,
+        provider: input.provider,
+        providerAccountId: input.providerAccountId,
+        avatarUrl: input.avatarUrl,
+      });
+
+      const user = await this.repository.findUserById(created.userId);
+
+      if (user === undefined) {
+        throw internalError('The account was created but could not be read back.');
+      }
+
+      logger.info({ userId: user.id, provider: input.provider }, 'account created from provider');
+
+      return { userId: user.id };
+    }
+
+    // A conta local existe. Só vincula sozinho com as duas pontas verificadas.
+    if (existing.emailVerifiedAt === null) {
+      await this.repository.recordSecurityEvent({
+        type: 'provider_link_refused',
+        severity: 'medium',
+        userId: existing.id,
+        ip: origin.ip,
+        userAgent: origin.userAgent,
+        details: { provider: input.provider, reason: 'local_email_unverified' },
+      });
+
+      throw identityLinkRequired();
+    }
+
+    if (existing.status === 'suspended' || existing.status === 'disabled') {
+      throw invalidCredentials();
+    }
+
+    await this.repository.linkIdentity({
+      userId: existing.id,
+      provider: input.provider,
+      providerAccountId: input.providerAccountId,
+      email: input.email,
+      displayName: input.displayName,
+    });
+
+    await this.repository.recordSecurityEvent({
+      type: 'provider_linked',
+      severity: 'low',
+      userId: existing.id,
+      ip: origin.ip,
+      userAgent: origin.userAgent,
+      details: { provider: input.provider, reason: 'verified_email_match' },
+    });
+
+    logger.info({ userId: existing.id, provider: input.provider }, 'provider linked to account');
+
+    return { userId: existing.id };
+  }
+
+  /**
+   * Abre a sessão na primeira organização da pessoa, como o login faz.
+   *
+   * Usada pela troca do código de handoff no login por provedor: a sessão nasce
+   * ali, e não no callback, para que nenhum token pronto precise ficar guardado
+   * esperando o cliente vir buscar.
+   */
+  async startSessionFor(userId: string, origin: RequestOrigin): Promise<IssuedSession> {
+    const memberships = await this.repository.listMemberships(userId);
+
+    const session = await this.issueSession({
+      userId,
+      organizationId: memberships[0]?.organizationId ?? null,
+      deviceId: null,
+      origin,
+    });
+
+    await this.repository.touchLogin(userId);
+
+    return session;
   }
 
   /**

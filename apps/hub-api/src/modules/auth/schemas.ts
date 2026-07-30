@@ -110,3 +110,42 @@ export const authErrorResponses = {
   401: errorEnvelopeSchema,
   429: errorEnvelopeSchema,
 } as const;
+
+// ---------------------------------------------------------------------------
+// Login por provedor externo
+// ---------------------------------------------------------------------------
+
+/**
+ * Início do fluxo.
+ *
+ * `redirectTo` é onde a pessoa queria estar antes de ser mandada para o login.
+ * O servidor só aceita caminho interno — ver `safeRedirect` no serviço.
+ */
+export const providerStartQuerySchema = z.object({
+  redirectTo: z.string().max(512).optional(),
+});
+
+/**
+ * Volta do provedor.
+ *
+ * `error` existe porque o GitHub redireciona de volta com ele quando a pessoa
+ * clica em "cancelar" na tela de consentimento. Tratar essa volta como falha de
+ * validação mostraria um erro técnico para quem apenas mudou de ideia.
+ */
+export const providerCallbackQuerySchema = z.object({
+  code: z.string().min(1).max(512).optional(),
+  state: z.string().min(1).max(512).optional(),
+  error: z.string().max(128).optional(),
+});
+
+export const providerExchangeRequestSchema = z.object({
+  code: z.string().min(16).max(512),
+});
+
+export const providerErrorResponses = {
+  400: errorEnvelopeSchema,
+  401: errorEnvelopeSchema,
+  409: errorEnvelopeSchema,
+  429: errorEnvelopeSchema,
+  502: errorEnvelopeSchema,
+} as const;

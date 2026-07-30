@@ -156,3 +156,48 @@ export function passwordTooWeak(reason: string): ApiError {
     fields: [{ path: 'password', message: reason }],
   });
 }
+
+// ---------------------------------------------------------------------------
+// Login por provedor externo
+// ---------------------------------------------------------------------------
+
+export function providerNotConfigured(): ApiError {
+  return badRequest('PROVIDER_NOT_CONFIGURED', 'This Hub does not offer that sign-in provider.');
+}
+
+/** `state` ausente, expirado, já usado ou desconhecido. */
+export function oauthStateInvalid(): ApiError {
+  return badRequest('PROVIDER_REJECTED', 'This sign-in attempt is no longer valid. Start again.');
+}
+
+/**
+ * O provedor confirmou a identidade, mas sem e-mail verificado.
+ *
+ * A conta não é criada porque uma conta sem endereço não tem recuperação, não
+ * recebe convite e não recebe aviso de segurança — ficaria irrecuperável no dia
+ * em que a pessoa perdesse o acesso ao provedor.
+ */
+export function providerEmailRequired(): ApiError {
+  return badRequest(
+    'PROVIDER_REJECTED',
+    'Your provider account has no verified email address. Verify one there and try again.',
+  );
+}
+
+/**
+ * O e-mail já pertence a uma conta daqui, e não há prova bastante para vincular.
+ *
+ * Vincular por e-mail coincidente entregaria a conta a quem cadastrasse o
+ * endereço de outra pessoa e nunca o confirmasse: bastaria registrar
+ * `voce@exemplo.com` com uma senha qualquer e esperar você entrar pelo provedor.
+ * Por isso a vinculação automática exige as duas pontas verificadas.
+ *
+ * A saída não é um beco: entrar com a senha e ligar o provedor de dentro da
+ * conta, onde a posse já está provada.
+ */
+export function identityLinkRequired(): ApiError {
+  return conflict(
+    'IDENTITY_LINK_REQUIRED',
+    'An account already uses that email address. Sign in with your password to connect this provider.',
+  );
+}

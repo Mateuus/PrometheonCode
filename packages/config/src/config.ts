@@ -50,6 +50,21 @@ export interface SmtpConfig {
   readonly from: string;
 }
 
+/**
+ * Login com GitHub.
+ *
+ * `enabled` é derivado: sem client id, secret e callback, não há o que oferecer.
+ * Deixar a decisão aqui evita que cada ponto do código repita a mesma verificação
+ * de três campos — e que um deles esqueça de um.
+ */
+export interface GitHubOAuthConfig {
+  readonly enabled: boolean;
+  readonly clientId: string | undefined;
+  readonly clientSecret: string | undefined;
+  readonly callbackUrl: string | undefined;
+  readonly scopes: string;
+}
+
 export interface ConfigMeta {
   /** Arquivos `.env` lidos, em ordem de precedência crescente. */
   readonly envFiles: readonly string[];
@@ -73,6 +88,7 @@ export interface AppConfig {
   readonly redis: RedisConfig;
   readonly secrets: SecretsConfig;
   readonly smtp: SmtpConfig;
+  readonly github: GitHubOAuthConfig;
   readonly meta: ConfigMeta;
 }
 
@@ -139,6 +155,18 @@ export function buildConfig(
       user: parsed.SMTP_USER,
       password: parsed.SMTP_PASSWORD,
       from: parsed.MAIL_FROM,
+    },
+    github: {
+      // Os três juntos, ou nada: um Hub configurado pela metade ofereceria o
+      // botão e falharia no meio do fluxo, depois de a pessoa já ter autorizado.
+      enabled:
+        parsed.GITHUB_OAUTH_CLIENT_ID !== undefined &&
+        parsed.GITHUB_OAUTH_CLIENT_SECRET !== undefined &&
+        parsed.GITHUB_OAUTH_CALLBACK_URL !== undefined,
+      clientId: parsed.GITHUB_OAUTH_CLIENT_ID,
+      clientSecret: parsed.GITHUB_OAUTH_CLIENT_SECRET,
+      callbackUrl: parsed.GITHUB_OAUTH_CALLBACK_URL,
+      scopes: parsed.GITHUB_OAUTH_SCOPES,
     },
     meta,
   } satisfies AppConfig);

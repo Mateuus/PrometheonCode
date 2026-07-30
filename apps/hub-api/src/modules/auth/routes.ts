@@ -20,7 +20,7 @@ import { cookieProfile, PAYLOAD_LIMITS, RATE_LIMITS } from '../../config/index.j
 import { emailScopedKey, enforceRateLimit, routeRateLimit } from '../../plugins/rate-limit.js';
 import { recordAudit, requestOrigin } from '../../shared/audit.js';
 import { ok } from '../../shared/envelope.js';
-import { forbidden, unauthenticated } from '../../shared/errors.js';
+import { forbidden, isApiError, unauthenticated } from '../../shared/errors.js';
 import {
   authErrorResponses,
   deviceAuthorizationEnvelope,
@@ -38,6 +38,10 @@ import {
   meEnvelope,
   passwordResetConfirmSchema,
   passwordResetRequestSchema,
+  providerCallbackQuerySchema,
+  providerErrorResponses,
+  providerExchangeRequestSchema,
+  providerStartQuerySchema,
   refreshEnvelope,
   refreshRequestSchema,
   registerEnvelope,
@@ -466,6 +470,153 @@ export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (app, opt
       }
 
       return ok(request, await service.me(auth.userId, auth.organizationId));
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Login com GitHub
+  // -------------------------------------------------------------------------
+  //
+  // O fluxo tem três passos e cada um existe por um motivo:
+  //
+  // 1. `GET /auth/oauth/github` guarda um `state` e manda o navegador ao GitHub.
+  //    Sem o `state`, qualquer site conseguiria disparar o callback e ligar a
+  //    conta do GitHub de um atacante à conta de quem estivesse logado aqui.
+  // 2. `GET /auth/oauth/github/callback` confere o `state`, conversa com o
+  //    GitHub e devolve o navegador ao Hub Web com um código de handoff.
+  // 3. `POST /auth/oauth/exchange` troca esse código pela sessão.
+  //
+  // O terceiro passo existe porque o Hub Web roda em outro host: cookie posto
+  // pela API não chega lá. Mandar o token na URL resolveria e seria péssimo — ele
+  // ficaria no histórico do navegador e no `Referer` de tudo que viesse depois.
+
+  app.get(
+    '/auth/oauth/github',
+    {
+      config: routeRateLimit(RATE_LIMITS.loginPerIp),
+      schema: {
+        tags: ['auth'],
+        summary: 'Start signing in with GitHub',
+        description:
+          'Redirects to GitHub. The scopes asked for are identity only; reading repositories is a separate consent.',
+        querystring: providerStartQuerySchema,
+        response: { 302: z.null(), ...providerErrorResponses },
+      },
+    },
+    async (request, reply) => {
+      const url = await service.startProviderSignIn({
+        provider: 'github',
+        redirectTo: request.query.redirectTo,
+        // Vinculação a partir de uma conta já autenticada ainda não é oferecida
+        // por esta rota; quando for, o `userId` sai daqui.
+        userId: null,
+      });
+
+      return reply.redirect(url, 302);
+    },
+  );
+
+  app.get(
+    '/auth/oauth/github/callback',
+    {
+      config: routeRateLimit(RATE_LIMITS.loginPerIp),
+      schema: {
+        tags: ['auth'],
+        summary: 'Finish signing in with GitHub',
+        description:
+          'Consumes the state, exchanges the code with GitHub and sends the browser back to the web app with a short-lived handoff code.',
+        querystring: providerCallbackQuerySchema,
+        response: { 302: z.null(), ...providerErrorResponses },
+      },
+    },
+    async (request, reply) => {
+      const webUrl = app.appConfig.http.webUrl;
+
+      // Quem clicou em "cancelar" no GitHub volta com `error` e sem `code`. Não
+      // é falha: é uma decisão, e merece a tela de login de volta, não um erro.
+      if (request.query.error !== undefined || request.query.code === undefined) {
+        return reply.redirect(`${webUrl}/login?provider=cancelled`, 302);
+      }
+
+      if (request.query.state === undefined) {
+        return reply.redirect(`${webUrl}/login?provider=invalid`, 302);
+      }
+
+      try {
+        const result = await service.completeProviderSignIn(
+          { provider: 'github', code: request.query.code, state: request.query.state },
+          requestOrigin(request),
+        );
+
+        const target = new URL('/auth/callback', webUrl);
+
+        target.searchParams.set('code', result.handoffCode);
+        target.searchParams.set('next', result.redirectTo);
+
+        // `await` dentro do `try`: sem ele, uma rejeição escaparia do `catch` e
+        // a pessoa veria uma página de erro crua no meio do redirecionamento.
+        return await reply.redirect(target.toString(), 302);
+      } catch (error) {
+        // A pessoa está num navegador, no meio de um redirecionamento: devolver
+        // JSON aqui deixaria uma página de erro crua na tela. O código vai como
+        // parâmetro para o Hub Web dizer o que fazer, na língua dela.
+        const code = isApiError(error) ? error.code : 'PROVIDER_UNAVAILABLE';
+
+        request.log.warn({ err: error, provider: 'github' }, 'provider sign-in failed');
+
+        return reply.redirect(`${webUrl}/login?provider=${encodeURIComponent(code)}`, 302);
+      }
+    },
+  );
+
+  app.post(
+    '/auth/oauth/exchange',
+    {
+      bodyLimit: PAYLOAD_LIMITS.auth,
+      config: routeRateLimit(RATE_LIMITS.loginPerIp),
+      schema: {
+        tags: ['auth'],
+        summary: 'Exchange a provider handoff code for a session',
+        description:
+          'The code is single-use and lives for thirty seconds. The session is created here, so no ready-made token ever waits in storage.',
+        body: providerExchangeRequestSchema,
+        response: { 200: loginEnvelope, ...providerErrorResponses },
+      },
+    },
+    async (request, reply) => {
+      const result = await service.exchangeProviderHandoff(
+        request.body.code,
+        requestOrigin(request),
+      );
+      const useCookie = isBrowserClient(request.headers.origin);
+
+      if (useCookie) {
+        setRefreshCookie(reply, result.session);
+      }
+
+      if (result.session.organizationId !== null) {
+        const origin = requestOrigin(request);
+
+        await recordAudit(app.db, {
+          organizationId: result.session.organizationId,
+          actorType: 'user',
+          actorId: result.user.id,
+          actorLabel: result.user.email,
+          action: 'auth.login',
+          resourceType: 'session',
+          resourceId: result.session.sessionId,
+          requestId: request.id,
+          ip: origin.ip,
+          userAgent: origin.userAgent,
+          metadata: { provider: 'github' },
+        });
+      }
+
+      return ok(request, {
+        user: result.user,
+        tokens: tokenPair(result.session, useCookie),
+        sessionId: result.session.sessionId,
+      });
     },
   );
 
