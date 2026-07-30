@@ -4,6 +4,8 @@
 out/**
 src/**
 node_modules/**
+scripts/**
+media/*-source.svg
 **/*.map
 **/*.ts
 **/tsconfig.json
