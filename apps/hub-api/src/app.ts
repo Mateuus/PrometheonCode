@@ -39,6 +39,8 @@ import {
 import { getConfig, PAYLOAD_LIMITS, runtimeSettings, type AppConfig } from './config/index.js';
 import { createMailService } from './mail/index.js';
 import type { MailService } from './mail/types.js';
+import { accountRoutes } from './modules/account/routes.js';
+import { AccountService } from './modules/account/service.js';
 import { createGovernanceQueues } from './modules/audit/queue.js';
 import { auditRoutes } from './modules/audit/routes.js';
 import { AuditService } from './modules/audit/service.js';
@@ -170,6 +172,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<BuiltApp>
     config,
   });
 
+  const accountService = new AccountService({ db: app.db, redis: app.redis });
+
   const organizationService = new OrganizationService({
     db: app.db,
     config,
@@ -216,6 +220,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<BuiltApp>
   await app.register(
     async (scope) => {
       await scope.register(authRoutes, { service: authService });
+      await scope.register(accountRoutes, { service: accountService });
       await scope.register(organizationRoutes, { service: organizationService });
       await scope.register(knowledgeRoutes, { service: knowledgeService });
       await scope.register(billingRoutes, { service: billingService });
