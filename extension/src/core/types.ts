@@ -1,5 +1,7 @@
 /** Tipos centrais compartilhados entre extensão e webview. */
 
+import type { TokenUsage } from '../providers/UsageTracker';
+
 export type WorkMode = 'plan' | 'edit' | 'agent-team';
 export type Autonomy = 'manual' | 'auto' | 'bypass';
 export type ChatType = 'local' | 'web';
@@ -169,6 +171,11 @@ export interface ActivityStatus {
   readonly label: string;
   readonly detail?: string;
   readonly startedAt: number | null;
+  /**
+   * Tokens contados até agora neste run. Some quando o run acaba: o número que
+   * fica é o da mensagem, reportado pelo agente no fim.
+   */
+  readonly usage?: TokenUsage;
 }
 
 export interface UiNotification {

@@ -149,6 +149,8 @@ const dom = {
   activityLabel: element<HTMLSpanElement>('activity-label'),
   activityDetail: element<HTMLSpanElement>('activity-detail'),
   activityElapsed: element<HTMLSpanElement>('activity-elapsed'),
+  activityTokens: element<HTMLSpanElement>('activity-tokens'),
+  workingTokens: element<HTMLSpanElement>('working-tokens'),
   openSettingsModal: element<HTMLButtonElement>('open-settings-modal'),
   settingsModal: element<HTMLDivElement>('settings-modal'),
   settingsNav: element<HTMLElement>('settings-nav'),
@@ -734,6 +736,18 @@ function renderActivity(activity: PrometheonViewState['activity']): void {
     startWorkingWords();
   }
   updateEmptyState();
+
+  // Tokens contados durante o run, ao lado do relógio. Some quando o run acaba:
+  // a conta que fica é a do cabeçalho da mensagem.
+  const tokens = activity.usage === undefined ? '' : tokenPair(activity.usage);
+  dom.activityTokens.textContent = tokens;
+  dom.workingTokens.textContent = tokens;
+  const title =
+    activity.usage === undefined
+      ? ''
+      : sf('{0} input tokens · {1} output tokens', activity.usage.input, activity.usage.output);
+  dom.activityTokens.title = title;
+  dom.workingTokens.title = title;
 
   window.clearInterval(elapsedTimer);
   if (!running || activity.startedAt === null) {
@@ -2713,7 +2727,7 @@ function usageBadge(usage: { input: number; output: number }): HTMLElement {
   const badge = document.createElement('span');
   badge.className = 'usage-badge';
   badge.textContent = `↑ ${formatTokens(usage.input)} ↓ ${formatTokens(usage.output)}`;
-  badge.title = `${usage.input} input tokens · ${usage.output} output tokens`;
+  badge.title = sf('{0} input tokens · {1} output tokens', usage.input, usage.output);
   return badge;
 }
 
@@ -2947,7 +2961,12 @@ function applyChatEvent(event: Extract<ExtensionToWebviewMessage, { type: 'chat.
       currentRunId = null;
       break;
 
+    // Tratados fora daqui: o uso em andamento e o estado do agente chegam pela
+    // barra de atividade, e a pergunta abre o modal por mensagem própria.
+    case 'run.usage':
     case 'agent.status':
+    case 'question.asked':
+    case 'question.closed':
       break;
   }
 }

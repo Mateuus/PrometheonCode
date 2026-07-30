@@ -542,6 +542,63 @@ suite('Chat', () => {
     assert.equal(step?.detail, 'Cancelled');
   });
 
+  test('o uso reportado durante o run chega acumulado ao consumidor', async () => {
+    const { chat, conversationId } = await scriptedChat([
+      { type: 'usage', delta: { input: 1200, output: 0 } },
+      { type: 'usage', delta: { input: 0, output: 40 } },
+      // Valor negativo é lixo do adaptador e não pode diminuir a contagem.
+      { type: 'usage', delta: { input: 0, output: -5 } },
+      { type: 'usage', delta: { input: 0, output: 60 } },
+      { type: 'completed', text: 'pronto', usage: { input: 1200, output: 110 } },
+    ]);
+
+    const running: string[] = [];
+    let final: { input: number; output: number } | undefined;
+    for await (const event of chat.sendMessage({
+      conversationId,
+      content: 'conta',
+      workMode: 'edit',
+      autonomy: 'auto',
+      mainAgentId: 'scripted',
+    })) {
+      if (event.type === 'run.usage') {
+        running.push(`${event.usage.input}/${event.usage.output}`);
+      }
+      if (event.type === 'message.completed') {
+        final = event.usage;
+      }
+    }
+
+    assert.deepEqual(running, ['1200/0', '1200/40', '1200/40', '1200/100']);
+    // O total do agente é o que fica na mensagem, não a soma dos parciais.
+    assert.deepEqual(final, { input: 1200, output: 110 });
+    const persisted = await chat.getMessages(conversationId);
+    assert.deepEqual(persisted[1]?.usage, { input: 1200, output: 110 });
+  });
+
+  test('o mock conta tokens enquanto responde', async () => {
+    const api = await getApi();
+    const conversation = await api.localChat.createConversation({ chatType: 'local' });
+
+    const running: number[] = [];
+    for await (const event of api.localChat.sendMessage({
+      conversationId: conversation.id,
+      content: 'conta os tokens',
+      workMode: 'edit',
+      autonomy: 'auto',
+      mainAgentId: 'mock',
+    })) {
+      autoAnswer(api.localChat, event);
+      if (event.type === 'run.usage') {
+        running.push(event.usage.output);
+      }
+    }
+
+    assert.ok(running.length > 1, 'esperava mais de um relatório de uso');
+    // Acumulado: cada número é maior ou igual ao anterior.
+    assert.deepEqual([...running].sort((a, b) => a - b), running);
+  });
+
   test('uma resposta para pergunta que não está aberta é descartada', async () => {
     const { chat, adapter } = await askingChat();
 

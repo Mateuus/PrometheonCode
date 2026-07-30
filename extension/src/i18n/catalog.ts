@@ -298,6 +298,7 @@ export const WEBVIEW_STRINGS = {
   'a11y.message': 'Message',
   'attachments.remove': 'Remove {0}',
   'attachments.open': 'Open {0}',
+  'usage.tooltip': '{0} input tokens · {1} output tokens',
 } as const satisfies Record<string, string>;
 
 export type WebviewStringKey = keyof typeof WEBVIEW_STRINGS;

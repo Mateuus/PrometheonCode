@@ -69,6 +69,15 @@ export type AgentEvent =
   /** Raciocínio já concluído, exibido como "Thought for 3s". */
   | { readonly type: 'thought'; readonly durationMs: number }
   /**
+   * Tokens contabilizados desde o último `usage` deste run — é delta, não total.
+   * Serve para a barra de atividade contar enquanto o agente trabalha; o número
+   * oficial continua sendo o do `completed`, que é o que vai para o histórico.
+   *
+   * Reporte em blocos (a cada resposta parcial, a cada ferramenta), nunca por
+   * token: cada evento atravessa o núcleo e chega à interface.
+   */
+  | { readonly type: 'usage'; readonly delta: TokenUsage }
+  /**
    * O agente parou para perguntar. O run só continua quando a resposta chega
    * por `answer` — nada é decidido no lugar do usuário. Só um pedido pode ficar
    * aberto por sessão.

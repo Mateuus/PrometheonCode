@@ -389,6 +389,12 @@ export class PrometheonCore implements vscode.Disposable {
           this.setActivity('thinking', 'Thinking…');
           this.deps.bus.emit('activity.changed', this.activity);
         }
+        if (event.type === 'run.usage') {
+          // Contagem em andamento: alimenta o relógio da barra de atividade e
+          // não entra no histórico de uso, que só conta o total do fim do run.
+          this.activity = { ...this.activity, usage: event.usage };
+          this.deps.bus.emit('activity.changed', this.activity);
+        }
         if (event.type === 'question.asked') {
           // A pergunta entra no estado antes de ir para a interface: se a view
           // for reconstruída enquanto o agente espera, o modal volta com ela.
@@ -402,6 +408,10 @@ export class PrometheonCore implements vscode.Disposable {
           // O uso é contabilizado no perfil que executou, não no agente.
           await this.deps.usage.record(this.usageProfileId(), event.usage);
           await this.refreshAccounts();
+          // O total do agente vence a estimativa em andamento nos últimos
+          // instantes do run, para o número exibido terminar no valor certo.
+          this.activity = { ...this.activity, usage: event.usage };
+          this.deps.bus.emit('activity.changed', this.activity);
         }
         this.deps.bus.emit('chat.event', event);
         if (event.type === 'run.failed') {
@@ -1105,6 +1115,8 @@ export class PrometheonCore implements vscode.Disposable {
       label,
       detail,
       startedAt: this.activity.phase === 'idle' ? Date.now() : this.activity.startedAt,
+      // A contagem pertence ao run, não à fase: trocar de fase não a zera.
+      ...(this.activity.usage === undefined ? {} : { usage: this.activity.usage }),
     };
   }
 

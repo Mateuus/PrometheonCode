@@ -261,5 +261,6 @@
   "Chat type": "Tipo de conversación",
   "Message": "Mensaje",
   "Remove {0}": "Quitar {0}",
-  "Open {0}": "Abrir {0}"
+  "Open {0}": "Abrir {0}",
+  "{0} input tokens · {1} output tokens": "{0} tokens de entrada · {1} tokens de salida"
 }

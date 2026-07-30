@@ -8,6 +8,7 @@ import type { Logger } from '../logger';
 import type { LocalStateStore } from '../storage/LocalStateStore';
 import { PrometheonError, serializeError } from '../utils/errors';
 import { newId } from '../utils/ids';
+import type { TokenUsage } from '../providers/UsageTracker';
 import { truncateStepOutput } from './types';
 import type {
   AgentStep,
@@ -167,6 +168,8 @@ export class LocalChatService implements ChatService {
     };
 
     let content = '';
+    /** Tokens somados enquanto o run acontece, para a interface ter o que contar. */
+    let liveUsage: TokenUsage = { input: 0, output: 0 };
     /** Passos do agente nesta resposta, na ordem, prontos para persistir. */
     const steps: AgentStep[] = [];
 
@@ -268,6 +271,14 @@ export class LocalChatService implements ChatService {
             yield { type: 'step.completed', runId, messageId: agentMessage.id, step };
             break;
           }
+
+          case 'usage':
+            liveUsage = {
+              input: liveUsage.input + Math.max(0, event.delta.input),
+              output: liveUsage.output + Math.max(0, event.delta.output),
+            };
+            yield { type: 'run.usage', runId, usage: liveUsage };
+            break;
 
           case 'question.asked': {
             // O passo nasce em andamento e só fecha quando a resposta chega:

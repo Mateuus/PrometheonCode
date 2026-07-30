@@ -30,6 +30,9 @@ function toChunks(text: string): string[] {
 /** Pausa entre um passo simulado e o próximo, para o bloco em andamento aparecer. */
 const STEP_DELAY_MS = 260;
 
+/** Saída acumulada antes de reportar tokens: contagem em blocos, não por token. */
+const USAGE_REPORT_CHARS = 60;
+
 /**
  * Roteiro dos passos simulados. Nada aqui executa ferramenta nenhuma: são
  * strings fixas, escritas só para a timeline do chat ter o que desenhar
@@ -237,7 +240,18 @@ export class MockAgentAdapter implements AgentAdapter {
       (images === 0 ? '' : ` Vieram ${images} imagem(ns) anexada(s).`) +
       `\n\nSuas respostas:\n${formatAnswers(outcome.answers)}`;
 
+    // A entrada é contabilizada de uma vez, assim que o agente começa a responder.
+    yield {
+      type: 'usage',
+      delta: {
+        input: estimateTokens(message.content) + (message.attachments?.length ?? 0) * 800,
+        output: 0,
+      },
+    };
+
     let emitted = '';
+    /** Saída ainda não reportada; vai em blocos, nunca token a token. */
+    let unreported = '';
     for (const chunk of toChunks(reply)) {
       await delay(CHUNK_DELAY_MS);
       if (session.cancelled) {
@@ -246,7 +260,15 @@ export class MockAgentAdapter implements AgentAdapter {
         return;
       }
       emitted += chunk;
+      unreported += chunk;
       yield { type: 'delta', text: chunk };
+      if (unreported.length >= USAGE_REPORT_CHARS) {
+        yield { type: 'usage', delta: { input: 0, output: estimateTokens(unreported) } };
+        unreported = '';
+      }
+    }
+    if (unreported !== '') {
+      yield { type: 'usage', delta: { input: 0, output: estimateTokens(unreported) } };
     }
 
     // Sem CLI real não há contagem verdadeira: estimamos por caracteres, só para

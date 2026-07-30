@@ -1877,3 +1877,19 @@ button.ghost:hover:not(:disabled) {
   font-size: 0.84em;
   color: var(--prom-text-dim);
 }
+
+/* Contagem de tokens do run em andamento, ao lado do relógio. É estimativa:
+   o número definitivo aparece no cabeçalho da mensagem quando o run termina. */
+.activity-tokens,
+.working-tokens {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.84em;
+  color: var(--prom-text-dim);
+  white-space: nowrap;
+}
+
+.activity-tokens:empty,
+.working-tokens:empty {
+  display: none;
+}

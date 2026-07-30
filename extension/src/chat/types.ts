@@ -162,6 +162,11 @@ export type ChatEvent =
       readonly messageId: string;
       readonly step: AgentStep;
     }
+  /**
+   * Tokens acumulados no run até agora. É estimativa em andamento: o número
+   * que fica na mensagem é o do `message.completed`.
+   */
+  | { readonly type: 'run.usage'; readonly runId: string; readonly usage: TokenUsage }
   /** O agente parou para perguntar; a interface abre o modal e o run espera. */
   | {
       readonly type: 'question.asked';

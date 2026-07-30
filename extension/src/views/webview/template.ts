@@ -175,6 +175,7 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
       <span class="working-glyph">${ICONS.spark}</span>
       <span class="working-word" id="working-word"></span>
       <span class="working-elapsed" id="working-elapsed"></span>
+      <span class="working-tokens" id="working-tokens"></span>
     </div>
 
     <main class="messages" id="messages" aria-live="polite" aria-busy="false"></main>
@@ -193,6 +194,7 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
         <img class="activity-icon" src="${activityUri.toString()}" alt="" width="20" height="20" />
         <span class="activity-label" id="activity-label"></span>
         <span class="activity-detail" id="activity-detail"></span>
+        <span class="activity-tokens" id="activity-tokens"></span>
         <span class="activity-elapsed" id="activity-elapsed"></span>
       </div>
 
