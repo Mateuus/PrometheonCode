@@ -1,0 +1,89 @@
+name: ✨ Propor funcionalidade
+description: Sugerir uma capacidade nova ou uma melhoria no Prometheon.
+title: "feat: "
+labels:
+  - enhancement
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Funcionalidades precisam ser alinhadas **antes** da implementação — veja
+        [CONTRIBUTING.md](https://github.com/Mateuus/PrometheonCode/blob/main/CONTRIBUTING.md#antes-de-escrever-código).
+        PR grande sem alinhamento prévio costuma ser recusado por escopo.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema
+      description: Que dor concreta isso resolve? Descreva a situação real, não a solução.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposta
+      description: Como deveria funcionar, do ponto de vista de quem usa.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área
+      options:
+        - Orquestração multiagente
+        - Adaptador de CLI (Claude Code, Codex, Gemini, Kimi)
+        - Chat local
+        - Web Chat / Prometheon Hub
+        - Permissões e autonomia
+        - Git worktrees
+        - Conhecimento (Markdown/Obsidian/Graphify)
+        - MCP
+        - Interface da Webview
+        - Servidor (server/)
+        - Ferramental de desenvolvimento e CI
+        - Outra
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas
+      description: O que você já tentou ou descartou, e por quê.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope-impact
+    attributes:
+      label: Impacto esperado
+      options:
+        - Aditivo — não muda comportamento existente
+        - Muda comportamento existente
+        - Breaking change (contrato HTTP, formato de configuração ou API interna)
+        - Não sei
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Compatibilidade com as regras do projeto
+      description: A proposta respeita os invariantes do Prometheon?
+      options:
+        - label: Não requer telemetria nem coleta de dados
+        - label: Não exige gravar segredos fora do `vscode.SecretStorage`
+        - label: Não exige que a Webview execute terminal, Git, CLI ou rede diretamente
+        - label: Não exige relaxar a CSP da Webview
+        - label: Não exige persistir `Bypass permissions` além da sessão
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribuição
+      options:
+        - label: Tenho interesse em implementar isso em um PR
+          required: false

@@ -1,0 +1,35 @@
+{
+  "name": "prometheon-monorepo",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Raiz do Prometheon: extensão do VS Code em extension/ e servidor em server/.",
+  "license": "MIT",
+  "author": "Mateus Rodrigues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Mateuus/PrometheonCode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Mateuus/PrometheonCode/issues"
+  },
+  "homepage": "https://github.com/Mateuus/PrometheonCode#readme",
+  "engines": {
+    "node": ">=20",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "install:all": "cd extension && npm install",
+    "ci:install": "cd extension && npm ci",
+    "doctor": "node scripts/doctor.mjs",
+    "compile": "npm --prefix extension run compile",
+    "watch": "npm --prefix extension run watch",
+    "lint": "npm --prefix extension run lint",
+    "lint:fix": "npm --prefix extension run lint -- --fix",
+    "check-types": "npm --prefix extension run check-types",
+    "check-manifest": "node scripts/check-manifest.mjs",
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "test": "npm --prefix extension test",
+    "verify": "npm run check-types && npm run lint && npm run check-manifest && npm test",
+    "vsix": "npm --prefix extension run vsix"
+  }
+}

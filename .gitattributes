@@ -1,0 +1,30 @@
+# Normaliza fim de linha: LF no repositório, nativo no working tree.
+* text=auto eol=lf
+
+# Scripts que precisam de LF para rodar em runner Linux.
+*.sh   text eol=lf
+*.mjs  text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# Arquivos que só fazem sentido com CRLF no Windows.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binários — nunca normalizar nem tentar diff textual.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff binary
+*.woff2 binary
+*.vsix binary
+
+# Lockfiles: gerados, marcar como tal reduz ruído em review.
+package-lock.json linguist-generated=true -diff
+
+# Assets e documentação não contam para as estatísticas de linguagem.
+extension/media/** linguist-vendored=true
+Docs/** linguist-documentation=true

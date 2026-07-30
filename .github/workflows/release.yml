@@ -1,0 +1,216 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Executar sem criar release nem publicar"
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Instalar dependências
+        run: npm run ci:install
+
+      - name: Conferir se a tag casa com a versão do manifest
+        id: version
+        run: |
+          manifest="$(node -p "require('./extension/package.json').version")"
+          echo "version=$manifest" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "Execução manual — versão do manifest: $manifest"
+            exit 0
+          fi
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::A tag v$tag não corresponde à versão do manifest ($manifest)."
+            echo "::error::Ajuste extension/package.json ou recrie a tag."
+            exit 1
+          fi
+          echo "Tag e manifest coincidem: $manifest"
+
+      - name: Conferir entrada de changelog para a versão
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          if ! grep -qE "^##+ +\[?v?${version//./\\.}\]?" extension/CHANGELOG.md; then
+            echo "::error file=extension/CHANGELOG.md::Nenhuma seção encontrada para a versão $version."
+            echo "::error::Mova os itens de '[Não publicado]' para '## [$version]' antes de criar a tag."
+            exit 1
+          fi
+          echo "Changelog contém a seção da versão $version."
+
+      - name: Verificação completa (tipos, lint, testes)
+        run: xvfb-run -a --server-args="-screen 0 1280x1024x24" npm run verify
+
+  package:
+    name: Package
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      vsix: ${{ steps.pack.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Instalar dependências
+        run: npm run ci:install
+
+      - name: Empacotar .vsix
+        id: pack
+        run: |
+          npm run vsix
+          file="$(find dist -maxdepth 1 -name '*.vsix' -print -quit)"
+          if [ -z "$file" ]; then
+            echo "::error::Nenhum .vsix foi gerado em dist/"
+            exit 1
+          fi
+          echo "name=$(basename "$file")" >> "$GITHUB_OUTPUT"
+          sha256sum "$file" > "$file.sha256"
+          cat "$file.sha256"
+
+      - name: Publicar artefatos
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-vsix
+          path: |
+            dist/*.vsix
+            dist/*.sha256
+          retention-days: 90
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: [verify, package]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-vsix
+          path: dist
+
+      - name: Extrair notas da versão do changelog
+        run: |
+          version="${{ needs.verify.outputs.version }}"
+          awk -v v="$version" '
+            $0 ~ "^##+ +\\[?v?" v "\\]?" { capture = 1; next }
+            capture && /^##+ +\[?v?[0-9]/   { exit }
+            capture                          { print }
+          ' extension/CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "Release $version." > RELEASE_NOTES.md
+          fi
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "### Instalação"
+            echo ""
+            echo '```bash'
+            echo "code --install-extension ${{ needs.package.outputs.vsix }}"
+            echo '```'
+            echo ""
+            echo "Verifique a integridade do pacote com o arquivo \`.sha256\` anexado."
+          } >> RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+
+      - name: Criar release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: |
+            dist/*.vsix
+            dist/*.sha256
+          draft: false
+          prerelease: ${{ startsWith(needs.verify.outputs.version, '0.') }}
+          fail_on_unmatched_files: true
+
+  marketplace:
+    name: Publish to Marketplace
+    needs: [verify, package, release]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: marketplace
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Conferir se a publicação está configurada
+        id: guard
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::notice::Segredo VSCE_PAT ausente — publicação no Marketplace ignorada."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          publisher="$(node -p "require('./extension/package.json').publisher")"
+          if [ "$publisher" = "prometheon" ]; then
+            echo "::warning::O campo publisher ainda é o provisório ('prometheon')."
+            echo "::warning::Troque pelo ID real do publisher antes de publicar."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        if: steps.guard.outputs.ready == 'true'
+        with:
+          name: release-vsix
+          path: dist
+
+      - name: Instalar dependências
+        if: steps.guard.outputs.ready == 'true'
+        run: npm run ci:install
+
+      - name: Publicar no Visual Studio Marketplace
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          npx --prefix extension @vscode/vsce publish \
+            --no-dependencies \
+            --packagePath "dist/${{ needs.package.outputs.vsix }}"

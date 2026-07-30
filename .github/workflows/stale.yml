@@ -1,0 +1,47 @@
+name: Stale
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stale:
+    name: Marcar itens sem atividade
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/stale@v9
+        with:
+          days-before-issue-stale: 45
+          days-before-issue-close: 14
+          days-before-pr-stale: 21
+          days-before-pr-close: 10
+          stale-issue-label: stale
+          stale-pr-label: stale
+          exempt-issue-labels: "pinned,security,roadmap,design,help wanted,good first issue"
+          exempt-pr-labels: "pinned,security,dependencies"
+          exempt-all-milestones: true
+          stale-issue-message: |
+            Esta issue está sem atividade há 45 dias e foi marcada como `stale`.
+
+            Se ainda for relevante, comente com uma atualização — caso contrário
+            ela será fechada em 14 dias. Fechar não significa recusa: reabra ou
+            comente a qualquer momento.
+          stale-pr-message: |
+            Este pull request está sem atividade há 21 dias e foi marcado como
+            `stale`.
+
+            Se ainda pretende concluí-lo, faça rebase na `main`, resolva as
+            conversas pendentes e comente. Caso contrário, será fechado em 10
+            dias.
+          close-issue-message: |
+            Fechada por inatividade. Comente ou reabra se o problema persistir.
+          close-pr-message: |
+            Fechado por inatividade. Reabra quando quiser retomar o trabalho.

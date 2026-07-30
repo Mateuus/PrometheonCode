@@ -1,0 +1,211 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags-ignore: ["**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Instalações reprodutíveis e sem ruído de progresso nos logs.
+  NPM_CONFIG_FUND: "false"
+  NPM_CONFIG_AUDIT: "false"
+
+jobs:
+  lint:
+    name: Lint & Types
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Instalar dependências
+        run: npm run ci:install
+
+      - name: Checagem de tipos
+        run: npm run check-types
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Validar manifest da extensão
+        run: node scripts/check-manifest.mjs
+
+  test:
+    name: Test
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Instalar dependências
+        run: npm run ci:install
+
+      - name: Compilar extensão
+        run: npm run compile
+
+      - name: Cache do VS Code de teste
+        uses: actions/cache@v4
+        with:
+          path: extension/.vscode-test
+          key: vscode-test-${{ runner.os }}-${{ hashFiles('extension/.vscode-test.mjs') }}
+          restore-keys: vscode-test-${{ runner.os }}-
+
+      # O Extension Host precisa de display. Em Linux, roda sob Xvfb.
+      - name: Testes de integração (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a --server-args="-screen 0 1280x1024x24" npm test
+
+      - name: Testes de integração (Windows)
+        if: runner.os != 'Linux'
+        run: npm test
+
+      - name: Publicar logs de falha
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.os }}
+          path: |
+            extension/.vscode-test/user-data/logs/**
+          retention-days: 7
+          if-no-files-found: ignore
+
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      # Dependências que vão para o bundle publicado: nenhuma falha alta tolerada.
+      - name: Auditar dependências de runtime
+        working-directory: extension
+        run: npm audit --omit=dev --audit-level=high
+
+      # Ferramental de build: reportado, não bloqueia — não é distribuído ao usuário.
+      - name: Auditar dependências de desenvolvimento
+        working-directory: extension
+        continue-on-error: true
+        run: |
+          if ! npm audit --audit-level=high; then
+            echo "::warning::Vulnerabilidades em devDependencies. Não são distribuídas no .vsix, mas acompanhe os PRs do Dependabot."
+          fi
+
+  # Informativo: reporta regressões no macOS sem bloquear o merge.
+  test-macos:
+    name: Test (macOS, informativo)
+    needs: lint
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: macos-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Instalar dependências
+        run: npm run ci:install
+
+      - name: Compilar extensão
+        run: npm run compile
+
+      - name: Testes de integração
+        run: npm test
+
+  build:
+    name: Build VSIX
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Instalar dependências
+        run: npm run ci:install
+
+      - name: Empacotar .vsix
+        run: npm run vsix
+
+      - name: Localizar o pacote gerado
+        id: vsix
+        run: |
+          file="$(find dist -maxdepth 1 -name '*.vsix' -print -quit)"
+          if [ -z "$file" ]; then
+            echo "::error::Nenhum .vsix foi gerado em dist/"
+            exit 1
+          fi
+          echo "path=$file" >> "$GITHUB_OUTPUT"
+          echo "Pacote: $file ($(du -h "$file" | cut -f1))"
+
+      - name: Publicar artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: prometheon-vsix
+          path: ${{ steps.vsix.outputs.path }}
+          retention-days: 14
+          if-no-files-found: error
+
+  # Porta única para a branch protection: exige lint + test + build de uma vez.
+  ci-passed:
+    name: CI Passed
+    if: always()
+    needs: [lint, test, build, audit]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Conferir resultado dos jobs
+        run: |
+          echo "lint:  ${{ needs.lint.result }}"
+          echo "test:  ${{ needs.test.result }}"
+          echo "build: ${{ needs.build.result }}"
+          echo "audit: ${{ needs.audit.result }}"
+          if [ "${{ needs.lint.result }}" != "success" ] \
+            || [ "${{ needs.test.result }}" != "success" ] \
+            || [ "${{ needs.audit.result }}" != "success" ] \
+            || [ "${{ needs.build.result }}" != "success" ]; then
+            echo "::error::Um ou mais jobs do CI falharam."
+            exit 1
+          fi
+          echo "Todos os jobs do CI passaram."

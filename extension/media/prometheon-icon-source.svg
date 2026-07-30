@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Prometheon</title>
+  <!-- Malha: nó central (Main Agent) ligado a quatro workers.
+       A geometria aqui é a mesma de scripts/generate-icon.mjs, que rasteriza o PNG. -->
+  <g stroke="#6D5AE0" stroke-linecap="round" fill="none">
+    <g stroke-width="5" opacity="0.55">
+      <path d="M128 44 212 128 128 212 44 128Z" />
+    </g>
+    <g stroke-width="9">
+      <path d="M128 128 128 44M128 128 212 128M128 128 128 212M128 128 44 128" />
+    </g>
+  </g>
+  <g fill="#A78BFA">
+    <circle cx="128" cy="44" r="19" />
+    <circle cx="212" cy="128" r="19" />
+    <circle cx="128" cy="212" r="19" />
+    <circle cx="44" cy="128" r="19" />
+  </g>
+  <circle cx="128" cy="128" r="31" fill="#7C5CFF" />
+</svg>

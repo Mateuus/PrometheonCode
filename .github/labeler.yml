@@ -1,0 +1,63 @@
+# Labels aplicadas automaticamente com base nos caminhos alterados.
+# Consumido por actions/labeler@v5 no workflow pr-validation.yml.
+
+extension:
+  - changed-files:
+      - any-glob-to-any-file:
+          - extension/**
+
+server:
+  - changed-files:
+      - any-glob-to-any-file:
+          - server/**
+
+webview:
+  - changed-files:
+      - any-glob-to-any-file:
+          - extension/src/views/**
+
+permissions:
+  - changed-files:
+      - any-glob-to-any-file:
+          - extension/src/permissions/**
+          - extension/src/storage/**
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - Docs/**
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/workflows/**
+          - .github/dependabot.yml
+          - .github/labeler.yml
+          - scripts/**
+
+build:
+  - changed-files:
+      - any-glob-to-any-file:
+          - extension/esbuild.mjs
+          - extension/tsconfig.json
+          - extension/.vscodeignore
+          - "**/package.json"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/package-lock.json"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - extension/src/test/**
+          - extension/.vscode-test.mjs
+
+config:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .editorconfig
+          - .gitignore
+          - .vscode/**

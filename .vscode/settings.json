@@ -1,0 +1,10 @@
+{
+  "files.eol": "\n",
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/out": true
+  },
+  "typescript.tsdk": "extension/node_modules/typescript/lib",
+  "eslint.workingDirectories": [{ "directory": "extension", "changeProcessCWD": true }]
+}
