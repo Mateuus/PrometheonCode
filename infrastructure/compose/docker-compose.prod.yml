@@ -21,6 +21,18 @@
 
 name: prometheon-hub
 
+# Os três serviços da aplicação e as migrations saem da mesma imagem.
+#
+# A âncora existe para que **qualquer um deles** consiga reconstruí-la. Com a
+# seção `build` declarada só em `migrate`, um `docker compose build web` não
+# fazia nada — sem erro e sem aviso — e o deploy seguia com a imagem antiga
+# enquanto todo mundo achava que tinha atualizado.
+x-hub-app: &hub-app
+  build:
+    context: ../..
+    dockerfile: infrastructure/docker/Dockerfile
+  image: prometheon-hub:latest
+
 services:
   # -------------------------------------------------------------------------
   # Dados
@@ -83,10 +95,7 @@ services:
   # configured" — um 500 numa instalação recém-migrada, que parece defeito e é
   # só um passo que faltou. Ele é idempotente e pode rodar a cada subida.
   migrate:
-    build:
-      context: ../..
-      dockerfile: infrastructure/docker/Dockerfile
-    image: prometheon-hub:latest
+    <<: *hub-app
     restart: 'no'
     command:
       - sh
@@ -106,7 +115,7 @@ services:
   # -------------------------------------------------------------------------
 
   api:
-    image: prometheon-hub:latest
+    <<: *hub-app
     restart: unless-stopped
     command: ['node', 'apps/hub-api/dist/server.js']
     env_file: [.env]
@@ -154,7 +163,7 @@ services:
     networks: [internal]
 
   worker:
-    image: prometheon-hub:latest
+    <<: *hub-app
     restart: unless-stopped
     command: ['node', 'apps/hub-worker/dist/server.js']
     env_file: [.env]
@@ -189,7 +198,7 @@ services:
     networks: [internal]
 
   web:
-    image: prometheon-hub:latest
+    <<: *hub-app
     restart: unless-stopped
     # Chama o binário do Next diretamente, e não via `pnpm exec`: o corepack
     # tentaria baixar o pnpm na primeira execução, e o container falharia ao
