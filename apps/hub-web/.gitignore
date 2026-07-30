@@ -1,0 +1,6 @@
+# Saída do Next e dos testes de ponta a ponta.
+.next/
+playwright-report/
+test-results/
+.turbo/
+tsconfig.tsbuildinfo

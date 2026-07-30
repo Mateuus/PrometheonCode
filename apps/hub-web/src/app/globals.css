@@ -1,0 +1,211 @@
+@import 'tailwindcss';
+
+/*
+  Identidade visual do Prometheon.
+
+  As cores cruas são as mesmas da extensão (`extension/src/views/webview/styles.css`)
+  e têm papel fixo: o roxo é botão, ícone, foco e seleção; o violeta é o hover do
+  roxo; o ciano é conexão e atividade; o azul é link; o laranja é o agente
+  principal; o âmbar é alerta. Nada disso entra como enfeite.
+
+  O resto da folha nunca cita cor crua — usa os papéis semânticos abaixo, que
+  mudam de valor entre o tema claro e o escuro. Onde a cor da marca não alcança
+  contraste AA sobre fundo claro, o tema claro usa uma variante mais escura da
+  mesma matiz; o papel continua o mesmo.
+*/
+
+@theme {
+  /* Paleta da marca, valores canônicos. */
+  --color-prom-purple: #7c3aed;
+  --color-prom-violet: #a855f7;
+  --color-prom-cyan: #22d3ee;
+  --color-prom-blue: #3b82f6;
+  --color-prom-flame: #ff7a18;
+  --color-prom-amber: #ffc857;
+  --color-prom-gray: #a1a1aa;
+  --color-prom-ink: #0b0b12;
+  --color-prom-surface: #171722;
+  --color-prom-border: #29293a;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans', sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --radius-prom: 0.625rem;
+}
+
+/*
+  Papéis semânticos. `@theme inline` faz o Tailwind gerar `bg-surface`,
+  `text-muted`, `border-line` e afins apontando para as variáveis de tema.
+*/
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-link: var(--link);
+  --color-activity: var(--activity);
+  --color-running: var(--running);
+  --color-alert: var(--alert);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --color-ring: var(--accent);
+}
+
+/* Tema claro — também o padrão quando nenhuma preferência é conhecida. */
+:root,
+:root.light {
+  --background: #f7f7fb;
+  --surface: #ffffff;
+  --surface-raised: #f0f0f6;
+  --line: #dedee8;
+  --line-strong: #c4c4d4;
+  --foreground: #16161f;
+  /* O cinza da marca não alcança AA sobre fundo claro; aqui ele escurece. */
+  --muted: #55555f;
+  --accent: #6d28d9;
+  --accent-hover: #7c3aed;
+  --accent-foreground: #ffffff;
+  --accent-soft: rgba(124, 58, 237, 0.12);
+  --link: #1d4ed8;
+  --activity: #0e7490;
+  --running: #b8480a;
+  --alert: #8a5a00;
+  --danger: #b91c1c;
+  --success: #15803d;
+  color-scheme: light;
+}
+
+/* Tema escuro — as cores da marca aparecem no valor canônico. */
+:root.dark {
+  --background: #0b0b12;
+  --surface: #171722;
+  --surface-raised: #1c1c29;
+  --line: #29293a;
+  --line-strong: #3a3a50;
+  --foreground: #ececf4;
+  --muted: #a1a1aa;
+  --accent: #7c3aed;
+  --accent-hover: #a855f7;
+  --accent-foreground: #ffffff;
+  --accent-soft: rgba(124, 58, 237, 0.22);
+  --link: #60a5fa;
+  --activity: #22d3ee;
+  --running: #ff7a18;
+  --alert: #ffc857;
+  --danger: #f87171;
+  --success: #4ade80;
+  color-scheme: dark;
+}
+
+/*
+  Sem cookie de tema, o servidor não marca classe nenhuma e quem decide é o
+  sistema operacional. Isso evita script inline de tema — que a CSP proibiria.
+*/
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.dark) {
+    --background: #0b0b12;
+    --surface: #171722;
+    --surface-raised: #1c1c29;
+    --line: #29293a;
+    --line-strong: #3a3a50;
+    --foreground: #ececf4;
+    --muted: #a1a1aa;
+    --accent: #7c3aed;
+    --accent-hover: #a855f7;
+    --accent-foreground: #ffffff;
+    --accent-soft: rgba(124, 58, 237, 0.22);
+    --link: #60a5fa;
+    --activity: #22d3ee;
+    --running: #ff7a18;
+    --alert: #ffc857;
+    --danger: #f87171;
+    --success: #4ade80;
+    color-scheme: dark;
+  }
+}
+
+/* Variante `dark:` para os poucos casos em que o token semântico não basta. */
+@custom-variant dark {
+  &:where(.dark, .dark *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not(.light):not(.dark), :root:not(.light):not(.dark) *) {
+      @slot;
+    }
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--line);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background-color: var(--accent);
+    color: var(--accent-foreground);
+  }
+
+  /* Um único anel de foco, visível nos dois temas e sempre na cor da marca. */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+}
+
+@layer utilities {
+  /* Só aparece quando recebe foco por teclado — o "pular para o conteúdo". */
+  .skip-link {
+    position: absolute;
+    left: 0.5rem;
+    top: -3rem;
+    z-index: 100;
+    border-radius: var(--radius-prom);
+    background-color: var(--accent);
+    color: var(--accent-foreground);
+    padding: 0.5rem 0.875rem;
+    font-size: 0.875rem;
+    transition: top 120ms ease-out;
+  }
+
+  .skip-link:focus {
+    top: 0.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

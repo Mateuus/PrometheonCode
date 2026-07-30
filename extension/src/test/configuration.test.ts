@@ -298,7 +298,8 @@ suite('Servidores MCP — .mcp.json', () => {
     const parsed = normalizeMcpEntry('github', {
       type: 'http',
       url: 'https://example.com/mcp',
-      headers: { Authorization: 'Bearer super-secret-value-123' },
+      // Valor inventado; o teste existe para provar que ele não aparece no aviso.
+      headers: { Authorization: 'Bearer super-secret-value-123' }, // secret-scan:ignore
     });
     assert.notEqual(typeof parsed, 'string');
     const warnings = typeof parsed === 'string' ? [] : parsed.warnings;
