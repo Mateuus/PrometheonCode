@@ -68,7 +68,12 @@ RUN pnpm --filter @prometheon/hub-web build
 
 # Tira o que só servia para compilar. `--prod` remove devDependencies do
 # workspace inteiro de uma vez.
-RUN pnpm prune --prod
+#
+# `CI=true` não é decoração: sem TTY, o pnpm se recusa a apagar `node_modules`
+# e aborta com `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`. A proteção existe
+# para quem digitou o comando por engano no terminal; num build de container ela
+# só impede o build de terminar.
+RUN CI=true pnpm prune --prod
 
 # ---------------------------------------------------------------------------
 # 3. Runtime
