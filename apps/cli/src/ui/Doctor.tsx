@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Box, Text, useApp } from 'ink';
 import { runDoctor, type CheckResult } from '../doctor.js';
-import { Banner } from './Banner.js';
+import { Header } from './Header.js';
 import { Check, type CheckItem } from './Check.js';
 import { palette, symbols } from './theme.js';
 
@@ -71,7 +71,7 @@ export function Doctor({ version }: { version: string }) {
 
   return (
     <Box flexDirection="column">
-      <Banner version={version} subtitle="Verificação do ambiente" />
+      <Header version={version} workspace={process.cwd()} />
 
       <Box flexDirection="column" gap={0}>
         {items.map((item) => (
