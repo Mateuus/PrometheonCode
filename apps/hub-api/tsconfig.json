@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
+    // O TypeScript não descobre `@types/node` pelos links do pnpm; sem isto
+    // `node:crypto`, `process` e companhia somem.
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}
