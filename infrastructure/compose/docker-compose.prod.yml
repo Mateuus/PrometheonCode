@@ -108,7 +108,7 @@ services:
       SMTP_HOST: mailserver
       SMTP_PORT: '587'
     ports:
-      # Só loopback. Ver o comentário no topo do arquivo.
+      # Ver `BIND_ADDRESS` no topo do arquivo.
       - '${BIND_ADDRESS:-127.0.0.1}:${HUB_API_PORT:-3551}:3551'
     depends_on:
       migrate:
@@ -182,6 +182,17 @@ services:
     hostname: ${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}
     restart: unless-stopped
     env_file: [../mail/mailserver.env]
+    environment:
+      # `letsencrypt` é o alvo. `self-signed` existe para a fase em que o DNS
+      # ainda não resolve e não há certificado a emitir: sem isso o container não
+      # sobe, e o health da API reporta SMTP indisponível por uma dependência que
+      # nem chegou a ser criada.
+      #
+      # Um certificado auto-assinado entrega e recebe normalmente entre
+      # servidores; quem reclama é o cliente de e-mail, que exibe o aviso de
+      # certificado não confiável. Troque para `letsencrypt` assim que o
+      # certificado existir.
+      SSL_TYPE: ${MAIL_SSL_TYPE:-letsencrypt}
     ports:
       # 25 — recebimento entre servidores. É por onde chega tanto a mensagem que
       # alguém manda para `mateus@`, quanto a devolução de um envio recusado.
@@ -198,10 +209,11 @@ services:
       - mail-state:/var/mail-state
       - mail-logs:/var/log/mail
       - ../mail/config/:/tmp/docker-mailserver/
-      # Reaproveita o certificado que o aaPanel já emitiu e renova para o
-      # subdomínio — um segundo Let's Encrypt para o mesmo host disputaria a
-      # validação com o primeiro.
-      - /www/server/panel/vhost/cert/${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}/:/etc/letsencrypt/live/${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}/:ro
+      # Certificado do host, quando existir. `MAIL_CERT_DIR` aponta para onde o
+      # seu proxy o mantém — com o aaPanel noutra máquina, é preciso copiá-lo ou
+      # emitir um aqui. Enquanto não houver, `MAIL_SSL_TYPE=self-signed` e este
+      # volume aponta para um diretório vazio, sem efeito.
+      - ${MAIL_CERT_DIR:-/opt/prometheon/certs}/:/etc/letsencrypt/live/${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}/:ro
     cap_add:
       - NET_ADMIN
     networks: [internal]
