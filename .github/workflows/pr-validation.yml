@@ -1,0 +1,290 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    name: PR Title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # O título do PR vira a mensagem do squash merge — precisa ser
+      # um Conventional Commit válido.
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          scopes: |
+            extension
+            server
+            webview
+            agents
+            chat
+            permissions
+            workspace
+            hub
+            docs
+            deps
+            deps-dev
+            ci
+            release
+          requireScope: false
+          subjectPattern: ^(?![A-Z])(?!.*\.$).{1,72}$
+          subjectPatternError: |
+            O assunto "{subject}" do título não está no formato esperado.
+
+            Regras: começa em minúscula, no imperativo, sem ponto final, até 72 caracteres.
+            Exemplo: feat(chat): persiste conversa local no workspaceState
+          wip: true
+
+  body:
+    name: PR Body
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Exigir descrição e checklist preenchidos
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [ -z "${PR_BODY//[[:space:]]/}" ]; then
+            echo "::error::A descrição do PR está vazia. Preencha o template."
+            exit 1
+          fi
+          if [ "${#PR_BODY}" -lt 80 ]; then
+            echo "::error::Descrição muito curta (${#PR_BODY} caracteres)."
+            echo "::error::Explique o que muda, por quê e como testar."
+            exit 1
+          fi
+          checked="$(printf '%s' "$PR_BODY" | grep -c -E '^\s*-\s*\[[xX]\]' || true)"
+          if [ "$checked" -lt 3 ]; then
+            echo "::error::O checklist do template não foi preenchido (itens marcados: $checked)."
+            echo "::error::Marque os itens que se aplicam antes de pedir review."
+            exit 1
+          fi
+          echo "Descrição com ${#PR_BODY} caracteres e $checked itens de checklist marcados."
+
+  size:
+    name: PR Size
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Medir o diff revisável
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Lockfiles e artefatos gerados não contam como código revisável.
+          stats="$(git diff --numstat "$BASE_SHA...$HEAD_SHA" -- \
+            ':!**/package-lock.json' ':!**/*.snap' ':!dist/**' ':!out/**')"
+          total=0
+          while read -r add del _; do
+            [ "$add" = "-" ] && continue
+            total=$(( total + add + del ))
+          done <<< "$stats"
+          files="$(git diff --name-only "$BASE_SHA...$HEAD_SHA" | wc -l)"
+
+          {
+            echo "### Tamanho do PR"
+            echo ""
+            echo "| Métrica | Valor |"
+            echo "| --- | --- |"
+            echo "| Linhas alteradas (sem lockfiles/artefatos) | $total |"
+            echo "| Arquivos tocados | $files |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$total" -gt 600 ]; then
+            echo "::warning::PR grande: $total linhas alteradas (limite recomendado: 600)."
+            echo "::warning::Considere dividir em PRs menores ou justificar o tamanho na descrição."
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> ⚠️ Acima do limite recomendado de 600 linhas — justifique ou divida." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$total" -gt 200 ]; then
+            echo "::notice::PR de tamanho médio: $total linhas alteradas."
+          fi
+
+  changelog:
+    name: Changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      !contains(github.event.pull_request.labels.*.name, 'skip-changelog') &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Exigir entrada no changelog quando o código da extensão muda
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+          touches_src="$(printf '%s\n' "$changed" | grep -E '^extension/src/' || true)"
+          touches_changelog="$(printf '%s\n' "$changed" | grep -E '^extension/CHANGELOG\.md$' || true)"
+
+          if [ -z "$touches_src" ]; then
+            echo "Nenhuma mudança em extension/src/ — changelog não é exigido."
+            exit 0
+          fi
+          if [ -n "$touches_changelog" ]; then
+            echo "extension/CHANGELOG.md atualizado."
+            exit 0
+          fi
+
+          echo "::error file=extension/CHANGELOG.md::Este PR altera extension/src/ sem atualizar o changelog."
+          echo "::error::Adicione a entrada em '## [Não publicado]' ou aplique a label 'skip-changelog'."
+          exit 1
+
+  secrets:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Varrer o diff por credenciais
+        run: node scripts/scan-secrets.mjs --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}"
+
+  forbidden:
+    name: Forbidden Files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bloquear artefatos de build e arquivos de ambiente
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          added="$(git diff --name-only --diff-filter=d "$BASE_SHA...$HEAD_SHA")"
+          fail=0
+
+          block() {
+            local pattern="$1" reason="$2" hits
+            hits="$(printf '%s\n' "$added" | grep -E "$pattern" || true)"
+            if [ -n "$hits" ]; then
+              while IFS= read -r file; do
+                [ -z "$file" ] && continue
+                echo "::error file=$file::$reason"
+              done <<< "$hits"
+              fail=1
+            fi
+          }
+
+          block '(^|/)node_modules/'          'node_modules/ não deve ser versionado.'
+          block '(^|/)dist/'                  'Artefato de build (dist/) não deve ser versionado.'
+          block '(^|/)out/'                   'Artefato de build (out/) não deve ser versionado.'
+          block '\.vsix$'                     'Pacote .vsix não deve ser versionado — use o artefato do CI.'
+          block '(^|/)\.vscode-test/'         'Cache de teste (.vscode-test/) não deve ser versionado.'
+          block '\.log$'                      'Arquivo de log não deve ser versionado.'
+          block '(^|/)\.env(\.local)?$'       'Arquivo .env não deve ser versionado — use .env.example.'
+          block '(^|/)\.prometheon/(local|cache|runtime|logs|worktrees|secrets)/' \
+                'Diretório local do .prometheon/ não deve ser versionado.'
+          block '\.prometheon/.*\.db(-shm|-wal)?$' 'Banco local do .prometheon/ não deve ser versionado.'
+          block '(^|/)(id_rsa|id_ed25519|.*\.pem|.*\.pfx|.*\.p12|.*\.keystore)$' \
+                'Material criptográfico não deve ser versionado.'
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::Remova os arquivos acima do PR (e do histórico, se necessário)."
+            exit 1
+          fi
+          echo "Nenhum arquivo proibido no diff."
+
+      - name: Conferir coerência entre package.json e package-lock.json
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${{ github.event.pull_request.user.login }}" = "dependabot[bot]" ]; then
+            echo "PR do Dependabot — verificação dispensada."
+            exit 0
+          fi
+          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+          lock="$(printf '%s\n' "$changed" | grep -E 'package-lock\.json$' || true)"
+          manifest="$(printf '%s\n' "$changed" | grep -E '(^|/)package\.json$' || true)"
+          if [ -n "$lock" ] && [ -z "$manifest" ]; then
+            echo "::error::package-lock.json mudou sem mudança no package.json correspondente."
+            echo "::error::Reverta o lockfile ou explique a mudança de dependência na descrição."
+            exit 1
+          fi
+          echo "Lockfile coerente."
+
+  labels:
+    name: Auto Labels
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    # PRs de fork recebem token somente-leitura; o passo não bloqueia o merge.
+    continue-on-error: true
+    steps:
+      - uses: actions/labeler@v5
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          sync-labels: true
+
+  pr-checks-passed:
+    name: PR Checks Passed
+    if: always()
+    needs: [title, body, size, changelog, secrets, forbidden]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Conferir resultado das validações
+        run: |
+          declare -A results=(
+            [title]="${{ needs.title.result }}"
+            [body]="${{ needs.body.result }}"
+            [size]="${{ needs.size.result }}"
+            [changelog]="${{ needs.changelog.result }}"
+            [secrets]="${{ needs.secrets.result }}"
+            [forbidden]="${{ needs.forbidden.result }}"
+          )
+          fail=0
+          for job in "${!results[@]}"; do
+            result="${results[$job]}"
+            echo "$job: $result"
+            # 'skipped' é aceitável (ex.: changelog com a label skip-changelog).
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::Uma ou mais validações de PR falharam."
+            exit 1
+          fi
+          echo "Todas as validações de PR passaram."

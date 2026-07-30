@@ -1,0 +1,31 @@
+# Code owners do Prometheon.
+# A última regra que casa com o arquivo é a que vale.
+# Todo PR exige review de um code owner (branch protection de `main`).
+
+# Padrão: dono de tudo
+*                           @Mateuus
+
+# Extensão do VS Code
+/extension/                 @Mateuus
+
+# Áreas sensíveis: permissões, segredos e comunicação com a Webview.
+# Mudanças aqui exigem atenção redobrada em revisão.
+/extension/src/permissions/  @Mateuus
+/extension/src/storage/      @Mateuus
+/extension/src/views/        @Mateuus
+
+# Servidor (quando existir)
+/server/                    @Mateuus
+
+# Infraestrutura, automação e governança
+/.github/                   @Mateuus
+/scripts/                   @Mateuus
+/.vscode/                   @Mateuus
+/CONTRIBUTING.md            @Mateuus
+/SECURITY.md                @Mateuus
+/CODE_OF_CONDUCT.md         @Mateuus
+/LICENSE                    @Mateuus
+
+# Documentação
+/Docs/                      @Mateuus
+/README.md                  @Mateuus

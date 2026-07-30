@@ -1,0 +1,222 @@
+{
+  "name": "prometheon-code",
+  "displayName": "Prometheon Code",
+  "description": "Coordinate multiple AI coding agents from one workspace.",
+  "version": "0.0.1",
+  "publisher": "prometheon",
+  "license": "MIT",
+  "private": true,
+  "icon": "media/prometheon-icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Mateuus/PrometheonCode.git",
+    "directory": "extension"
+  },
+  "bugs": {
+    "url": "https://github.com/Mateuus/PrometheonCode/issues"
+  },
+  "homepage": "https://github.com/Mateuus/PrometheonCode#readme",
+  "engines": {
+    "vscode": "^1.105.0",
+    "node": ">=20"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "agents",
+    "orchestration",
+    "multi-agent",
+    "ai"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "prometheon",
+          "title": "Prometheon",
+          "icon": "media/prometheon-view.svg"
+        }
+      ]
+    },
+    "views": {
+      "prometheon": [
+        {
+          "type": "webview",
+          "id": "prometheon.chatView",
+          "name": "Prometheon",
+          "icon": "media/prometheon-view.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "prometheon.openChat",
+        "title": "Open Chat",
+        "category": "Prometheon"
+      },
+      {
+        "command": "prometheon.newLocalChat",
+        "title": "New Local Chat",
+        "category": "Prometheon",
+        "icon": "$(add)"
+      },
+      {
+        "command": "prometheon.configureWorkspace",
+        "title": "Configure Workspace",
+        "category": "Prometheon"
+      },
+      {
+        "command": "prometheon.initializeWorkspace",
+        "title": "Initialize Workspace",
+        "category": "Prometheon"
+      },
+      {
+        "command": "prometheon.selectMainAgent",
+        "title": "Select Main Agent",
+        "category": "Prometheon"
+      },
+      {
+        "command": "prometheon.selectWorkMode",
+        "title": "Select Work Mode",
+        "category": "Prometheon"
+      },
+      {
+        "command": "prometheon.selectAutonomy",
+        "title": "Select Autonomy",
+        "category": "Prometheon"
+      },
+      {
+        "command": "prometheon.disableBypassPermissions",
+        "title": "Disable Bypass Permissions",
+        "category": "Prometheon"
+      },
+      {
+        "command": "prometheon.openSettings",
+        "title": "Open Settings",
+        "category": "Prometheon",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "prometheon.showDiagnostics",
+        "title": "Show Diagnostics",
+        "category": "Prometheon"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "prometheon.newLocalChat",
+          "when": "view == prometheon.chatView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "prometheon.openSettings",
+          "when": "view == prometheon.chatView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "prometheon.selectWorkMode",
+          "when": "view == prometheon.chatView",
+          "group": "1_orchestration@1"
+        },
+        {
+          "command": "prometheon.selectAutonomy",
+          "when": "view == prometheon.chatView",
+          "group": "1_orchestration@2"
+        },
+        {
+          "command": "prometheon.selectMainAgent",
+          "when": "view == prometheon.chatView",
+          "group": "1_orchestration@3"
+        },
+        {
+          "command": "prometheon.disableBypassPermissions",
+          "when": "view == prometheon.chatView && prometheon.bypassActive",
+          "group": "1_orchestration@4"
+        },
+        {
+          "command": "prometheon.configureWorkspace",
+          "when": "view == prometheon.chatView",
+          "group": "2_workspace@1"
+        },
+        {
+          "command": "prometheon.showDiagnostics",
+          "when": "view == prometheon.chatView",
+          "group": "3_help@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "prometheon.disableBypassPermissions",
+          "when": "prometheon.bypassActive"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Prometheon",
+      "properties": {
+        "prometheon.hub.url": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "URL base do Prometheon Hub. HTTPS é obrigatório fora de `localhost`. Deixe vazio para trabalhar somente no modo local. Tokens **não** ficam aqui: eles vão para o cofre de segredos do VS Code.",
+          "order": 1
+        },
+        "prometheon.chat.defaultType": {
+          "type": "string",
+          "enum": [
+            "local",
+            "web"
+          ],
+          "enumDescriptions": [
+            "Local Chat: funciona sem conta e sem servidor.",
+            "Web Chat: exige um Prometheon Hub configurado."
+          ],
+          "default": "local",
+          "description": "Tipo de chat aberto por padrão.",
+          "order": 2
+        },
+        "prometheon.workspace.promptOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Mostrar a tela de configuração quando a pasta aberta não tiver .prometheon/prometheon.yaml.",
+          "order": 3
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "npm run check-types && npm run lint && node esbuild.mjs --production",
+    "check-types": "tsc --noEmit",
+    "compile-tests": "tsc -p . --outDir out",
+    "lint": "eslint src",
+    "icon": "node scripts/generate-icon.mjs",
+    "test": "npm run compile-tests && npm run compile && vscode-test",
+    "vsix": "vsce package --no-dependencies --out ../dist/"
+  },
+  "dependencies": {
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.19.9",
+    "@types/vscode": "^1.105.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.1",
+    "eslint": "^9.39.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.4"
+  }
+}

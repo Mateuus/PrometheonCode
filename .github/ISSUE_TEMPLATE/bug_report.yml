@@ -1,0 +1,129 @@
+name: 🐛 Relatar bug
+description: Algo não funciona como esperado na extensão Prometheon.
+title: "fix: "
+labels:
+  - bug
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por relatar. Antes de continuar:
+
+        - **Não** relate vulnerabilidades aqui — use um
+          [advisory privado](https://github.com/Mateuus/PrometheonCode/security/advisories/new).
+        - Verifique se já existe uma issue aberta para o mesmo problema.
+        - **Não cole chaves, tokens ou logs com dados reais.** Sanitize antes.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Antes de abrir
+      options:
+        - label: Procurei issues existentes e não encontrei duplicata
+          required: true
+        - label: Estou na versão mais recente da extensão (ou na `main`)
+          required: true
+        - label: Rodei `npm run doctor` e o ambiente está adequado
+          required: false
+        - label: Removi qualquer segredo ou dado pessoal do que vou colar aqui
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: O que acontece
+      description: Descreva o comportamento observado.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: O que era esperado
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Passos para reproduzir
+      description: Passos numerados, do estado inicial até o problema.
+      placeholder: |
+        1. Abrir a raiz do repositório no VS Code
+        2. Pressionar F5
+        3. Clicar no ícone do Prometheon
+        4. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área afetada
+      options:
+        - Painel de agentes (Activity Bar)
+        - Barra de status / conexão
+        - Comandos da paleta
+        - Chat local
+        - Web Chat / Hub
+        - Permissões e autonomia
+        - Configuração do workspace (.prometheon/)
+        - Integração com CLI de agente
+        - Build, empacotamento ou instalação
+        - Outra / não sei
+    validations:
+      required: true
+
+  - type: input
+    id: extension-version
+    attributes:
+      label: Versão da extensão
+      placeholder: "0.0.1 (ou commit da main)"
+    validations:
+      required: true
+
+  - type: input
+    id: vscode-version
+    attributes:
+      label: Versão do VS Code
+      description: "Help → About (ou `code --version`)"
+      placeholder: "1.105.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Sistema operacional
+      placeholder: "Windows 11 26200 / macOS 15.1 / Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Versão do Node
+      placeholder: "v22.15.0"
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Canal de saída **Prometheon** (com log level `Debug`, via
+        *Developer: Set Log Level…*) e/ou o console do Extension Host
+        (*Developer: Toggle Developer Tools*). **Sanitize antes de colar.**
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Contexto adicional
+      description: Capturas de tela, configuração relevante, quando começou a acontecer.
+    validations:
+      required: false

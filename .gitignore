@@ -1,0 +1,27 @@
+Docs/
+node_modules/
+dist/
+out/
+*.vsix
+.vscode-test/
+*.log
+.env
+.env.local
+.DS_Store
+Thumbs.db
+
+# Saída do Graphify (grafo de conhecimento gerado localmente)
+graphify-out/
+
+# Estado local do workspace Prometheon — nunca versionar
+.prometheon/local/
+.prometheon/cache/
+.prometheon/runtime/
+.prometheon/logs/
+.prometheon/worktrees/
+.prometheon/sessions/raw/
+.prometheon/graph/cache/
+.prometheon/secrets/
+.prometheon/*.db
+.prometheon/*.db-shm
+.prometheon/*.db-wal

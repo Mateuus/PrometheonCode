@@ -1,0 +1,76 @@
+version: 2
+
+updates:
+  # Dependências da extensão do VS Code
+  - package-ecosystem: npm
+    directory: /extension
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    labels:
+      - dependencies
+      - extension
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: scope
+    groups:
+      # Ferramental de build/lint costuma subir junto — um PR só.
+      dev-tooling:
+        applies-to: version-updates
+        dependency-type: development
+        patterns:
+          - "@eslint/*"
+          - "eslint*"
+          - "typescript*"
+          - "esbuild"
+          - "@types/*"
+          - "@vscode/*"
+        update-types:
+          - minor
+          - patch
+      security-patches:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    ignore:
+      # @types/vscode e engines.vscode precisam subir juntos, manualmente.
+      - dependency-name: "@types/vscode"
+        update-types:
+          - version-update:semver-major
+      # Node 20 é o piso suportado.
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
+
+  # Raiz do monorepo (apenas scripts orquestradores)
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Actions usadas nos workflows
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns:
+          - "*"

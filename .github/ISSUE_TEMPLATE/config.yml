@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: 💬 Dúvida ou discussão
+    url: https://github.com/Mateuus/PrometheonCode/discussions
+    about: Perguntas de uso, ideias em estágio inicial e conversas abertas.
+
+  - name: 🔒 Vulnerabilidade de segurança
+    url: https://github.com/Mateuus/PrometheonCode/security/advisories/new
+    about: Não abra issue pública. Relate em privado por advisory — veja SECURITY.md.
+
+  - name: 📖 Documentação de arquitetura
+    url: https://github.com/Mateuus/PrometheonCode/blob/main/Docs/PROMETHEON_INICIO_EXTENSAO.md
+    about: Plano de implementação e decisões de arquitetura antes de propor mudanças.
