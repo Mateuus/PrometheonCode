@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { AgentProfileService } from './agents/AgentProfileService';
 import { AgentProfileStore } from './agents/AgentProfileStore';
 import { AgentRegistry } from './agents/AgentRegistry';
+import { ClaudeCodeAgentAdapter } from './agents/ClaudeCodeAgentAdapter';
 import { MockAgentAdapter } from './agents/MockAgentAdapter';
 import { LocalChatService } from './chat/LocalChatService';
 import { WebChatService } from './chat/WebChatService';
@@ -82,7 +83,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
   const mcp = new McpConfigStore(workspace, logger);
 
   const registry = new AgentRegistry();
+
+  // O mock é registrado primeiro **de propósito**: o registro promove a
+  // principal o primeiro que chega, e o principal precisa ser algo que sempre
+  // responde. Sem CLI instalado ou sem conta configurada, o Claude Code recusa
+  // de saída — e o painel ficaria mudo na primeira mensagem, num erro que
+  // parece defeito do Prometheon e é ausência de uma dependência externa.
   registry.register(new MockAgentAdapter());
+
+  const claudeCode = new ClaudeCodeAgentAdapter(logger, async () => {
+    // O primeiro perfil habilitado do Claude Code. A escolha é previsível e não
+    // depende de estado guardado noutro lugar que possa divergir.
+    const available = await profiles.list();
+
+    return available.find((profile) => profile.providerId === 'claude-code' && profile.enabled);
+  });
+
+  registry.register(claudeCode);
+
+  // A promoção acontece fora do caminho de ativação: descobrir se o CLI existe
+  // custa um processo, e a extensão não deve demorar a abrir por causa disso.
+  // Até a resposta chegar, o mock atende — e quem tem o CLI instalado nem vê a
+  // troca, que leva alguns milissegundos.
+  void claudeCode
+    .isAvailable()
+    .then((available) => {
+      if (available) {
+        registry.setMain(claudeCode.id);
+        logger.info('Claude Code disponível: agente principal.');
+        return;
+      }
+
+      logger.info('Claude Code indisponível (CLI ausente ou sem conta): seguindo com o mock.');
+    })
+    .catch((error: unknown) => {
+      logger.error(error instanceof Error ? error : String(error));
+    });
 
   // Com uma URL configurada, a extensão fala com o Hub de verdade; sem ela,
   // continua estritamente local. A escolha é do usuário, e é explícita.
