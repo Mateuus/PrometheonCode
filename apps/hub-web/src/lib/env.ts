@@ -24,9 +24,31 @@ const schema = z.object({
 
 let cached: z.infer<typeof schema> | undefined;
 
+/**
+ * Variável declarada e vazia vale como ausente.
+ *
+ * Um `.env` de exemplo lista as chaves opcionais sem valor — é assim que se
+ * documenta o que existe. Sem esta limpeza, `GITHUB_OAUTH_CLIENT_ID=` chega ao
+ * Zod como string vazia, falha o `min(1)` e derruba o servidor inteiro por uma
+ * configuração que a pessoa deliberadamente não preencheu.
+ *
+ * O `@prometheon/config`, do lado da API, já faz o mesmo antes de validar.
+ */
+function withoutBlanks(source: NodeJS.ProcessEnv): Record<string, string> {
+  const clean: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(source)) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      clean[key] = value;
+    }
+  }
+
+  return clean;
+}
+
 export function env(): z.infer<typeof schema> {
   if (!cached) {
-    const parsed = schema.safeParse(process.env);
+    const parsed = schema.safeParse(withoutBlanks(process.env));
     if (!parsed.success) {
       throw new Error(`Configuração inválida do hub-web: ${parsed.error.message}`);
     }
