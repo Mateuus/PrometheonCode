@@ -4,7 +4,15 @@ import { invitationSchema, organizationMemberSchema } from '@prometheon/contract
 import { accessToken } from '@/lib/auth/session';
 import { hubRequest, type HubRequestOptions } from './client';
 import { failure, type ApiResult } from './result';
-import { conversationSchema, messageSchema, projectSchema, taskSchema } from './schemas';
+import {
+  changePasswordResponseSchema,
+  conversationSchema,
+  messageSchema,
+  projectSchema,
+  revokeSessionResultSchema,
+  taskSchema,
+  updateProfileResponseSchema,
+} from './schemas';
 import type { Conversation, Message, OrganizationRole, Project, Task, TaskPriority, TaskStatus } from './types';
 
 /**
@@ -29,6 +37,56 @@ async function send<T>(
     return failure('unauthorized', { code: 'SESSION_EXPIRED' });
   }
   return hubRequest(path, schema, { ...options, accessToken: token });
+}
+
+// --------------------------------------------------------------------- conta
+
+/**
+ * Edita o próprio perfil (`PATCH /v1/me`).
+ *
+ * O corpo é parcial de propósito: o que não for enviado fica como está na API.
+ * `avatarUrl: null` é o pedido explícito de remover a imagem, e por isso é
+ * diferente de não mandar o campo.
+ *
+ * O e-mail não está aqui porque não está no contrato — trocar de endereço exige
+ * verificar o novo antes de o antigo perder valor.
+ */
+export async function updateProfile(input: {
+  name?: string | undefined;
+  locale?: string | undefined;
+  timeZone?: string | undefined;
+  avatarUrl?: string | null | undefined;
+}): Promise<ApiResult<z.infer<typeof updateProfileResponseSchema>>> {
+  return send('/v1/me', updateProfileResponseSchema, { method: 'PATCH', body: input });
+}
+
+/**
+ * Troca a senha estando logado (`POST /v1/me/password`).
+ *
+ * A API exige a senha atual e derruba as outras sessões da conta, preservando
+ * esta. Não há nada a fazer com o cookie local: a sessão que fez a chamada
+ * continua valendo, e é justamente por isso que a pessoa não é deslogada.
+ */
+export async function changePassword(input: {
+  currentPassword: string;
+  newPassword: string;
+}): Promise<ApiResult<z.infer<typeof changePasswordResponseSchema>>> {
+  return send('/v1/me/password', changePasswordResponseSchema, { method: 'POST', body: input });
+}
+
+/**
+ * Derruba uma sessão da conta (`DELETE /v1/sessions/:id`).
+ *
+ * O nome carrega o `Account` para não colidir com o `revokeSession` de
+ * `lib/auth/session`, que é outra coisa: aquele encerra **esta** sessão pelo
+ * `logout`, este derruba qualquer uma da lista.
+ */
+export async function revokeAccountSession(
+  sessionId: string,
+): Promise<ApiResult<z.infer<typeof revokeSessionResultSchema>>> {
+  return send(`/v1/sessions/${encodeURIComponent(sessionId)}`, revokeSessionResultSchema, {
+    method: 'DELETE',
+  });
 }
 
 // ------------------------------------------------------------------ projetos

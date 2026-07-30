@@ -17,6 +17,7 @@ import {
   presenceListSchema,
   projectPageSchema,
   projectSchema,
+  sessionPageSchema,
   subscriptionOverviewSchema,
   taskPageSchema,
 } from './schemas';
@@ -34,6 +35,7 @@ import type {
   Plan,
   PresenceEntry,
   Project,
+  Session,
   SubscriptionOverview,
   Task,
 } from './types';
@@ -76,7 +78,16 @@ function items<T>(result: ApiResult<{ items: T[] }>): ApiResult<T[]> {
 // ---------------------------------------------------------------- identidade
 
 export interface Viewer {
-  user: { id: string; name: string; email: string; emailVerified: boolean; avatarUrl: string | null };
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    emailVerified: boolean;
+    avatarUrl: string | null;
+    /** Preferências editáveis em `/settings/account`. */
+    locale: string;
+    timeZone: string;
+  };
   organizations: { id: string; name: string; slug: string; role: OrganizationRole }[];
   activeOrganizationId: string | null;
 }
@@ -93,12 +104,25 @@ export async function getViewer(): Promise<ApiResult<Viewer>> {
             email: result.data.user.email,
             emailVerified: result.data.user.emailVerified,
             avatarUrl: result.data.user.avatarUrl,
+            locale: result.data.user.locale,
+            timeZone: result.data.user.timeZone,
           },
           organizations: [...result.data.organizations],
           activeOrganizationId: result.data.activeOrganizationId,
         },
       }
     : result;
+}
+
+/**
+ * Sessões vivas da conta.
+ *
+ * A API já marca qual delas é a que está fazendo a chamada (`current`), e é essa
+ * marca que a tela usa — o `sessionId` guardado no cookie do Hub Web serviria,
+ * mas duplicaria a decisão em dois lugares que podem discordar.
+ */
+export async function listSessions(): Promise<ApiResult<Session[]>> {
+  return items(await get('/v1/me/sessions', sessionPageSchema, { query: { limit: PAGE_LIMIT } }));
 }
 
 export async function listOrganizations(): Promise<ApiResult<OrganizationWithAccess[]>> {

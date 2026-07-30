@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   auditLogSchema,
+  changePasswordResponseSchema,
   conversationSchema,
   cursorPageSchema,
   knowledgeItemSummarySchema,
@@ -11,8 +12,10 @@ import {
   planSchema,
   presenceEntrySchema,
   projectSchema,
+  sessionSchema,
   subscriptionOverviewSchema,
   taskSchema,
+  updateProfileResponseSchema,
 } from '@prometheon/contracts';
 
 /**
@@ -70,6 +73,16 @@ export const verifyEmailResultSchema = z.object({ user: meResponseSchema.shape.u
 
 /** Respostas que só confirmam o comando (`{}`). */
 export const emptyResultSchema = z.object({}).loose();
+
+// ------------------------------------------------------------------- conta
+
+export { changePasswordResponseSchema, sessionSchema, updateProfileResponseSchema };
+
+/** `GET /v1/me/sessions`. */
+export const sessionPageSchema = cursorPageSchema(sessionSchema);
+
+/** `DELETE /v1/sessions/:id` — diz se a sessão derrubada era a desta aba. */
+export const revokeSessionResultSchema = z.object({ current: z.boolean() });
 
 // ------------------------------------------------------------------ domínio
 
