@@ -2,7 +2,7 @@
   "name": "prometheon-monorepo",
   "version": "0.0.1",
   "private": true,
-  "description": "Raiz do Prometheon: extensão do VS Code em extension/ e servidor em server/.",
+  "description": "Raiz do Prometheon: extensão do VS Code em extension/ e o Hub em apps/.",
   "license": "MIT",
   "author": "Mateus Rodrigues",
   "repository": {
@@ -30,6 +30,32 @@
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "test": "npm --prefix extension test",
     "verify": "npm run check-types && npm run lint && npm run check-manifest && npm test",
-    "vsix": "npm --prefix extension run vsix"
+    "vsix": "npm --prefix extension run vsix",
+    "hub:dev": "pnpm --filter \"./apps/**\" dev",
+    "hub:build": "pnpm --filter \"./apps/**\" --filter \"./packages/**\" build",
+    "hub:typecheck": "pnpm -r --filter \"./apps/**\" --filter \"./packages/**\" typecheck",
+    "hub:lint": "eslint apps packages && pnpm --filter @prometheon/hub-web lint",
+    "hub:test": "pnpm -r --filter \"./apps/**\" --filter \"./packages/**\" test",
+    "db:generate": "pnpm --filter @prometheon/database db:generate",
+    "db:migrate": "pnpm --filter @prometheon/database db:migrate",
+    "compose:up": "docker compose -f infrastructure/compose/docker-compose.dev.yml up -d",
+    "compose:down": "docker compose -f infrastructure/compose/docker-compose.dev.yml down",
+    "hub:lint:fix": "eslint apps packages --fix",
+    "hub:smoke": "node scripts/hub-smoke.mjs",
+    "hub:clean-test-data": "node scripts/hub-clean-test-data.mjs"
+  },
+  "packageManager": "pnpm@11.18.0",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
+    "eslint": "^10.8.0",
+    "globals": "^17.8.0",
+    "tsx": "^4.23.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0"
+  },
+  "dependencies": {
+    "ioredis": "^5.11.1",
+    "mysql2": "^3.23.2"
   }
 }

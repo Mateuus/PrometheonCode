@@ -1,0 +1,30 @@
+# A extensão do VS Code continua fora do workspace: ela usa npm próprio e já
+# está estável. Migrar `extension/` para cá é assunto de outra rodada.
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+allowBuilds:
+  argon2: set this to true or false
+  esbuild: set this to true or false
+  msgpackr-extract: set this to true or false
+  sharp: set this to true or false
+  unrs-resolver: set this to true or false
+
+minimumReleaseAgeExclude:
+  - bullmq@5.81.3
+
+# Scripts de build aprovados. O pnpm 10+ exige lista explícita.
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - unrs-resolver
+  - '@swc/core'
+  - argon2
+
+# Um script de build fora da lista vira aviso, não erro de install.
+strictDepBuilds: false
+
+# Sem isto, todo `pnpm exec`/`pnpm run` revalida as dependências e falha antes
+# mesmo de executar o comando pedido.
+verifyDepsBeforeRun: false

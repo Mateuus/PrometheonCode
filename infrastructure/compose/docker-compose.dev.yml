@@ -1,0 +1,22 @@
+# Serviços de apoio do desenvolvimento local.
+#
+# MySQL e Redis não estão aqui de propósito: eles já rodam em 192.168.5.210 e
+# são configurados pelo .env. Este arquivo sobe só o que falta na máquina.
+services:
+  # Servidor SMTP de desenvolvimento. Recebe tudo e não entrega nada para fora,
+  # então nenhum e-mail de teste chega a um endereço real.
+  maildev:
+    image: maildev/maildev:2.1.0
+    container_name: prometheon-maildev
+    restart: unless-stopped
+    environment:
+      MAILDEV_INCOMING_USER: ''
+      MAILDEV_INCOMING_PASS: ''
+    ports:
+      - '1025:1025' # SMTP
+      - '1080:1080' # interface web
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:1080/healthz']
+      interval: 10s
+      timeout: 3s
+      retries: 5
