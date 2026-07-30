@@ -1,0 +1,9 @@
+{
+  // Imagem publicável: o mesmo compilador do `typecheck`, sem os testes e sem o
+  // apoio de teste no `dist`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./dist/.tsbuildinfo.build"
+  },
+  "exclude": ["dist", "src/**/*.test.ts", "src/testing/**"]
+}
