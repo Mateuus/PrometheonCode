@@ -5,10 +5,17 @@ out/**
 src/**
 node_modules/**
 scripts/**
-media/*-source.svg
 **/*.map
 **/*.ts
 **/tsconfig.json
 esbuild.mjs
 eslint.config.mjs
 .gitignore
+
+# Arte de origem e tamanhos não usados em runtime: ficam no repositório, fora do
+# pacote. O manifest usa media/prometheon-icon-256.png e media/prometheon-view.svg.
+media/prometheon-icon-master.png
+media/prometheon-icon-512.png
+media/prometheon-icon-64.png
+media/prometheon-logo-horizontal.png
+media/*-source.svg

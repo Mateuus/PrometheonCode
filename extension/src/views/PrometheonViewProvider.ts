@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { CHAT_VIEW_ID, CHAT_VIEW_SECONDARY_ID } from '../constants';
 import type { PrometheonCore } from '../core/PrometheonCore';
 import type { Logger } from '../logger';
 import { parseWebviewMessage, type ExtensionToWebviewMessage } from './messages';
@@ -8,11 +9,17 @@ import { renderWebviewHtml } from './webview/template';
  * Ponte entre a webview e o núcleo. Não contém regra de negócio: valida a
  * mensagem recebida e delega. A webview nunca executa terminal, Git, CLI,
  * leitura de arquivo ou rede por conta própria.
+ *
+ * O mesmo provider atende duas views — a da Activity Bar e a da Secondary Side
+ * Bar — porque no VS Code uma view pertence a um único container. As duas podem
+ * estar resolvidas ao mesmo tempo, então todo `post` vai para ambas e elas
+ * refletem exatamente o mesmo estado.
  */
 export class PrometheonViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
-  static readonly viewType = 'prometheon.chatView';
+  static readonly viewType = CHAT_VIEW_ID;
+  static readonly secondaryViewType = CHAT_VIEW_SECONDARY_ID;
 
-  private view: vscode.WebviewView | undefined;
+  private readonly views = new Set<vscode.WebviewView>();
   private readonly disposables: vscode.Disposable[] = [];
 
   constructor(
@@ -22,7 +29,7 @@ export class PrometheonViewProvider implements vscode.WebviewViewProvider, vscod
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
-    this.view = view;
+    this.views.add(view);
 
     view.webview.options = {
       enableScripts: true,
@@ -38,21 +45,29 @@ export class PrometheonViewProvider implements vscode.WebviewViewProvider, vscod
         void this.handle(raw);
       }),
       view.onDidDispose(() => {
-        this.view = undefined;
+        this.views.delete(view);
       }),
     );
+
+    // Uma view recém-aberta precisa do estado atual; ela também pede via
+    // `ui.ready`, mas isso evita um quadro vazio enquanto a mensagem chega.
+    this.post({ type: 'state.snapshot', payload: this.core.snapshot });
   }
 
   post(message: ExtensionToWebviewMessage): void {
-    void this.view?.webview.postMessage(message);
+    for (const view of this.views) {
+      void view.webview.postMessage(message);
+    }
   }
 
+  /** Foca a view visível; se nenhuma estiver aberta, revela a da Activity Bar. */
   async reveal(): Promise<void> {
-    if (this.view === undefined) {
+    const visible = [...this.views].find((view) => view.visible) ?? [...this.views][0];
+    if (visible === undefined) {
       await vscode.commands.executeCommand(`${PrometheonViewProvider.viewType}.focus`);
       return;
     }
-    this.view.show(true);
+    visible.show(true);
   }
 
   private async handle(raw: unknown): Promise<void> {
@@ -72,5 +87,6 @@ export class PrometheonViewProvider implements vscode.WebviewViewProvider, vscod
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
+    this.views.clear();
   }
 }

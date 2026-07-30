@@ -1,12 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-  <g stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none">
-    <path d="M12 12 12 5M12 12 19 12M12 12 12 19M12 12 5 12" />
+  <title>Prometheon</title>
+  <!--
+    Ícone do container na Activity Bar: a malha de quatro nós em volta da chama,
+    reduzida ao essencial. Monocromático em currentColor de propósito — o VS Code
+    recolore este ícone conforme o tema, então cor e gradiente do logo colorido
+    (media/prometheon-icon-*.png) não sobreviveriam aqui.
+  -->
+  <g stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none">
+    <path d="M12 5.8V7M12 15.3v3M5.8 12h3.2M14.9 12h3.3" />
   </g>
   <g fill="currentColor">
-    <circle cx="12" cy="4" r="2" />
-    <circle cx="20" cy="12" r="2" />
-    <circle cx="12" cy="20" r="2" />
-    <circle cx="4" cy="12" r="2" />
-    <circle cx="12" cy="12" r="3.1" />
+    <circle cx="12" cy="3.6" r="2.1" />
+    <circle cx="20.4" cy="12" r="2.1" />
+    <circle cx="12" cy="20.4" r="2.1" />
+    <circle cx="3.6" cy="12" r="2.1" />
+    <path d="M12 6.9c.35 1.5 1.2 2.15 1.95 3.05.65.8.95 1.55.95 2.4 0 1.6-1.3 2.9-2.9 2.9s-2.9-1.3-2.9-2.9c0-1 .45-1.85 1.3-2.75.75-.8 1.3-1.55 1.6-2.7z" />
   </g>
 </svg>

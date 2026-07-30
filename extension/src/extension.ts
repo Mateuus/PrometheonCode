@@ -4,7 +4,7 @@ import { MockAgentAdapter } from './agents/MockAgentAdapter';
 import { LocalChatService } from './chat/LocalChatService';
 import { WebChatService } from './chat/WebChatService';
 import { registerCommands } from './commands';
-import { CHAT_VIEW_ID } from './constants';
+import { CHAT_VIEW_ID, CHAT_VIEW_SECONDARY_ID } from './constants';
 import { PrometheonCore } from './core/PrometheonCore';
 import { EventBus } from './core/EventBus';
 import { DisabledHubClient } from './hub/DisabledHubClient';
@@ -84,8 +84,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
     bus.on('notification', (payload) => provider.post({ type: 'notification', payload })),
   );
 
+  // O mesmo provider atende os dois locais: Activity Bar e Secondary Side Bar
+  // (onde fica o chat nativo do VS Code). Ver PrometheonViewProvider.
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(CHAT_VIEW_ID, provider),
+    vscode.window.registerWebviewViewProvider(CHAT_VIEW_SECONDARY_ID, provider),
     ...registerCommands({ core, provider, logger }),
   );
 

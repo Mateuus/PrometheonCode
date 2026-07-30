@@ -6,7 +6,7 @@
   "publisher": "prometheon",
   "license": "MIT",
   "private": true,
-  "icon": "media/prometheon-icon.png",
+  "icon": "media/prometheon-icon-256.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/Mateuus/PrometheonCode.git",
@@ -17,7 +17,7 @@
   },
   "homepage": "https://github.com/Mateuus/PrometheonCode#readme",
   "engines": {
-    "vscode": "^1.105.0",
+    "vscode": "^1.106.0",
     "node": ">=20"
   },
   "categories": [
@@ -43,6 +43,13 @@
           "title": "Prometheon",
           "icon": "media/prometheon-view.svg"
         }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "prometheon-secondary",
+          "title": "Prometheon",
+          "icon": "media/prometheon-view.svg"
+        }
       ]
     },
     "views": {
@@ -50,6 +57,14 @@
         {
           "type": "webview",
           "id": "prometheon.chatView",
+          "name": "Prometheon",
+          "icon": "media/prometheon-view.svg"
+        }
+      ],
+      "prometheon-secondary": [
+        {
+          "type": "webview",
+          "id": "prometheon.chatViewSecondary",
           "name": "Prometheon",
           "icon": "media/prometheon-view.svg"
         }
@@ -113,42 +128,42 @@
       "view/title": [
         {
           "command": "prometheon.newLocalChat",
-          "when": "view == prometheon.chatView",
+          "when": "view == prometheon.chatView || view == prometheon.chatViewSecondary",
           "group": "navigation@1"
         },
         {
           "command": "prometheon.openSettings",
-          "when": "view == prometheon.chatView",
+          "when": "view == prometheon.chatView || view == prometheon.chatViewSecondary",
           "group": "navigation@2"
         },
         {
           "command": "prometheon.selectWorkMode",
-          "when": "view == prometheon.chatView",
+          "when": "view == prometheon.chatView || view == prometheon.chatViewSecondary",
           "group": "1_orchestration@1"
         },
         {
           "command": "prometheon.selectAutonomy",
-          "when": "view == prometheon.chatView",
+          "when": "view == prometheon.chatView || view == prometheon.chatViewSecondary",
           "group": "1_orchestration@2"
         },
         {
           "command": "prometheon.selectMainAgent",
-          "when": "view == prometheon.chatView",
+          "when": "view == prometheon.chatView || view == prometheon.chatViewSecondary",
           "group": "1_orchestration@3"
         },
         {
           "command": "prometheon.disableBypassPermissions",
-          "when": "view == prometheon.chatView && prometheon.bypassActive",
+          "when": "(view == prometheon.chatView || view == prometheon.chatViewSecondary) && prometheon.bypassActive",
           "group": "1_orchestration@4"
         },
         {
           "command": "prometheon.configureWorkspace",
-          "when": "view == prometheon.chatView",
+          "when": "view == prometheon.chatView || view == prometheon.chatViewSecondary",
           "group": "2_workspace@1"
         },
         {
           "command": "prometheon.showDiagnostics",
-          "when": "view == prometheon.chatView",
+          "when": "view == prometheon.chatView || view == prometheon.chatViewSecondary",
           "group": "3_help@1"
         }
       ],
@@ -199,7 +214,6 @@
     "check-types": "tsc --noEmit",
     "compile-tests": "tsc -p . --outDir out",
     "lint": "eslint src",
-    "icon": "node scripts/generate-icon.mjs",
     "test": "npm run compile-tests && npm run compile && vscode-test",
     "vsix": "node -e \"require('node:fs').mkdirSync('../dist',{recursive:true})\" && vsce package --no-dependencies --out ../dist/"
   },
@@ -210,7 +224,7 @@
     "@eslint/js": "^9.39.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^20.19.9",
-    "@types/vscode": "^1.105.0",
+    "@types/vscode": "^1.106.0",
     "@vscode/test-cli": "^0.0.15",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.9.2",

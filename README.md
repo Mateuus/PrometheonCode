@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="extension/media/prometheon.svg" alt="Prometheon" width="96" height="96" />
+<img src="extension/media/prometheon-icon-256.png" alt="Prometheon" width="96" height="96" />
 
 # Prometheon
 
@@ -13,7 +13,7 @@ Orquestração de múltiplos agentes de IA de codificação dentro de um único 
 [![CodeQL](https://github.com/Mateuus/PrometheonCode/actions/workflows/codeql.yml/badge.svg)](https://github.com/Mateuus/PrometheonCode/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.105-007ACC?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com)
+[![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.106-007ACC?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com)
 
 </div>
 

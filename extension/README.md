@@ -11,7 +11,7 @@ simulado** (`Mock Agent`). Nenhuma CLI real é acionada ainda.
 
 | Recurso | Estado |
 | --- | --- |
-| Ícone e painel do Prometheon na Activity Bar | ✅ |
+| Painel na Activity Bar **e** na Secondary Side Bar, junto do chat nativo | ✅ |
 | Local Chat com streaming (via `Mock Agent`) | ✅ |
 | Web Chat exibindo o estado "Hub não configurado" | ✅ |
 | Seletores de Work Mode, Autonomy e Main Agent | ✅ |
@@ -35,7 +35,11 @@ Depois abra a raiz do repositório no VS Code e pressione <kbd>F5</kbd>
 (configuração **Executar extensão**). Isso inicia a task `watch` e abre uma
 janela *Extension Development Host* com o Prometheon carregado.
 
-Na janela nova, clique no ícone do Prometheon na Activity Bar.
+Na janela nova o painel está em dois lugares, com o mesmo estado nos dois:
+
+- o ícone do Prometheon na **Activity Bar**;
+- a aba **Prometheon** na **Secondary Side Bar**, ao lado de *Chat* — abra com
+  *View: Toggle Secondary Side Bar* (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>B</kbd>).
 
 ### Como testar o Local Chat
 
@@ -144,8 +148,7 @@ decide o que fazer.
 npm run watch          # build incremental (extensão + webview)
 npm run check-types    # tsc --noEmit
 npm run lint
-npm test               # 47 testes de integração em um VS Code real
-npm run icon           # regera media/prometheon-icon.png a partir da geometria
+npm test               # 48 testes de integração em um VS Code real
 npm run vsix           # empacota o .vsix em ../dist/
 ```
 

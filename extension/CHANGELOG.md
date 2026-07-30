@@ -7,8 +7,10 @@ O projeto segue [SemVer](https://semver.org/lang/pt-BR/).
 
 ### Adicionado
 
-- Painel **Prometheon** na Activity Bar, como webview com CSP rigorosa (scripts
-  apenas por `nonce`, sem `unsafe-inline`, sem carregamento remoto).
+- Painel **Prometheon** como webview com CSP rigorosa (scripts apenas por
+  `nonce`, sem `unsafe-inline`, sem carregamento remoto), disponível em dois
+  lugares com estado compartilhado: na Activity Bar e na Secondary Side Bar,
+  junto do chat nativo do VS Code.
 - **Local Chat** funcional com streaming simulado, interrupção, estado vazio,
   indicador de processamento e limpeza da conversa.
 - **Web Chat** com a tela de Hub não configurado e erro tipado
@@ -27,9 +29,11 @@ O projeto segue [SemVer](https://semver.org/lang/pt-BR/).
 - `SecretStore` sobre `vscode.SecretStorage`; nenhum segredo em disco ou em log.
 - 10 comandos na Command Palette, incluindo `Show Diagnostics` sem dados
   sensíveis.
-- Ícone original (`media/prometheon-icon.png`, 256×256) gerado por
-  `npm run icon` a partir da geometria em `scripts/generate-icon.mjs`.
-- 47 testes de integração cobrindo registro de agentes, transição de chats,
+- Identidade visual: a malha de nós em volta da chama, em
+  `media/prometheon-icon-{64,128,256,512}.png` e no logo horizontal. O ícone do
+  container (`media/prometheon-view.svg`) é a versão monocromática, porque o VS
+  Code recolore esse ícone conforme o tema.
+- 48 testes de integração cobrindo registro de agentes, transição de chats,
   persistência de preferências, não persistência do bypass, criação segura de
   `.prometheon/`, preservação do `.gitignore`, validação das mensagens da webview e
   precedência de permissões.
