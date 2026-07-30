@@ -20,7 +20,7 @@ import { cookieProfile, PAYLOAD_LIMITS, RATE_LIMITS } from '../../config/index.j
 import { emailScopedKey, enforceRateLimit, routeRateLimit } from '../../plugins/rate-limit.js';
 import { recordAudit, requestOrigin } from '../../shared/audit.js';
 import { ok } from '../../shared/envelope.js';
-import { unauthenticated } from '../../shared/errors.js';
+import { forbidden, unauthenticated } from '../../shared/errors.js';
 import {
   authErrorResponses,
   deviceAuthorizationEnvelope,
@@ -42,6 +42,8 @@ import {
   refreshRequestSchema,
   registerEnvelope,
   registerRequestSchema,
+  switchOrganizationEnvelope,
+  switchOrganizationRequestSchema,
   verifyEmailEnvelope,
   verifyEmailRequestSchema,
 } from './schemas.js';
@@ -295,6 +297,98 @@ export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (app, opt
       clearRefreshCookie(reply);
 
       return ok(request, {});
+    },
+  );
+
+  /**
+   * Troca a organização ativa.
+   *
+   * Fica sob `/auth` porque o que ela devolve é credencial, não organização: a
+   * sessão anterior é encerrada e outra é aberta com o escopo pedido. O cliente
+   * precisa substituir o par inteiro — inclusive o cookie de refresh, que é
+   * reescrito aqui.
+   *
+   * O raciocínio completo (por que sessão nova, e por que a denylist do Redis
+   * participa) está em `AuthService.switchOrganization()`.
+   */
+  app.post(
+    '/auth/switch-organization',
+    {
+      bodyLimit: PAYLOAD_LIMITS.auth,
+      preHandler: app.authenticate,
+      config: routeRateLimit(RATE_LIMITS.switchOrganization),
+      schema: {
+        tags: ['auth', 'organizations'],
+        summary: 'Switch the active organization of the session',
+        description:
+          'Issues a new session scoped to the requested organization and revokes the current one. ' +
+          'Only organizations where the account has an active membership are accepted.',
+        security: [{ bearerAuth: [] }],
+        body: switchOrganizationRequestSchema,
+        response: { 200: switchOrganizationEnvelope, ...errorResponses },
+      },
+    },
+    async (request, reply) => {
+      const auth = request.auth;
+
+      if (auth === undefined) {
+        throw unauthenticated();
+      }
+
+      // Credencial de dispositivo não tem sessão para trocar: o escopo dela foi
+      // fixado no device flow, quando o usuário escolheu a organização no
+      // navegador. Reemitir aqui contornaria aquela decisão sem passar por ela.
+      if (auth.kind === 'device') {
+        throw forbidden(
+          'Device credentials are scoped at authorization time and cannot switch organization.',
+          'ORGANIZATION_ACCESS_DENIED',
+        );
+      }
+
+      // Mesma exigência das demais ações dentro de uma organização
+      // (`plugins/auth.ts`): endereço confirmado.
+      if (!auth.emailVerified) {
+        throw forbidden(
+          'Confirm your email address before continuing.',
+          'EMAIL_NOT_VERIFIED',
+        );
+      }
+
+      const result = await service.switchOrganization({
+        userId: auth.userId,
+        currentSessionId: auth.sessionId,
+        organizationId: request.body.organizationId,
+        origin: requestOrigin(request),
+      });
+
+      const useCookie = isBrowserClient(request.headers.origin);
+
+      if (useCookie) {
+        setRefreshCookie(reply, result.session);
+      }
+
+      const origin = requestOrigin(request);
+
+      await recordAudit(app.db, {
+        organizationId: request.body.organizationId,
+        actorType: 'user',
+        actorId: auth.userId,
+        actorLabel: auth.email,
+        action: 'auth.organization.switched',
+        resourceType: 'session',
+        resourceId: result.session.sessionId,
+        requestId: request.id,
+        ip: origin.ip,
+        userAgent: origin.userAgent,
+        metadata: { previousSessionId: auth.sessionId },
+      });
+
+      return ok(request, {
+        user: result.user,
+        tokens: tokenPair(result.session, useCookie),
+        sessionId: result.session.sessionId,
+        activeOrganizationId: request.body.organizationId,
+      });
     },
   );
 

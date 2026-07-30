@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/status-badge';
 import { DataView } from '@/components/states/data-view';
 import { ForbiddenState } from '@/components/states/screen-states';
 import { ForcedStateNotice } from '@/components/states/forced-state-notice';
+import { SwitchToOrganizationButton } from '@/components/layout/organization-switcher';
 import { getOrganizationBySlug, getViewer, listAuditEvents } from '@/lib/api/queries';
 import { applyForcedState, devForcedState } from '@/lib/api/state-override';
 import { absoluteDateTime } from '@/lib/format';
@@ -61,6 +62,9 @@ export default async function AuditPage({
    * parâmetro de organização na rota. Se a sessão está ancorada noutra
    * organização, a lista abaixo não é a desta tela — e dizer isso é melhor que
    * mostrar registros do lugar errado com um título que promete outro.
+   *
+   * O aviso vem acompanhado da correção: `POST /v1/auth/switch-organization`
+   * reancora a sessão aqui. Antes dessa rota existir, só restava avisar.
    */
   const scopeMismatch =
     organization.ok &&
@@ -79,7 +83,19 @@ export default async function AuditPage({
 
       <PageHeader title={t('audit.title')} description={t('audit.subtitle')} />
 
-      {scopeMismatch ? <Alert tone="alert" title={t('audit.scopeMismatch')} /> : null}
+      {scopeMismatch && organization.ok ? (
+        <Alert
+          tone="alert"
+          title={t('audit.scopeMismatch')}
+          action={
+            <SwitchToOrganizationButton
+              organizationId={organization.data.id}
+              next={`${base}/audit`}
+              label={t('audit.scopeMismatchAction')}
+            />
+          }
+        />
+      ) : null}
 
       <DataView
         result={events}

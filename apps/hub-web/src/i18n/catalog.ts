@@ -220,6 +220,11 @@ export const CATALOG = {
   'organizations.subtitle': 'Pick where you want to work.',
   'organizations.empty': 'You do not belong to an organization yet.',
   'organizations.switch': 'Switch organization',
+  'organizations.switchTo': 'Work in {organization}',
+  'organizations.switchDenied':
+    'You do not have an active membership in that organization.',
+  'organizations.switchHint':
+    'The Hub anchors the session to one organization at a time. Switching signs this browser into the other one.',
 
   // -------------------------------------------------------------- projetos
   'projects.title': 'Projects',
@@ -409,6 +414,7 @@ export const CATALOG = {
   'audit.actor.system': 'System',
   'audit.scopeMismatch':
     'The Hub scopes the audit log to the organization your session is anchored to, which is not this one.',
+  'audit.scopeMismatchAction': 'Switch the session to this organization',
   'audit.loadMore': 'Load more',
 
   // ---------------------------------------------------- conta e segurança

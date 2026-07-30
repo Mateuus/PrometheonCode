@@ -198,6 +198,11 @@ export const RATE_LIMITS = {
    * transação com lock que cada tentativa abre.
    */
   invitationAccept: { max: 20, windowSeconds: 3_600 },
+  /**
+   * Troca de organização ativa. Cada troca emite sessão nova e revoga a
+   * anterior; um cliente em laço encheria `user_sessions` sozinho.
+   */
+  switchOrganization: { max: 30, windowSeconds: 3_600 },
   refresh: { max: 60, windowSeconds: 300 },
   /** Início do device flow: uma extensão não pede código o tempo todo. */
   deviceAuthorization: { max: 20, windowSeconds: 3_600 },

@@ -359,5 +359,9 @@
   "This invitation was cancelled by the organization.": "Este convite foi cancelado pela organização.",
   "This invitation has already been used.": "Este convite já foi usado.",
   "This invitation was sent to a different address. Sign in with the invited account, or ask for an invitation to the address you use.": "Este convite foi enviado para outro endereço. Entre com a conta convidada ou peça um convite para o endereço que você usa.",
-  "Your membership in this organization is not active. Ask an administrator to restore it.": "Seu vínculo com esta organização não está ativo. Peça a um administrador para restaurá-lo."
+  "Your membership in this organization is not active. Ask an administrator to restore it.": "Seu vínculo com esta organização não está ativo. Peça a um administrador para restaurá-lo.",
+  "Work in {organization}": "Trabalhar em {organization}",
+  "You do not have an active membership in that organization.": "Você não tem vínculo ativo com essa organização.",
+  "The Hub anchors the session to one organization at a time. Switching signs this browser into the other one.": "O Hub ancora a sessão em uma organização por vez. Trocar conecta este navegador à outra.",
+  "Switch the session to this organization": "Trocar a sessão para esta organização"
 }

@@ -104,6 +104,21 @@ export function invitationEmailMismatch(): ApiError {
   );
 }
 
+/**
+ * A conta não participa da organização pedida.
+ *
+ * Mesma resposta para "esta organização não existe" e "existe, mas você não está
+ * nela". Diferenciar as duas transformaria a rota num verificador de
+ * identificadores: quem tivesse uma lista de ULIDs descobriria quais são tenants
+ * reais sem pertencer a nenhum.
+ */
+export function organizationAccessDenied(): ApiError {
+  return forbidden(
+    'You do not have an active membership in this organization.',
+    'ORGANIZATION_ACCESS_DENIED',
+  );
+}
+
 export function emailAlreadyRegistered(): ApiError {
   // Reservado para fluxos autenticados (convidar alguém que já é membro), onde
   // quem chama já tem direito de saber quem está na organização. O registro

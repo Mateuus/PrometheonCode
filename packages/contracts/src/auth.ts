@@ -141,6 +141,41 @@ export const refreshResponseSchema = z.object({
   tokens: tokenPairSchema,
 });
 
+/**
+ * Troca a organização ativa da sessão.
+ *
+ * O claim `org` do access token é fixado quando a sessão nasce, e nada no token
+ * pode ser reescrito sem reemiti-lo. Por isso a troca não é um `PATCH` num
+ * recurso: é um pedido de credencial nova, com o escopo pedido, que o servidor
+ * só atende depois de conferir a associação. O cliente manda o identificador da
+ * organização; quem decide se ele vale é o servidor.
+ */
+export const switchOrganizationRequestSchema = z.object({
+  organizationId: ulidSchema,
+});
+
+export type SwitchOrganizationRequest = z.infer<
+  typeof switchOrganizationRequestSchema
+>;
+
+/**
+ * A resposta tem a mesma forma do login — e por um motivo: a troca **encerra a
+ * sessão anterior e abre outra**. O `sessionId` muda, o par de tokens muda, e o
+ * cliente precisa substituir os dois. Devolver só o access token esconderia que
+ * o refresh antigo deixou de existir.
+ */
+export const switchOrganizationResponseSchema = z.object({
+  user: currentUserSchema,
+  tokens: tokenPairSchema,
+  sessionId: ulidSchema,
+  /** Organização que passou a valer; sempre igual à pedida. */
+  activeOrganizationId: ulidSchema,
+});
+
+export type SwitchOrganizationResponse = z.infer<
+  typeof switchOrganizationResponseSchema
+>;
+
 export const logoutRequestSchema = z.object({
   refreshToken: z.string().min(1).optional(),
   /** Derruba todas as sessões do usuário, não só a atual. */

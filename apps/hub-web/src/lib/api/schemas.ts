@@ -65,6 +65,17 @@ export const refreshResultSchema = z.object({
   tokens: loginResultSchema.shape.tokens,
 });
 
+/**
+ * `POST /v1/auth/switch-organization`.
+ *
+ * Mesma forma do login, e não por acaso: a API encerra a sessão anterior e abre
+ * outra com o escopo pedido. O cookie do Hub Web precisa ser reescrito inteiro —
+ * guardar só o access token novo deixaria um refresh já revogado no lugar.
+ */
+export const switchOrganizationResultSchema = loginResultSchema.extend({
+  activeOrganizationId: z.string(),
+});
+
 /** `POST /v1/auth/verify-email`. */
 export const verifyEmailResultSchema = z.object({ user: meResponseSchema.shape.user });
 
