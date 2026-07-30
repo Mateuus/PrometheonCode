@@ -42,12 +42,17 @@ import { createGovernanceQueues } from './modules/audit/queue.js';
 import { auditRoutes } from './modules/audit/routes.js';
 import { AuditService } from './modules/audit/service.js';
 import { authRoutes } from './modules/auth/routes.js';
+import { DeviceRepository } from './modules/devices/repository.js';
+import { deviceRoutes } from './modules/devices/routes.js';
+import { DeviceService } from './modules/devices/service.js';
 import { AuthService } from './modules/auth/service.js';
 import { billingRoutes } from './modules/billing/routes.js';
 import { BillingService } from './modules/billing/service.js';
 import { healthRoutes } from './modules/health/routes.js';
 import { knowledgeRoutes } from './modules/knowledge/routes.js';
 import { KnowledgeService } from './modules/knowledge/service.js';
+import { createRealtimeModule } from './modules/realtime/module.js';
+import { realtimeRoutes } from './modules/realtime/routes.js';
 import { organizationRoutes } from './modules/organizations/routes.js';
 import { OrganizationService } from './modules/organizations/service.js';
 
@@ -64,6 +69,7 @@ import { registerDatabase, type DatabaseHandles } from './plugins/database.js';
 import { registerErrorHandler } from './plugins/error-handler.js';
 import { registerObservability } from './plugins/observability.js';
 import { registerOpenapi } from './plugins/openapi.js';
+import { registerWebsocket } from './plugins/websocket.js';
 import { registerRateLimit } from './plugins/rate-limit.js';
 import { generateRequestId, registerRequestContext } from './plugins/request-context.js';
 import { registerRedis } from './plugins/redis.js';
@@ -76,6 +82,11 @@ export interface BuildAppOptions {
   readonly databaseHandles?: DatabaseHandles | undefined;
   /** Serviço de e-mail já montado, para o teste inspecionar as mensagens. */
   readonly mailer?: MailService | undefined;
+  /**
+   * Liga os temporizadores do tempo real (heartbeat, varredura de presença,
+   * revalidação de acesso). O teste os desliga para controlar o relógio.
+   */
+  readonly realtimeTimers?: boolean | undefined;
 }
 
 export interface BuiltApp {
@@ -146,6 +157,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<BuiltApp>
   await registerSecurity(app);
   await registerRateLimit(app);
   registerAuth(app);
+  // WebSocket antes das rotas: `{ websocket: true }` só existe depois deste
+  // registro.
+  await registerWebsocket(app);
   await registerOpenapi(app);
 
   const authService = new AuthService({
@@ -159,6 +173,21 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<BuiltApp>
     db: app.db,
     config,
     authService,
+  });
+
+  // O módulo de tempo real é um só para o processo: dois assinariam o mesmo
+  // canal do Redis e cada evento chegaria duplicado a quem está conectado.
+  const realtime = createRealtimeModule(app, {
+    ...(options.realtimeTimers === undefined ? {} : { timers: options.realtimeTimers }),
+  });
+
+  const deviceService = new DeviceService({
+    repository: new DeviceRepository(app.db),
+    realtimeRepository: realtime.repository,
+    presence: realtime.presence,
+    redis: app.redis,
+    keys: realtime.keys,
+    hub: realtime.hub,
   });
 
   const knowledgeService = new KnowledgeService(app.db);
@@ -201,6 +230,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<BuiltApp>
         conversations: conversationService,
       });
       await scope.register(taskRoutes, { service: taskService });
+      await scope.register(realtimeRoutes, { module: realtime });
+      await scope.register(deviceRoutes, { service: deviceService });
     },
     { prefix: API_PREFIX },
   );
