@@ -1169,31 +1169,36 @@ button.ghost:hover:not(:disabled) {
   font-size: 1.05em;
 }
 
-/* Estreito: abas no topo. A partir de 520px a navegação vira barra lateral. */
+/* A navegação é sempre uma barra lateral: as seções ficam à vista de uma vez,
+   sem rolagem horizontal, mesmo no painel estreito da Activity Bar. */
 .settings-layout {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
 }
 
 .settings-nav {
   flex: 0 0 auto;
   display: flex;
+  flex-direction: column;
   gap: 3px;
-  padding: 0 10px 8px;
-  overflow-x: auto;
-  border-bottom: 1px solid var(--prom-border);
+  width: 116px;
+  padding: 0 8px 12px;
+  overflow-y: auto;
+  border-right: 1px solid var(--prom-border);
 }
 
 .settings-tab {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 6px;
   flex: 0 0 auto;
+  width: 100%;
   padding: 5px 9px;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: 7px;
   background: transparent;
   color: var(--vscode-foreground);
   font-size: 0.86em;
@@ -1209,7 +1214,7 @@ button.ghost:hover:not(:disabled) {
 /* Seção aberta marcada com o roxo da marca, nunca com a seleção azul do tema. */
 .settings-tab.active {
   background: var(--vscode-toolbar-hoverBackground);
-  border-color: var(--prom-accent);
+  box-shadow: inset 2px 0 0 var(--prom-accent);
   opacity: 1;
 }
 
@@ -1243,30 +1248,10 @@ button.ghost:hover:not(:disabled) {
   outline: none;
 }
 
+/* Com espaço, a barra lateral respira e os rótulos longos param de apertar. */
 @media (min-width: 520px) {
-  .settings-layout {
-    flex-direction: row;
-  }
-
   .settings-nav {
-    flex-direction: column;
-    width: 136px;
-    padding: 0 8px 12px;
-    overflow-x: visible;
-    overflow-y: auto;
-    border-bottom: none;
-    border-right: 1px solid var(--prom-border);
-  }
-
-  .settings-tab {
-    border-radius: 7px;
-    justify-content: flex-start;
-    width: 100%;
-  }
-
-  .settings-tab.active {
-    border-color: transparent;
-    box-shadow: inset 2px 0 0 var(--prom-accent);
+    width: 140px;
   }
 }
 

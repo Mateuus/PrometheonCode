@@ -22,8 +22,6 @@ import { dirname, join } from 'node:path';
 import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
 
-import { and, eq, inArray, lt, or, sql } from 'drizzle-orm';
-
 import {
   conversationParticipants,
   conversations,
@@ -70,56 +68,57 @@ export interface ExportOutcome {
 }
 
 /** Colunas seguras de `users`: sem `password_hash`. */
-const userColumns = {
-  id: users.id,
-  email: users.email,
-  displayName: users.displayName,
-  avatarUrl: users.avatarUrl,
-  locale: users.locale,
-  timezone: users.timezone,
-  status: users.status,
-  emailVerifiedAt: users.emailVerifiedAt,
-  lastLoginAt: users.lastLoginAt,
-  createdAt: users.createdAt,
-  deletedAt: users.deletedAt,
-} as const;
+const USER_COLUMNS = [
+  'user.id',
+  'user.email',
+  'user.displayName',
+  'user.avatarUrl',
+  'user.locale',
+  'user.timezone',
+  'user.status',
+  'user.emailVerifiedAt',
+  'user.lastLoginAt',
+  'user.createdAt',
+  'user.deletedAt',
+] as const;
 
 /** Colunas seguras de `devices`: sem impressão digital nem IP bruto. */
-const deviceColumns = {
-  id: devices.id,
-  userId: devices.userId,
-  name: devices.name,
-  platform: devices.platform,
-  client: devices.client,
-  clientVersion: devices.clientVersion,
-  status: devices.status,
-  approvedAt: devices.approvedAt,
-  revokedAt: devices.revokedAt,
-  lastSeenAt: devices.lastSeenAt,
-  createdAt: devices.createdAt,
-} as const;
+const DEVICE_COLUMNS = [
+  'device.id',
+  'device.userId',
+  'device.name',
+  'device.platform',
+  'device.client',
+  'device.clientVersion',
+  'device.status',
+  'device.approvedAt',
+  'device.revokedAt',
+  'device.lastSeenAt',
+  'device.createdAt',
+] as const;
 
 async function collectOrganization(
   db: Database,
   organizationId: string,
 ): Promise<Record<string, unknown[]>> {
-  const [organization] = await db
-    .select({
-      id: organizations.id,
-      slug: organizations.slug,
-      name: organizations.name,
-      status: organizations.status,
-      billingEmail: organizations.billingEmail,
-      settings: organizations.settings,
-      policy: organizations.policy,
-      retentionDays: organizations.retentionDays,
-      createdAt: organizations.createdAt,
-    })
-    .from(organizations)
-    .where(eq(organizations.id, organizationId))
-    .limit(1);
+  const organization = await db.manager
+    .createQueryBuilder(organizations, 'organization')
+    .select([
+      'organization.id',
+      'organization.slug',
+      'organization.name',
+      'organization.status',
+      'organization.billingEmail',
+      'organization.settings',
+      'organization.policy',
+      'organization.retentionDays',
+      'organization.createdAt',
+    ])
+    .where('organization.id = :organizationId', { organizationId })
+    .limit(1)
+    .getOne();
 
-  if (organization === undefined) {
+  if (organization === null) {
     throw new PermanentJobError('Organização inexistente para exportação.', {
       code: 'EXPORT_ORGANIZATION_NOT_FOUND',
       details: { organizationId },
@@ -127,73 +126,78 @@ async function collectOrganization(
   }
 
   const [members, projectRows, conversationRows, knowledgeRows, taskRows] = await Promise.all([
-    db
-      .select({
-        id: organizationMembers.id,
-        userId: organizationMembers.userId,
-        roleId: organizationMembers.roleId,
-        status: organizationMembers.status,
-        createdAt: organizationMembers.createdAt,
-      })
-      .from(organizationMembers)
-      .where(eq(organizationMembers.organizationId, organizationId))
-      .limit(MAX_ROWS),
-    db
-      .select({
-        id: projects.id,
-        slug: projects.slug,
-        name: projects.name,
-        description: projects.description,
-        status: projects.status,
-        visibility: projects.visibility,
-        defaultBranch: projects.defaultBranch,
-        createdAt: projects.createdAt,
-        deletedAt: projects.deletedAt,
-      })
-      .from(projects)
-      .where(eq(projects.organizationId, organizationId))
-      .limit(MAX_ROWS),
-    db
-      .select({
-        id: conversations.id,
-        projectId: conversations.projectId,
-        title: conversations.title,
-        status: conversations.status,
-        visibility: conversations.visibility,
-        messageCount: conversations.messageCount,
-        createdAt: conversations.createdAt,
-        deletedAt: conversations.deletedAt,
-      })
-      .from(conversations)
-      .where(eq(conversations.organizationId, organizationId))
-      .limit(MAX_ROWS),
-    db
-      .select({
-        id: knowledgeItems.id,
-        projectId: knowledgeItems.projectId,
-        slug: knowledgeItems.slug,
-        title: knowledgeItems.title,
-        category: knowledgeItems.category,
-        status: knowledgeItems.status,
-        confidence: knowledgeItems.confidence,
-        tags: knowledgeItems.tags,
-        createdAt: knowledgeItems.createdAt,
-      })
-      .from(knowledgeItems)
-      .where(eq(knowledgeItems.organizationId, organizationId))
-      .limit(MAX_ROWS),
-    db
-      .select({
-        id: tasks.id,
-        projectId: tasks.projectId,
-        title: tasks.title,
-        status: tasks.status,
-        priority: tasks.priority,
-        createdAt: tasks.createdAt,
-      })
-      .from(tasks)
-      .where(eq(tasks.organizationId, organizationId))
-      .limit(MAX_ROWS),
+    db.manager
+      .createQueryBuilder(organizationMembers, 'member')
+      .select([
+        'member.id',
+        'member.userId',
+        'member.roleId',
+        'member.status',
+        'member.createdAt',
+      ])
+      .where('member.organizationId = :organizationId', { organizationId })
+      .limit(MAX_ROWS)
+      .getMany(),
+    db.manager
+      .createQueryBuilder(projects, 'project')
+      .select([
+        'project.id',
+        'project.slug',
+        'project.name',
+        'project.description',
+        'project.status',
+        'project.visibility',
+        'project.defaultBranch',
+        'project.createdAt',
+        'project.deletedAt',
+      ])
+      .where('project.organizationId = :organizationId', { organizationId })
+      .limit(MAX_ROWS)
+      .getMany(),
+    db.manager
+      .createQueryBuilder(conversations, 'conversation')
+      .select([
+        'conversation.id',
+        'conversation.projectId',
+        'conversation.title',
+        'conversation.status',
+        'conversation.visibility',
+        'conversation.messageCount',
+        'conversation.createdAt',
+        'conversation.deletedAt',
+      ])
+      .where('conversation.organizationId = :organizationId', { organizationId })
+      .limit(MAX_ROWS)
+      .getMany(),
+    db.manager
+      .createQueryBuilder(knowledgeItems, 'item')
+      .select([
+        'item.id',
+        'item.projectId',
+        'item.slug',
+        'item.title',
+        'item.category',
+        'item.status',
+        'item.confidence',
+        'item.tags',
+        'item.createdAt',
+      ])
+      .where('item.organizationId = :organizationId', { organizationId })
+      .limit(MAX_ROWS)
+      .getMany(),
+    db.manager
+      .createQueryBuilder(tasks, 'task')
+      .select([
+        'task.id',
+        'task.projectId',
+        'task.title',
+        'task.status',
+        'task.priority',
+        'task.createdAt',
+      ])
+      .where('task.organizationId = :organizationId', { organizationId })
+      .limit(MAX_ROWS)
+      .getMany(),
   ]);
 
   return {
@@ -211,22 +215,24 @@ async function collectProject(
   organizationId: string,
   projectId: string,
 ): Promise<Record<string, unknown[]>> {
-  const [project] = await db
-    .select({
-      id: projects.id,
-      slug: projects.slug,
-      name: projects.name,
-      description: projects.description,
-      status: projects.status,
-      visibility: projects.visibility,
-      defaultBranch: projects.defaultBranch,
-      createdAt: projects.createdAt,
-    })
-    .from(projects)
-    .where(and(eq(projects.id, projectId), eq(projects.organizationId, organizationId)))
-    .limit(1);
+  const project = await db.manager
+    .createQueryBuilder(projects, 'project')
+    .select([
+      'project.id',
+      'project.slug',
+      'project.name',
+      'project.description',
+      'project.status',
+      'project.visibility',
+      'project.defaultBranch',
+      'project.createdAt',
+    ])
+    .where('project.id = :projectId', { projectId })
+    .andWhere('project.organizationId = :organizationId', { organizationId })
+    .limit(1)
+    .getOne();
 
-  if (project === undefined) {
+  if (project === null) {
     throw new PermanentJobError('Projeto inexistente para exportação.', {
       code: 'EXPORT_PROJECT_NOT_FOUND',
       details: { projectId },
@@ -234,51 +240,55 @@ async function collectProject(
   }
 
   const [settings, conversationRows, knowledgeRows, taskRows] = await Promise.all([
-    db
-      .select({
-        defaultWorkMode: projectSettings.defaultWorkMode,
-        defaultAutonomy: projectSettings.defaultAutonomy,
-        contextBudgetTokens: projectSettings.contextBudgetTokens,
-        requireReview: projectSettings.requireReview,
-        knowledgePath: projectSettings.knowledgePath,
-        retentionDays: projectSettings.retentionDays,
-      })
-      .from(projectSettings)
-      .where(eq(projectSettings.projectId, projectId))
-      .limit(1),
-    db
-      .select({
-        id: conversations.id,
-        title: conversations.title,
-        status: conversations.status,
-        messageCount: conversations.messageCount,
-        createdAt: conversations.createdAt,
-      })
-      .from(conversations)
-      .where(eq(conversations.projectId, projectId))
-      .limit(MAX_ROWS),
-    db
-      .select({
-        id: knowledgeItems.id,
-        slug: knowledgeItems.slug,
-        title: knowledgeItems.title,
-        category: knowledgeItems.category,
-        status: knowledgeItems.status,
-      })
-      .from(knowledgeItems)
-      .where(eq(knowledgeItems.projectId, projectId))
-      .limit(MAX_ROWS),
-    db
-      .select({
-        id: tasks.id,
-        title: tasks.title,
-        status: tasks.status,
-        priority: tasks.priority,
-        createdAt: tasks.createdAt,
-      })
-      .from(tasks)
-      .where(eq(tasks.projectId, projectId))
-      .limit(MAX_ROWS),
+    db.manager
+      .createQueryBuilder(projectSettings, 'settings')
+      .select([
+        'settings.defaultWorkMode',
+        'settings.defaultAutonomy',
+        'settings.contextBudgetTokens',
+        'settings.requireReview',
+        'settings.knowledgePath',
+        'settings.retentionDays',
+      ])
+      .where('settings.projectId = :projectId', { projectId })
+      .limit(1)
+      .getMany(),
+    db.manager
+      .createQueryBuilder(conversations, 'conversation')
+      .select([
+        'conversation.id',
+        'conversation.title',
+        'conversation.status',
+        'conversation.messageCount',
+        'conversation.createdAt',
+      ])
+      .where('conversation.projectId = :projectId', { projectId })
+      .limit(MAX_ROWS)
+      .getMany(),
+    db.manager
+      .createQueryBuilder(knowledgeItems, 'item')
+      .select([
+        'item.id',
+        'item.slug',
+        'item.title',
+        'item.category',
+        'item.status',
+      ])
+      .where('item.projectId = :projectId', { projectId })
+      .limit(MAX_ROWS)
+      .getMany(),
+    db.manager
+      .createQueryBuilder(tasks, 'task')
+      .select([
+        'task.id',
+        'task.title',
+        'task.status',
+        'task.priority',
+        'task.createdAt',
+      ])
+      .where('task.projectId = :projectId', { projectId })
+      .limit(MAX_ROWS)
+      .getMany(),
   ]);
 
   return {
@@ -295,23 +305,23 @@ async function collectConversation(
   organizationId: string,
   conversationId: string,
 ): Promise<Record<string, unknown[]>> {
-  const [conversation] = await db
-    .select({
-      id: conversations.id,
-      projectId: conversations.projectId,
-      title: conversations.title,
-      status: conversations.status,
-      visibility: conversations.visibility,
-      messageCount: conversations.messageCount,
-      createdAt: conversations.createdAt,
-    })
-    .from(conversations)
-    .where(
-      and(eq(conversations.id, conversationId), eq(conversations.organizationId, organizationId)),
-    )
-    .limit(1);
+  const conversation = await db.manager
+    .createQueryBuilder(conversations, 'conversation')
+    .select([
+      'conversation.id',
+      'conversation.projectId',
+      'conversation.title',
+      'conversation.status',
+      'conversation.visibility',
+      'conversation.messageCount',
+      'conversation.createdAt',
+    ])
+    .where('conversation.id = :conversationId', { conversationId })
+    .andWhere('conversation.organizationId = :organizationId', { organizationId })
+    .limit(1)
+    .getOne();
 
-  if (conversation === undefined) {
+  if (conversation === null) {
     throw new PermanentJobError('Conversa inexistente para exportação.', {
       code: 'EXPORT_CONVERSATION_NOT_FOUND',
       details: { conversationId },
@@ -319,49 +329,52 @@ async function collectConversation(
   }
 
   const [participants, messageRows] = await Promise.all([
-    db
-      .select({
-        participantType: conversationParticipants.participantType,
-        participantId: conversationParticipants.participantId,
-        role: conversationParticipants.role,
-        joinedAt: conversationParticipants.joinedAt,
-        leftAt: conversationParticipants.leftAt,
-      })
-      .from(conversationParticipants)
-      .where(eq(conversationParticipants.conversationId, conversationId))
-      .limit(MAX_ROWS),
-    db
-      .select({
-        id: messages.id,
-        sequence: messages.sequence,
-        authorType: messages.authorType,
-        authorUserId: messages.authorUserId,
-        status: messages.status,
-        createdAt: messages.createdAt,
-        deletedAt: messages.deletedAt,
-      })
-      .from(messages)
-      .where(eq(messages.conversationId, conversationId))
-      .orderBy(messages.sequence)
-      .limit(MAX_ROWS),
+    db.manager
+      .createQueryBuilder(conversationParticipants, 'participant')
+      .select([
+        'participant.participantType',
+        'participant.participantId',
+        'participant.role',
+        'participant.joinedAt',
+        'participant.leftAt',
+      ])
+      .where('participant.conversationId = :conversationId', { conversationId })
+      .limit(MAX_ROWS)
+      .getMany(),
+    db.manager
+      .createQueryBuilder(messages, 'message')
+      .select([
+        'message.id',
+        'message.sequence',
+        'message.authorType',
+        'message.authorUserId',
+        'message.status',
+        'message.createdAt',
+        'message.deletedAt',
+      ])
+      .where('message.conversationId = :conversationId', { conversationId })
+      .orderBy('message.sequence', 'ASC')
+      .limit(MAX_ROWS)
+      .getMany(),
   ]);
 
   const messageIds = messageRows.map((row) => row.id);
   const parts =
     messageIds.length === 0
       ? []
-      : await db
-          .select({
-            messageId: messageParts.messageId,
-            sequence: messageParts.sequence,
-            type: messageParts.type,
-            content: messageParts.content,
-            payload: messageParts.payload,
-            toolName: messageParts.toolName,
-          })
-          .from(messageParts)
-          .where(inArray(messageParts.messageId, messageIds))
-          .limit(MAX_ROWS);
+      : await db.manager
+          .createQueryBuilder(messageParts, 'part')
+          .select([
+            'part.messageId',
+            'part.sequence',
+            'part.type',
+            'part.content',
+            'part.payload',
+            'part.toolName',
+          ])
+          .where('part.messageId IN (:...messageIds)', { messageIds })
+          .limit(MAX_ROWS)
+          .getMany();
 
   return {
     conversations: [conversation],
@@ -376,9 +389,14 @@ async function collectUser(
   organizationId: string,
   userId: string,
 ): Promise<Record<string, unknown[]>> {
-  const [user] = await db.select(userColumns).from(users).where(eq(users.id, userId)).limit(1);
+  const user = await db.manager
+    .createQueryBuilder(users, 'user')
+    .select([...USER_COLUMNS])
+    .where('user.id = :userId', { userId })
+    .limit(1)
+    .getOne();
 
-  if (user === undefined) {
+  if (user === null) {
     throw new PermanentJobError('Usuário inexistente para exportação.', {
       code: 'EXPORT_USER_NOT_FOUND',
       details: { userId },
@@ -386,31 +404,30 @@ async function collectUser(
   }
 
   const [identities, deviceRows, memberships] = await Promise.all([
-    db
-      .select({
-        provider: userIdentities.provider,
-        providerAccountId: userIdentities.providerAccountId,
-        createdAt: userIdentities.createdAt,
-      })
-      .from(userIdentities)
-      .where(eq(userIdentities.userId, userId))
-      .limit(MAX_ROWS),
-    db.select(deviceColumns).from(devices).where(eq(devices.userId, userId)).limit(MAX_ROWS),
-    db
-      .select({
-        organizationId: organizationMembers.organizationId,
-        roleId: organizationMembers.roleId,
-        status: organizationMembers.status,
-        createdAt: organizationMembers.createdAt,
-      })
-      .from(organizationMembers)
-      .where(
-        and(
-          eq(organizationMembers.userId, userId),
-          eq(organizationMembers.organizationId, organizationId),
-        ),
-      )
-      .limit(MAX_ROWS),
+    db.manager
+      .createQueryBuilder(userIdentities, 'identity')
+      .select(['identity.provider', 'identity.providerAccountId', 'identity.createdAt'])
+      .where('identity.userId = :userId', { userId })
+      .limit(MAX_ROWS)
+      .getMany(),
+    db.manager
+      .createQueryBuilder(devices, 'device')
+      .select([...DEVICE_COLUMNS])
+      .where('device.userId = :userId', { userId })
+      .limit(MAX_ROWS)
+      .getMany(),
+    db.manager
+      .createQueryBuilder(organizationMembers, 'member')
+      .select([
+        'member.organizationId',
+        'member.roleId',
+        'member.status',
+        'member.createdAt',
+      ])
+      .where('member.userId = :userId', { userId })
+      .andWhere('member.organizationId = :organizationId', { organizationId })
+      .limit(MAX_ROWS)
+      .getMany(),
   ]);
 
   return {
@@ -435,24 +452,15 @@ export async function runExport(input: RunExportInput): Promise<ExportOutcome> {
   const { db, exportJobId, organizationId } = input;
   const now = input.now ?? new Date();
 
-  const [row] = await db
-    .select({
-      id: dataExportJobs.id,
-      status: dataExportJobs.status,
-      scope: dataExportJobs.scope,
-      scopeId: dataExportJobs.scopeId,
-      format: dataExportJobs.format,
-    })
-    .from(dataExportJobs)
-    .where(
-      and(
-        eq(dataExportJobs.id, exportJobId),
-        eq(dataExportJobs.organizationId, organizationId),
-      ),
-    )
-    .limit(1);
+  const row = await db.manager
+    .createQueryBuilder(dataExportJobs, 'job')
+    .select(['job.id', 'job.status', 'job.scope', 'job.scopeId', 'job.format'])
+    .where('job.id = :exportJobId', { exportJobId })
+    .andWhere('job.organizationId = :organizationId', { organizationId })
+    .limit(1)
+    .getOne();
 
-  if (row === undefined) {
+  if (row === null) {
     throw new PermanentJobError('Job de exportação inexistente.', {
       code: 'EXPORT_JOB_NOT_FOUND',
       details: { exportJobId, organizationId },
@@ -465,23 +473,23 @@ export async function runExport(input: RunExportInput): Promise<ExportOutcome> {
     return { status: 'cancelled' };
   }
 
-  const claim = await db
+  // Mesma reivindicação condicional da fila `deletions`: quem não afeta linha
+  // alguma perdeu a corrida para outro worker.
+  const claim = await db.manager
+    .createQueryBuilder()
     .update(dataExportJobs)
-    .set({ status: 'running', startedAt: now, version: sql`${dataExportJobs.version} + 1` })
-    .where(
-      and(
-        eq(dataExportJobs.id, exportJobId),
-        or(
-          inArray(dataExportJobs.status, ['pending', 'scheduled', 'failed']),
-          and(
-            eq(dataExportJobs.status, 'running'),
-            lt(dataExportJobs.updatedAt, new Date(now.getTime() - STALE_RUNNING_MS)),
-          ),
-        ),
-      ),
-    );
+    .set({ status: 'running', startedAt: now, version: () => 'version + 1' })
+    .where('id = :exportJobId', { exportJobId })
+    .andWhere(
+      "(status IN (:...claimable) OR (status = 'running' AND updated_at < :staleBefore))",
+      {
+        claimable: ['pending', 'scheduled', 'failed'],
+        staleBefore: new Date(now.getTime() - STALE_RUNNING_MS),
+      },
+    )
+    .execute();
 
-  if (claim[0].affectedRows === 0) {
+  if ((claim.affected ?? 0) === 0) {
     return { status: 'lost-race' };
   }
 
@@ -506,7 +514,8 @@ export async function runExport(input: RunExportInput): Promise<ExportOutcome> {
     await writeFile(absolutePath, body);
 
     const completedAt = new Date();
-    await db
+    await db.manager
+      .createQueryBuilder()
       .update(dataExportJobs)
       .set({
         status: 'completed',
@@ -515,9 +524,10 @@ export async function runExport(input: RunExportInput): Promise<ExportOutcome> {
         downloadExpiresAt: new Date(completedAt.getTime() + input.downloadTtlMs),
         completedAt,
         errorMessage: null,
-        version: sql`${dataExportJobs.version} + 1`,
+        version: () => 'version + 1',
       })
-      .where(eq(dataExportJobs.id, exportJobId));
+      .where('id = :exportJobId', { exportJobId })
+      .execute();
 
     return {
       status: 'exported',
@@ -530,14 +540,16 @@ export async function runExport(input: RunExportInput): Promise<ExportOutcome> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const permanent = error instanceof PermanentJobError;
-    await db
+    await db.manager
+      .createQueryBuilder()
       .update(dataExportJobs)
       .set({
         status: permanent ? 'failed' : 'pending',
         errorMessage: message.slice(0, 2_000),
-        version: sql`${dataExportJobs.version} + 1`,
+        version: () => 'version + 1',
       })
-      .where(eq(dataExportJobs.id, exportJobId));
+      .where('id = :exportJobId', { exportJobId })
+      .execute();
     throw error;
   }
 }

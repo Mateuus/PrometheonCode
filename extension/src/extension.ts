@@ -10,6 +10,7 @@ import { CHAT_VIEW_ID, CHAT_VIEW_SECONDARY_ID } from './constants';
 import { PrometheonCore } from './core/PrometheonCore';
 import { EventBus } from './core/EventBus';
 import { DisabledHubClient } from './hub/DisabledHubClient';
+import { initializeLanguage } from './i18n';
 import { LiveHubClient } from './hub/LiveHubClient';
 import { Logger } from './logger';
 import { PermissionService } from './permissions/PermissionService';
@@ -50,6 +51,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
   const logger = new Logger();
   const bus = new EventBus();
   const extensionVersion = String(context.extension.packageJSON.version ?? '0.0.0');
+
+  // Idioma antes de tudo: qualquer texto criado daqui para baixo já sai
+  // traduzido, inclusive o HTML da webview.
+  initializeLanguage(
+    context.extensionPath,
+    vscode.workspace.getConfiguration('prometheon').get<string>('language'),
+  );
 
   const localState = new LocalStateStore(context);
   const secrets = new SecretStore(context.secrets);
@@ -126,6 +134,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
       provider.post({ type: 'attachments.added', payload: { attachments } }),
     ),
     bus.on('activity.changed', (payload) => provider.post({ type: 'activity', payload })),
+    bus.on('language.changed', () => {
+      provider.refresh();
+      provider.post({ type: 'state.snapshot', payload: core.snapshot });
+    }),
     bus.on('question.ask', (payload) => provider.post({ type: 'question.ask', payload })),
     bus.on('question.close', (requestId) =>
       provider.post({ type: 'question.close', payload: { requestId } }),

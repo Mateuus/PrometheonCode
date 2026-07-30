@@ -15,8 +15,6 @@
 // auditoria, eventos de segurança — não tem chave estrangeira para o alvo, de
 // propósito, e por isso permanece.
 
-import { and, eq, inArray, lt, or, sql } from 'drizzle-orm';
-
 import {
   conversations,
   deletionJobs,
@@ -53,36 +51,26 @@ async function deleteTarget(
 ): Promise<number> {
   switch (targetType) {
     case 'organization': {
-      const result = await db.delete(organizations).where(eq(organizations.id, targetId));
-      return result[0].affectedRows;
+      const result = await db.manager.delete(organizations, { id: targetId });
+      return result.affected ?? 0;
     }
     case 'project': {
-      const result = await db
-        .delete(projects)
-        .where(and(eq(projects.id, targetId), eq(projects.organizationId, organizationId)));
-      return result[0].affectedRows;
+      const result = await db.manager.delete(projects, { id: targetId, organizationId });
+      return result.affected ?? 0;
     }
     case 'conversation': {
-      const result = await db
-        .delete(conversations)
-        .where(
-          and(eq(conversations.id, targetId), eq(conversations.organizationId, organizationId)),
-        );
-      return result[0].affectedRows;
+      const result = await db.manager.delete(conversations, { id: targetId, organizationId });
+      return result.affected ?? 0;
     }
     case 'knowledge_item': {
-      const result = await db
-        .delete(knowledgeItems)
-        .where(
-          and(eq(knowledgeItems.id, targetId), eq(knowledgeItems.organizationId, organizationId)),
-        );
-      return result[0].affectedRows;
+      const result = await db.manager.delete(knowledgeItems, { id: targetId, organizationId });
+      return result.affected ?? 0;
     }
     case 'user': {
       // A conta some; a auditoria do que ela fez permanece, porque
       // `audit_logs.actor_id` não tem chave estrangeira (`Docs/09`).
-      const result = await db.delete(users).where(eq(users.id, targetId));
-      return result[0].affectedRows;
+      const result = await db.manager.delete(users, { id: targetId });
+      return result.affected ?? 0;
     }
     default:
       throw new PermanentJobError(`Alvo de exclusão desconhecido: "${targetType}".`, {
@@ -104,21 +92,21 @@ export async function runDeletion(input: RunDeletionInput): Promise<DeletionOutc
   const { db, deletionJobId, organizationId } = input;
   const now = input.now ?? new Date();
 
-  const [row] = await db
-    .select({
-      id: deletionJobs.id,
-      status: deletionJobs.status,
-      targetType: deletionJobs.targetType,
-      targetId: deletionJobs.targetId,
-      scheduledFor: deletionJobs.scheduledFor,
-    })
-    .from(deletionJobs)
-    .where(
-      and(eq(deletionJobs.id, deletionJobId), eq(deletionJobs.organizationId, organizationId)),
-    )
-    .limit(1);
+  const row = await db.manager
+    .createQueryBuilder(deletionJobs, 'job')
+    .select([
+      'job.id',
+      'job.status',
+      'job.targetType',
+      'job.targetId',
+      'job.scheduledFor',
+    ])
+    .where('job.id = :deletionJobId', { deletionJobId })
+    .andWhere('job.organizationId = :organizationId', { organizationId })
+    .limit(1)
+    .getOne();
 
-  if (row === undefined) {
+  if (row === null) {
     throw new PermanentJobError('Job de exclusão inexistente.', {
       code: 'DELETION_JOB_NOT_FOUND',
       details: { deletionJobId, organizationId },
@@ -140,38 +128,40 @@ export async function runDeletion(input: RunDeletionInput): Promise<DeletionOutc
     });
   }
 
-  // Reivindicação atômica. `running` antigo é de worker que morreu.
-  const claim = await db
+  // Reivindicação atômica. `running` antigo é de worker que morreu. O `UPDATE`
+  // condicional é a idempotência real: quem não afeta linha alguma perdeu a
+  // corrida, e ler antes de escrever reabriria a janela entre as duas.
+  const claim = await db.manager
+    .createQueryBuilder()
     .update(deletionJobs)
-    .set({ status: 'running', startedAt: now, version: sql`${deletionJobs.version} + 1` })
-    .where(
-      and(
-        eq(deletionJobs.id, deletionJobId),
-        or(
-          inArray(deletionJobs.status, ['pending', 'scheduled']),
-          and(
-            eq(deletionJobs.status, 'running'),
-            lt(deletionJobs.updatedAt, new Date(now.getTime() - STALE_RUNNING_MS)),
-          ),
-        ),
-      ),
-    );
+    .set({ status: 'running', startedAt: now, version: () => 'version + 1' })
+    .where('id = :deletionJobId', { deletionJobId })
+    .andWhere(
+      "(status IN (:...claimable) OR (status = 'running' AND updated_at < :staleBefore))",
+      {
+        claimable: ['pending', 'scheduled'],
+        staleBefore: new Date(now.getTime() - STALE_RUNNING_MS),
+      },
+    )
+    .execute();
 
-  if (claim[0].affectedRows === 0) {
+  if ((claim.affected ?? 0) === 0) {
     return { status: 'lost-race', targetType: row.targetType, targetId: row.targetId };
   }
 
   try {
     const rowsDeleted = await deleteTarget(db, row.targetType, row.targetId, organizationId);
-    await db
+    await db.manager
+      .createQueryBuilder()
       .update(deletionJobs)
       .set({
         status: 'completed',
         completedAt: new Date(),
         errorMessage: null,
-        version: sql`${deletionJobs.version} + 1`,
+        version: () => 'version + 1',
       })
-      .where(eq(deletionJobs.id, deletionJobId));
+      .where('id = :deletionJobId', { deletionJobId })
+      .execute();
     return {
       status: 'deleted',
       targetType: row.targetType,
@@ -183,14 +173,16 @@ export async function runDeletion(input: RunDeletionInput): Promise<DeletionOutc
     const permanent = error instanceof PermanentJobError;
     // Falha permanente encerra o job como `failed`; falha transitória o devolve
     // a `pending` para que a retentativa consiga reivindicá-lo de novo.
-    await db
+    await db.manager
+      .createQueryBuilder()
       .update(deletionJobs)
       .set({
         status: permanent ? 'failed' : 'pending',
         errorMessage: message.slice(0, 2_000),
-        version: sql`${deletionJobs.version} + 1`,
+        version: () => 'version + 1',
       })
-      .where(eq(deletionJobs.id, deletionJobId));
+      .where('id = :deletionJobId', { deletionJobId })
+      .execute();
     throw error;
   }
 }

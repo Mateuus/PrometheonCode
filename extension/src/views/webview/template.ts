@@ -2,11 +2,16 @@ import * as vscode from 'vscode';
 import { activeLanguage, t, webviewStrings } from '../../i18n';
 
 /**
- * JSON embutido no HTML. `<` é o único caractere capaz de encerrar a tag antes
- * da hora, e escapá-lo mantém o conteúdo válido para o `JSON.parse` do cliente.
+ * Escapa texto para dentro de um atributo HTML. É assim que o dicionário de
+ * traduções viaja: atributo é dado, e nenhuma política de script se aplica a
+ * ele — diferente de um bloco `<script>`, que a CSP pode recusar.
  */
-function escapeJson(json: string): string {
-  return json.replace(/</g, '\\u003c');
+function escapeAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 /** Nonce de uso único para liberar exatamente um script na CSP. */
@@ -64,6 +69,7 @@ const MENU_ICONS: Readonly<Record<string, string>> = {
   sliders: `<path d="M3 4.6h10M3 8h10M3 11.4h10"/><circle cx="6" cy="4.6" r="1.4"/><circle cx="10" cy="8" r="1.4"/><circle cx="5.2" cy="11.4" r="1.4"/>`,
   box: `<path d="M8 2.2 13.4 5v6L8 13.8 2.6 11V5Z"/><path d="M2.6 5 8 7.8 13.4 5M8 7.8v6"/>`,
   cloud: `<path d="M4.7 12.1a2.9 2.9 0 0 1-.3-5.8 3.7 3.7 0 0 1 7.1-.7 2.9 2.9 0 0 1 .2 5.7 2.9 2.9 0 0 1-.4 0Z"/>`,
+  globe: `<circle cx="8" cy="8" r="5.9"/><path d="M2.1 8h11.8"/><path d="M8 2.1c1.6 1.7 2.4 3.7 2.4 5.9S9.6 12.2 8 13.9C6.4 12.2 5.6 10.2 5.6 8S6.4 3.8 8 2.1Z"/>`,
   chevron: `<path d="M4.6 6.4 8 9.8l3.4-3.4"/>`,
   // Marcador dos blocos de ferramenta; gira ao expandir.
   chevronRight: `<path d="M6.2 3.8 10.6 8l-4.4 4.2"/>`,
@@ -85,9 +91,9 @@ function iconTemplates(): string {
  */
 export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   const nonce = createNonce();
-  // Dicionário do idioma ativo, indexado pelo texto em inglês. Vai como JSON
-  // inerte: a webview lê o conteúdo, e nada aqui é executado como script.
-  const strings = escapeJson(JSON.stringify(webviewStrings()));
+  // Dicionário do idioma ativo, indexado pelo texto em inglês. Vai num atributo
+  // do `body`: a webview lê o conteúdo, e nada aqui é executado como script.
+  const strings = escapeAttribute(JSON.stringify(webviewStrings()));
   const asset = (...segments: string[]): vscode.Uri =>
     webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, ...segments));
 
@@ -119,7 +125,7 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
   <link href="${styleUri.toString()}" rel="stylesheet" />
   <title>Prometheon</title>
 </head>
-<body>
+<body data-strings="${strings}">
   <div class="app">
     <header class="header">
       <img class="logo" src="${logoUri.toString()}" alt="" width="18" height="18" />
@@ -271,8 +277,6 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
       </footer>
     </div>
   </div>
-
-  <script type="application/json" id="webview-strings">${strings}</script>
 
   <template id="icon-templates">
       ${iconTemplates()}

@@ -1,38 +1,32 @@
 // Runner de migrations.
 //
-// Aplica o SQL versionado de `drizzle/`. É idempotente: o Drizzle registra em
-// `__drizzle_migrations` o que já rodou, e rodar de novo não repete nada. O
-// runner acrescenta três coisas ao comportamento padrão:
+// Aplica as migrations versionadas em `src/migrations/`. É idempotente: o
+// TypeORM registra em `typeorm_migrations` o que já rodou, e rodar de novo não
+// repete nada. O runner acrescenta três coisas ao comportamento padrão:
 //
 // 1. verifica charset e collation do banco antes de escrever;
 // 2. informa exatamente quais migrations foram aplicadas nesta execução;
 // 3. traduz falha de conexão e de permissão em mensagem acionável.
 //
+// A primeira migration é uma **baseline**: num banco que já tem o schema ela se
+// registra sem executar nada (ver `migrations/1785404582237-BaselineSchema.ts`).
+// Por isso `db:migrate` é seguro tanto num banco vazio quanto no
+// `prometheon_dev`, que já está migrado e em uso.
+//
 // Uso: `pnpm --filter @prometheon/database db:migrate`
 //      `DATABASE_NAME=outro_banco pnpm --filter @prometheon/database db:migrate`
 
-import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import process from 'node:process';
 
-import { migrate } from 'drizzle-orm/mysql2/migrator';
-import type { Pool, RowDataPacket } from 'mysql2/promise';
+import { MigrationExecutor } from 'typeorm';
 
-import { createDatabase, EXPECTED_CHARSET } from './client.js';
-import type { CreatePoolOptions } from './client.js';
-
-/** Pasta com o SQL versionado. Vale tanto rodando de `src/` quanto de `dist/`. */
-export const MIGRATIONS_FOLDER = resolve(import.meta.dirname, '..', 'drizzle');
-
-interface JournalEntry {
-  idx: number;
-  when: number;
-  tag: string;
-}
-
-interface Journal {
-  entries?: JournalEntry[];
-}
+import {
+  createDatabase,
+  EXPECTED_CHARSET,
+  type CreateDatabaseOptions,
+  type Database,
+} from './client.js';
 
 export interface MigrationResult {
   /** Nome das migrations aplicadas nesta execução. */
@@ -42,39 +36,13 @@ export interface MigrationResult {
   database: string;
 }
 
-/** Lê o journal para traduzir o carimbo gravado no banco em nome de arquivo. */
-function readJournal(folder: string): JournalEntry[] {
-  try {
-    const raw = readFileSync(join(folder, 'meta', '_journal.json'), 'utf8');
-    return (JSON.parse(raw) as Journal).entries ?? [];
-  } catch {
-    return [];
-  }
-}
-
-/** Carimbos já registrados em `__drizzle_migrations`, se a tabela existir. */
-async function readAppliedStamps(pool: Pool): Promise<number[]> {
-  try {
-    const [rows] = await pool.query<RowDataPacket[]>(
-      'SELECT created_at FROM `__drizzle_migrations`',
-    );
-    return rows.map((row) => Number(row['created_at']));
-  } catch (error) {
-    // Tabela ainda não existe: banco limpo, nenhuma migration aplicada.
-    if ((error as { code?: string }).code === 'ER_NO_SUCH_TABLE') {
-      return [];
-    }
-    throw error;
-  }
-}
-
 /** Falha cedo se o banco não estiver em utf8mb4 — acento e emoji quebrariam. */
-async function assertCharset(pool: Pool, database: string): Promise<void> {
-  const [rows] = await pool.query<RowDataPacket[]>(
+async function assertCharset(db: Database, database: string): Promise<void> {
+  const rows: { charset: string; collation: string }[] = await db.query(
     'SELECT @@character_set_database AS charset, @@collation_database AS collation',
   );
-  const charset = String(rows[0]?.['charset'] ?? '');
-  const collation = String(rows[0]?.['collation'] ?? '');
+  const charset = rows[0]?.charset ?? '';
+  const collation = rows[0]?.collation ?? '';
   if (charset !== EXPECTED_CHARSET) {
     throw new Error(
       `O banco \`${database}\` está em ${charset || 'charset desconhecido'} e o schema exige ` +
@@ -118,32 +86,32 @@ function describeConnectionError(error: unknown, database: string): string {
 }
 
 /** Aplica as migrations pendentes e devolve o que mudou. */
-export async function runMigrations(options: CreatePoolOptions = {}): Promise<MigrationResult> {
-  const { db, pool } = createDatabase({ ...options, connectionLimit: 1 });
-  const database = (pool.pool.config as { connectionConfig?: { database?: string } }).connectionConfig
-    ?.database;
-  const databaseName = options.database ?? database ?? '(desconhecido)';
+export async function runMigrations(options: CreateDatabaseOptions = {}): Promise<MigrationResult> {
+  const requested = options.database ?? '(desconhecido)';
+  let db: Database | undefined;
 
   try {
-    await assertCharset(pool, databaseName);
-    const before = await readAppliedStamps(pool);
-    await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-    const after = await readAppliedStamps(pool);
+    db = await createDatabase({ ...options, connectionLimit: 1 });
+    const databaseName = String(db.options.database ?? requested);
+    await assertCharset(db, databaseName);
 
-    const journal = readJournal(MIGRATIONS_FOLDER);
-    const beforeSet = new Set(before);
-    const applied = after
-      .filter((stamp) => !beforeSet.has(stamp))
-      .sort((left, right) => left - right)
-      .map((stamp) => journal.find((entry) => entry.when === stamp)?.tag ?? `carimbo ${stamp}`);
+    const alreadyApplied = (await new MigrationExecutor(db).getExecutedMigrations()).length;
+    // Uma transação por migration: se a segunda falhar, a primeira continua
+    // aplicada e registrada, em vez de deixar o banco num estado que a tabela
+    // de controle não descreve.
+    const executed = await db.runMigrations({ transaction: 'each' });
 
-    return { applied, alreadyApplied: before.length, database: databaseName };
+    return {
+      applied: executed.map((migration) => migration.name),
+      alreadyApplied,
+      database: databaseName,
+    };
   } catch (error) {
-    throw new Error(`Falha ao migrar \`${databaseName}\`: ${describeConnectionError(error, databaseName)}`, {
+    throw new Error(`Falha ao migrar \`${requested}\`: ${describeConnectionError(error, requested)}`, {
       cause: error,
     });
   } finally {
-    await pool.end();
+    await db?.destroy().catch(() => undefined);
   }
 }
 
@@ -151,7 +119,9 @@ export async function runMigrations(options: CreatePoolOptions = {}): Promise<Mi
 async function main(): Promise<void> {
   const result = await runMigrations();
   if (result.applied.length === 0) {
-    console.log(`Nada a fazer: \`${result.database}\` já está com as ${result.alreadyApplied} migrations aplicadas.`);
+    console.log(
+      `Nada a fazer: \`${result.database}\` já está com as ${result.alreadyApplied} migrations aplicadas.`,
+    );
     return;
   }
   console.log(`Banco \`${result.database}\`: ${result.applied.length} migration(s) aplicada(s).`);

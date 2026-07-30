@@ -15,7 +15,6 @@ export default tseslint.config(
       '**/.next/**',
       '**/node_modules/**',
       '**/coverage/**',
-      '**/drizzle/**',
       'extension/**',
       'scripts/**',
       // Tem configuração própria: Next.js exige plugins que ainda dependem do

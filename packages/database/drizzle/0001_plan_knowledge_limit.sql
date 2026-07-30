@@ -1,1 +1,0 @@
-ALTER TABLE `plans` ADD `max_knowledge_items` int DEFAULT 500 NOT NULL;

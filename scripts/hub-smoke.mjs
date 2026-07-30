@@ -6,8 +6,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import process from 'node:process';
 
-const API = 'http://127.0.0.1:3551';
-const MAIL_DIR = join(tmpdir(), 'prometheon-mail');
+// Endereço e diretório de captura são parametrizáveis, como nos outros dois
+// scripts de fumaça: com a porta padrão fixa no código, uma segunda API subida
+// para testar outra coisa seria exercitada sem ninguém perceber.
+const API = process.env.HUB_API_URL ?? 'http://127.0.0.1:3551';
+const MAIL_DIR = process.env.MAIL_CAPTURE_DIR || join(tmpdir(), 'prometheon-mail');
 const email = process.argv[2] ?? `smoke-${Date.now()}@exemplo.test`;
 const password = 'Senha-Muito-Forte-123'; // secret-scan:ignore — conta criada e apagada pelo próprio script
 

@@ -12,29 +12,36 @@ import {
   messages,
   newId,
   outboxMessages,
+  runInTransaction,
   users,
+  writable,
   type Database,
+  type Message as MessageEntity,
+  type MessagePart as MessagePartEntity,
+  type TransactionExecutor,
 } from '@prometheon/database';
-import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
+import type { SelectQueryBuilder } from 'typeorm';
 
-import { firstRow } from '../projects/repository.js';
 import type { MessagePartRow, MessageRow, ContextRefRow } from './types.js';
 
-/** Executor de dentro de uma transação. */
-export type TransactionExecutor = Parameters<Parameters<Database['transaction']>[0]>[0];
+export type { TransactionExecutor } from '@prometheon/database';
 
-const messageColumns = {
-  id: messages.id,
-  organizationId: messages.organizationId,
-  conversationId: messages.conversationId,
-  authorType: messages.authorType,
-  authorUserId: messages.authorUserId,
-  authorAgentRunId: messages.authorAgentRunId,
-  status: messages.status,
-  sequence: messages.sequence,
-  createdAt: messages.createdAt,
-  updatedAt: messages.updatedAt,
-} as const;
+/** Colunas do envelope da mensagem, com o alias que o contrato espera. */
+const MESSAGE_COLUMNS: readonly (readonly [string, string])[] = [
+  ['message.id', 'id'],
+  ['message.organizationId', 'organizationId'],
+  ['message.conversationId', 'conversationId'],
+  ['message.authorType', 'authorType'],
+  ['message.authorUserId', 'authorUserId'],
+  ['message.authorAgentRunId', 'authorAgentRunId'],
+  ['message.status', 'status'],
+  ['message.sequence', 'sequence'],
+  ['message.createdAt', 'createdAt'],
+  ['message.updatedAt', 'updatedAt'],
+  ['author.displayName', 'authorName'],
+  ['author.email', 'authorEmail'],
+  ['author.avatarUrl', 'authorAvatarUrl'],
+];
 
 export class MessageRepository {
   constructor(private readonly db: Database) {}
@@ -70,21 +77,23 @@ export class MessageRepository {
     const at = new Date();
 
     await tx
+      .createQueryBuilder()
       .update(conversations)
       .set({
-        lastSequence: sql`${conversations.lastSequence} + 1`,
-        messageCount: sql`${conversations.messageCount} + 1`,
+        lastSequence: () => 'last_sequence + 1',
+        messageCount: () => 'message_count + 1',
         lastMessageAt: at,
         updatedAt: at,
-        version: sql`${conversations.version} + 1`,
+        version: () => 'version + 1',
       })
-      .where(and(eq(conversations.id, conversationId), isNull(conversations.deletedAt)));
+      .where('id = :conversationId', { conversationId })
+      .andWhere('deleted_at IS NULL')
+      .execute();
 
-    const rows = await tx
-      .select({ lastSequence: conversations.lastSequence })
-      .from(conversations)
-      .where(eq(conversations.id, conversationId))
-      .limit(1);
+    const rows: { lastSequence: number | string }[] = await tx.query(
+      'SELECT last_sequence AS lastSequence FROM conversations WHERE id = ? LIMIT 1',
+      [conversationId],
+    );
 
     const sequence = rows[0]?.lastSequence;
 
@@ -94,7 +103,7 @@ export class MessageRepository {
       throw new Error(`A conversa ${conversationId} não existe mais.`);
     }
 
-    return sequence;
+    return Number(sequence);
   }
 
   /**
@@ -119,13 +128,13 @@ export class MessageRepository {
   }): Promise<{ messageId: string; sequence: number }> {
     const messageId = newId();
 
-    return this.db.transaction(async (tx) => {
+    return runInTransaction(this.db, async (tx) => {
       // Primeiro o número: ele toma o lock da conversa e define a ordem em que
       // escritas concorrentes vão acontecer daqui para a frente.
       const sequence = await MessageRepository.nextSequence(tx, input.conversationId);
       const createdAt = new Date();
 
-      await tx.insert(messages).values({
+      await tx.insert(messages, {
         id: messageId,
         organizationId: input.organizationId,
         conversationId: input.conversationId,
@@ -139,23 +148,27 @@ export class MessageRepository {
       });
 
       if (input.parts.length > 0) {
-        await tx.insert(messageParts).values(
-          input.parts.map((part) => ({
-            id: newId(),
-            organizationId: input.organizationId,
-            messageId,
-            sequence: part.sequence,
-            type: part.type,
-            content: part.content,
-            payload: part.payload,
-            toolName: part.toolName,
-            createdAt,
-          })),
+        await tx.insert(
+          messageParts,
+          input.parts.map((part) =>
+            writable<MessagePartEntity>({
+              id: newId(),
+              organizationId: input.organizationId,
+              messageId,
+              sequence: part.sequence,
+              type: part.type,
+              content: part.content,
+              payload: part.payload,
+              toolName: part.toolName,
+              createdAt,
+            }),
+          ),
         );
       }
 
       if (input.contextRefs.length > 0) {
-        await tx.insert(messageContextRefs).values(
+        await tx.insert(
+          messageContextRefs,
           input.contextRefs.map((ref) => ({
             id: newId(),
             organizationId: input.organizationId,
@@ -182,29 +195,22 @@ export class MessageRepository {
    * tabela só para lembrar de comandos repetidos.
    */
   async findByIdempotencyKey(dedupeKey: string): Promise<string | undefined> {
-    const rows = await this.db
-      .select({ payload: outboxMessages.payload })
-      .from(outboxMessages)
-      .where(eq(outboxMessages.dedupeKey, dedupeKey))
-      .limit(1);
+    const row = await this.db.manager
+      .createQueryBuilder(outboxMessages, 'outbox')
+      .select('outbox.payload')
+      .where('outbox.dedupeKey = :dedupeKey', { dedupeKey })
+      .getOne();
 
-    const messageId = rows[0]?.payload['messageId'];
+    const messageId = row?.payload['messageId'];
 
     return typeof messageId === 'string' ? messageId : undefined;
   }
 
   async findById(messageId: string): Promise<MessageRow | undefined> {
-    const rows = await this.db
-      .select({
-        ...messageColumns,
-        authorName: users.displayName,
-        authorEmail: users.email,
-        authorAvatarUrl: users.avatarUrl,
-      })
-      .from(messages)
-      .leftJoin(users, eq(users.id, messages.authorUserId))
-      .where(and(eq(messages.id, messageId), isNull(messages.deletedAt)))
-      .limit(1);
+    const rows = await this.messageQuery()
+      .andWhere('message.id = :messageId', { messageId })
+      .limit(1)
+      .getRawMany<MessageRow>();
 
     return rows[0];
   }
@@ -225,37 +231,35 @@ export class MessageRepository {
     authorType: 'user' | 'agent' | 'system' | undefined;
   }): Promise<MessageRow[]> {
     const ascending = input.afterSequence !== undefined;
-    const conditions = [
-      eq(messages.conversationId, input.conversationId),
-      isNull(messages.deletedAt),
-    ];
+    const query = this.messageQuery().andWhere(
+      'message.conversation_id = :conversationId',
+      { conversationId: input.conversationId },
+    );
 
     if (input.authorType !== undefined) {
-      conditions.push(eq(messages.authorType, input.authorType));
+      query.andWhere('message.author_type = :authorType', { authorType: input.authorType });
     }
 
     if (ascending) {
-      conditions.push(gt(messages.sequence, input.afterSequence ?? 0));
+      query.andWhere('message.sequence > :afterSequence', {
+        afterSequence: input.afterSequence ?? 0,
+      });
 
       if (input.cursorSequence !== undefined) {
-        conditions.push(gt(messages.sequence, input.cursorSequence));
+        query.andWhere('message.sequence > :cursorSequence', {
+          cursorSequence: input.cursorSequence,
+        });
       }
     } else if (input.cursorSequence !== undefined) {
-      conditions.push(lt(messages.sequence, input.cursorSequence));
+      query.andWhere('message.sequence < :cursorSequence', {
+        cursorSequence: input.cursorSequence,
+      });
     }
 
-    return this.db
-      .select({
-        ...messageColumns,
-        authorName: users.displayName,
-        authorEmail: users.email,
-        authorAvatarUrl: users.avatarUrl,
-      })
-      .from(messages)
-      .leftJoin(users, eq(users.id, messages.authorUserId))
-      .where(and(...conditions))
-      .orderBy(ascending ? asc(messages.sequence) : desc(messages.sequence))
-      .limit(input.limit + 1);
+    return query
+      .orderBy('message.sequence', ascending ? 'ASC' : 'DESC')
+      .limit(input.limit + 1)
+      .getRawMany<MessageRow>();
   }
 
   async partsOf(messageIds: string[]): Promise<Map<string, MessagePartRow[]>> {
@@ -263,21 +267,23 @@ export class MessageRepository {
       return new Map();
     }
 
-    const rows = await this.db
-      .select({
-        id: messageParts.id,
-        messageId: messageParts.messageId,
-        sequence: messageParts.sequence,
-        type: messageParts.type,
-        content: messageParts.content,
-        payload: messageParts.payload,
-        toolName: messageParts.toolName,
-      })
-      .from(messageParts)
-      .where(inArray(messageParts.messageId, messageIds))
-      .orderBy(asc(messageParts.messageId), asc(messageParts.sequence));
+    const rows = await this.db.manager
+      .createQueryBuilder(messageParts, 'part')
+      .select([
+        'part.id',
+        'part.messageId',
+        'part.sequence',
+        'part.type',
+        'part.content',
+        'part.payload',
+        'part.toolName',
+      ])
+      .where('part.messageId IN (:...messageIds)', { messageIds })
+      .orderBy('part.messageId', 'ASC')
+      .addOrderBy('part.sequence', 'ASC')
+      .getMany();
 
-    return groupBy(rows, (row) => row.messageId);
+    return groupBy(rows as MessagePartRow[], (row) => row.messageId);
   }
 
   async contextRefsOf(messageIds: string[]): Promise<Map<string, ContextRefRow[]>> {
@@ -285,27 +291,46 @@ export class MessageRepository {
       return new Map();
     }
 
-    const rows = await this.db
-      .select({
-        id: messageContextRefs.id,
-        messageId: messageContextRefs.messageId,
-        refType: messageContextRefs.refType,
-        refId: messageContextRefs.refId,
-        label: messageContextRefs.label,
-      })
-      .from(messageContextRefs)
-      .where(inArray(messageContextRefs.messageId, messageIds));
+    const rows = await this.db.manager
+      .createQueryBuilder(messageContextRefs, 'ref')
+      .select(['ref.id', 'ref.messageId', 'ref.refType', 'ref.refId', 'ref.label'])
+      .where('ref.messageId IN (:...messageIds)', { messageIds })
+      .getMany();
 
-    return groupBy(rows, (row) => row.messageId);
+    return groupBy(rows as ContextRefRow[], (row) => row.messageId);
   }
 
   /** Sequência de uma mensagem, para montar o cursor a partir do ID. */
   async sequenceOf(messageId: string): Promise<number | undefined> {
-    const rows = await this.db.execute<{ sequence: number }>(
-      sql`select sequence from messages where id = ${messageId} limit 1`,
+    const rows: { sequence: number | string }[] = await this.db.query(
+      'select sequence from messages where id = ? limit 1',
+      [messageId],
     );
 
-    return firstRow<{ sequence: number }>(rows)?.sequence;
+    const sequence = rows[0]?.sequence;
+    return sequence === undefined ? undefined : Number(sequence);
+  }
+
+  /**
+   * Base das leituras de mensagem: envelope + autor.
+   *
+   * É `getRawMany` porque o resultado mistura colunas de duas tabelas — o
+   * contrato de mensagem carrega nome, e-mail e avatar de quem escreveu, e uma
+   * entidade hidratada não comporta isso sem inventar uma relação que o schema
+   * não tem (o autor pode ser um agente, sem linha em `users`).
+   */
+  private messageQuery(): SelectQueryBuilder<MessageEntity> {
+    const query = this.db.manager
+      .createQueryBuilder(messages, 'message')
+      .select([])
+      .leftJoin(users.options.name, 'author', 'author.id = message.authorUserId')
+      .where('message.deletedAt IS NULL');
+
+    for (const [column, alias] of MESSAGE_COLUMNS) {
+      query.addSelect(column, alias);
+    }
+
+    return query;
   }
 }
 

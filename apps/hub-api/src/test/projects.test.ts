@@ -8,7 +8,7 @@
  */
 
 import { newId, organizationMembers, projectMembers, roles } from '@prometheon/database';
-import { and, eq, isNull } from 'drizzle-orm';
+import { IsNull } from 'typeorm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -72,21 +72,19 @@ describe.skipIf(!probe.ok)('projetos', () => {
   }
 
   async function setRole(userId: string, slug: string): Promise<void> {
-    const role = await harness.app.db
-      .select({ id: roles.id })
-      .from(roles)
-      .where(and(isNull(roles.organizationId), eq(roles.slug, slug)))
-      .limit(1);
+    const role = await harness.app.db.manager.find(roles, {
+      select: { id: true },
+      where: { organizationId: IsNull(), slug },
+      take: 1,
+    });
 
-    await harness.app.db
+    await harness.app.db.manager
+      .createQueryBuilder()
       .update(organizationMembers)
       .set({ roleId: role[0]?.id ?? '' })
-      .where(
-        and(
-          eq(organizationMembers.organizationId, organizationId),
-          eq(organizationMembers.userId, userId),
-        ),
-      );
+      .where('organization_id = :organizationId', { organizationId })
+      .andWhere('user_id = :userId', { userId })
+      .execute();
   }
 
   beforeAll(async () => {
@@ -293,8 +291,10 @@ describe.skipIf(!probe.ok)('projetos', () => {
     it('nega o developer mesmo depois de entrar no projeto', async () => {
       // O developer vira membro do projeto para provar que a negação vem da
       // permissão, e não da participação.
-      await harness.app.db
-        .insert(projectMembers)
+      await harness.app.db.manager
+        .createQueryBuilder()
+        .insert()
+        .into(projectMembers)
         .values({
           id: newId(),
           organizationId,
@@ -302,7 +302,10 @@ describe.skipIf(!probe.ok)('projetos', () => {
           userId: outsiderMember.userId,
           status: 'active',
         })
-        .onDuplicateKeyUpdate({ set: { status: 'active' } });
+        // `ON DUPLICATE KEY UPDATE status = VALUES(status)`: se o vínculo já
+        // existe, ele volta a valer em vez de a inserção falhar pelo unique.
+        .orUpdate(['status'])
+        .execute();
 
       const response = await harness.app.inject({
         method: 'PATCH',

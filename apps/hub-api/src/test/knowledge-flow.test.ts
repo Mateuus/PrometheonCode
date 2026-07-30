@@ -19,8 +19,10 @@ import {
   projects,
   roles,
   securityEvents,
+  writable,
+  type Organization,
 } from '@prometheon/database';
-import { and, eq, isNull } from 'drizzle-orm';
+import { IsNull } from 'typeorm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -50,7 +52,7 @@ describe.skipIf(!probe.ok)('knowledge proposal, review and approval', () => {
 
     projectId = newId();
 
-    await harness.app.db.insert(projects).values({
+    await harness.app.db.manager.insert(projects, {
       id: projectId,
       organizationId: owner.organizationId,
       slug: 'brain',
@@ -211,14 +213,10 @@ describe.skipIf(!probe.ok)('knowledge proposal, review and approval', () => {
     expect(afterSecond.currentVersion?.content).toContain('jitter');
 
     // A versão anterior continua no banco, íntegra e marcada como aposentada.
-    const stored = await harness.app.db
-      .select({
-        versionNumber: knowledgeVersions.versionNumber,
-        status: knowledgeVersions.status,
-        content: knowledgeVersions.content,
-      })
-      .from(knowledgeVersions)
-      .where(eq(knowledgeVersions.knowledgeItemId, first.item.id));
+    const stored = await harness.app.db.manager.find(knowledgeVersions, {
+      select: { versionNumber: true, status: true, content: true },
+      where: { knowledgeItemId: first.item.id },
+    });
 
     expect(stored).toHaveLength(2);
 
@@ -265,16 +263,18 @@ describe.skipIf(!probe.ok)('knowledge proposal, review and approval', () => {
   it('refuses self approval when the author lacks knowledge.approve', async () => {
     // A política da organização é a camada mais alta do `Docs/09`: ela nega
     // `knowledge.approve` para todos, inclusive para o dono.
-    await harness.app.db
+    await harness.app.db.manager
+      .createQueryBuilder()
       .update(organizations)
-      .set({ policy: { deny: ['knowledge.approve'] } })
-      .where(eq(organizations.id, owner.organizationId));
+      .set(writable<Organization>({ policy: { deny: ['knowledge.approve'] } }))
+      .where('id = :id', { id: owner.organizationId })
+      .execute();
 
-    const reviewerRole = await harness.app.db
-      .select({ id: roles.id })
-      .from(roles)
-      .where(and(eq(roles.slug, 'reviewer'), isNull(roles.organizationId)))
-      .limit(1);
+    const reviewerRole = await harness.app.db.manager.find(roles, {
+      select: { id: true },
+      where: { slug: 'reviewer', organizationId: IsNull() },
+      take: 1,
+    });
 
     const teammate = await registerAndLogin(harness, {
       name: 'Knowledge Reviewer',
@@ -282,7 +282,7 @@ describe.skipIf(!probe.ok)('knowledge proposal, review and approval', () => {
       password: 'Sup3r-S3nha-F0rte!',
     });
 
-    await harness.app.db.insert(organizationMembers).values({
+    await harness.app.db.manager.insert(organizationMembers, {
       id: newId(),
       organizationId: owner.organizationId,
       userId: teammate.userId,
@@ -314,10 +314,10 @@ describe.skipIf(!probe.ok)('knowledge proposal, review and approval', () => {
       ).toContain('knowledge.approve');
 
       // A tentativa de carimbar a própria proposta vira evento de segurança.
-      const events = await harness.app.db
-        .select({ type: securityEvents.type })
-        .from(securityEvents)
-        .where(eq(securityEvents.organizationId, owner.organizationId));
+      const events = await harness.app.db.manager.find(securityEvents, {
+        select: { type: true },
+        where: { organizationId: owner.organizationId },
+      });
 
       expect(events.map((event) => event.type)).toContain('knowledge.self_approval_denied');
 
@@ -337,10 +337,12 @@ describe.skipIf(!probe.ok)('knowledge proposal, review and approval', () => {
     } finally {
       // A política volta ao normal mesmo se a asserção falhar: sem isto, um
       // teste vermelho contamina todos os seguintes.
-      await harness.app.db
+      await harness.app.db.manager
+        .createQueryBuilder()
         .update(organizations)
         .set({ policy: null })
-        .where(eq(organizations.id, owner.organizationId));
+        .where('id = :id', { id: owner.organizationId })
+        .execute();
     }
   });
 
@@ -380,10 +382,10 @@ describe.skipIf(!probe.ok)('knowledge proposal, review and approval', () => {
       payload: { decision: 'approve', version: created.item.version },
     });
 
-    const events = await harness.app.db
-      .select({ eventType: outboxMessages.eventType, aggregateId: outboxMessages.aggregateId })
-      .from(outboxMessages)
-      .where(eq(outboxMessages.aggregateId, created.item.id));
+    const events = await harness.app.db.manager.find(outboxMessages, {
+      select: { eventType: true, aggregateId: true },
+      where: { aggregateId: created.item.id },
+    });
 
     const types = events.map((event) => event.eventType);
 

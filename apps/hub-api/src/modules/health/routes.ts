@@ -54,7 +54,6 @@ export const healthRoutes: FastifyPluginCallbackZod = (app, _options, done) => {
     async (_request, reply) => {
       const report = await checkReadiness({
         db: app.db,
-        pool: app.pool,
         redis: app.redis,
         mailer: app.mailer,
       });

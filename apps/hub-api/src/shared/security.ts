@@ -10,7 +10,13 @@
  * lugar mais fácil do sistema para um segredo vazar sem ninguém notar.
  */
 
-import { newId, securityEvents, type Database } from '@prometheon/database';
+import {
+  newId,
+  securityEvents,
+  writable,
+  type Database,
+  type SecurityEvent,
+} from '@prometheon/database';
 import { child } from '@prometheon/logger';
 import type { FastifyRequest } from 'fastify';
 
@@ -31,17 +37,20 @@ export async function recordSecurityEvent(
   entry: SecurityEventEntry,
 ): Promise<void> {
   try {
-    await db.insert(securityEvents).values({
-      id: newId(),
-      organizationId: entry.organizationId,
-      userId: entry.userId,
-      type: entry.type,
-      severity: entry.severity ?? 'low',
-      ip: entry.ip ?? null,
-      userAgent: entry.userAgent ?? null,
-      details: entry.details ?? null,
-      occurredAt: new Date(),
-    });
+    await db.manager.insert(
+      securityEvents,
+      writable<SecurityEvent>({
+        id: newId(),
+        organizationId: entry.organizationId,
+        userId: entry.userId,
+        type: entry.type,
+        severity: entry.severity ?? 'low',
+        ip: entry.ip ?? null,
+        userAgent: entry.userAgent ?? null,
+        details: entry.details ?? null,
+        occurredAt: new Date(),
+      }),
+    );
   } catch (error) {
     // Falhar ao registrar não pode derrubar a operação que gerou o evento — mas
     // também não pode passar em silêncio, porque é perda de rastro.

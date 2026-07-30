@@ -16,41 +16,55 @@ import {
   projectSettings,
   projects,
   roles,
+  runInTransaction,
   users,
+  writable,
   type Database,
+  type Project,
 } from '@prometheon/database';
-import { and, desc, eq, isNull, like, lt, or, sql, type SQL } from 'drizzle-orm';
 
-import { decodeCursor, type CursorPayload } from '../../shared/cursor.js';
+import { decodeCursor } from '../../shared/cursor.js';
+import { affectedRows, applyKeyset, escapeLike } from '../../shared/query.js';
 import type { ProjectMemberRow, ProjectRow, ProjectSettingsRow } from './types.js';
 
-/** Executor: o `Database` ou a transação aberta por quem chama. */
-export type Executor = Pick<Database, 'select' | 'insert' | 'update' | 'delete' | 'execute'>;
+/** Colunas que o contrato de projeto expõe. Lista explícita: nada de `SELECT *`. */
+const PROJECT_COLUMNS = [
+  'id',
+  'organizationId',
+  'slug',
+  'name',
+  'description',
+  'status',
+  'visibility',
+  'tags',
+  'createdAt',
+  'updatedAt',
+  'createdBy',
+  'version',
+] as const;
 
-const projectColumns = {
-  id: projects.id,
-  organizationId: projects.organizationId,
-  slug: projects.slug,
-  name: projects.name,
-  description: projects.description,
-  status: projects.status,
-  visibility: projects.visibility,
-  tags: projects.tags,
-  createdAt: projects.createdAt,
-  updatedAt: projects.updatedAt,
-  createdBy: projects.createdBy,
-  version: projects.version,
-} as const;
+/** Colunas de `project_settings` que compõem `ProjectSettingsRow`. */
+const SETTINGS_COLUMNS = [
+  'defaultWorkMode',
+  'defaultAutonomy',
+  'contextBudgetTokens',
+  'allowRemoteAgents',
+  'requireReview',
+  'retentionDays',
+  'policy',
+] as const;
 
-const settingsColumns = {
-  defaultWorkMode: projectSettings.defaultWorkMode,
-  defaultAutonomy: projectSettings.defaultAutonomy,
-  contextBudgetTokens: projectSettings.contextBudgetTokens,
-  allowRemoteAgents: projectSettings.allowRemoteAgents,
-  requireReview: projectSettings.requireReview,
-  retentionDays: projectSettings.retentionDays,
-  policy: projectSettings.policy,
-} as const;
+/**
+ * Colunas do projeto em SQL cru, com o alias que `ProjectRow` espera.
+ *
+ * As duas leituras que chegam ao projeto por outra tabela (conversa e tarefa)
+ * são escritas à mão porque o schema não declara relação entre as entidades —
+ * ver `findByConversation()`.
+ */
+const PROJECT_COLUMNS_SQL = `p.id, p.organization_id as organizationId, p.slug, p.name,
+             p.description, p.status, p.visibility, p.tags,
+             p.created_at as createdAt, p.updated_at as updatedAt,
+             p.created_by as createdBy, p.version`;
 
 export interface ProjectListFilters {
   readonly status?: 'active' | 'paused' | 'archived' | undefined;
@@ -63,6 +77,17 @@ export interface ProjectRepositoryRow {
   provider: 'github' | 'gitlab' | 'bitbucket' | 'azure_devops';
   remoteUrl: string;
   defaultBranch: string;
+  rootPath: string | null;
+}
+
+/** Linha crua do join entre `project_repositories` e `git_repositories`. */
+interface RepositoryLinkRow {
+  id: string;
+  provider: ProjectRepositoryRow['provider'];
+  cloneUrl: string | null;
+  htmlUrl: string | null;
+  repositoryBranch: string;
+  overrideBranch: string | null;
   rootPath: string | null;
 }
 
@@ -86,112 +111,121 @@ export class ProjectRepository {
     filters: ProjectListFilters;
   }): Promise<ProjectRow[]> {
     const after = input.cursor === undefined ? undefined : decodeCursor(input.cursor);
-    const conditions: (SQL | undefined)[] = [
-      eq(projects.organizationId, input.organizationId),
-      isNull(projects.deletedAt),
-      keysetCondition(projects.createdAt, projects.id, after),
-    ];
+    const query = this.db.manager
+      .createQueryBuilder(projects, 'project')
+      .select(PROJECT_COLUMNS.map((column) => `project.${column}`))
+      .leftJoin(
+        projectMembers.options.name,
+        'member',
+        `member.projectId = project.id
+           and member.userId = :userId
+           and member.status = 'active'`,
+        { userId: input.userId },
+      )
+      .where('project.organizationId = :organizationId', {
+        organizationId: input.organizationId,
+      })
+      .andWhere('project.deletedAt IS NULL');
+
+    applyKeyset(query, 'project', { createdAt: 'createdAt', id: 'id' }, after);
 
     if (input.filters.status !== undefined) {
-      conditions.push(eq(projects.status, input.filters.status));
+      query.andWhere('project.status = :status', { status: input.filters.status });
     }
 
     if (input.filters.search !== undefined && input.filters.search !== '') {
-      conditions.push(like(projects.name, `%${escapeLike(input.filters.search)}%`));
+      query.andWhere('project.name LIKE :search', {
+        search: `%${escapeLike(input.filters.search)}%`,
+      });
     }
 
     if (input.filters.tag !== undefined && input.filters.tag !== '') {
       // `JSON_CONTAINS` casa com o elemento inteiro, não com um pedaço dele —
       // `?tag=api` não pode trazer o projeto etiquetado como `api-gateway`.
-      conditions.push(
-        sql`json_contains(${projects.tags}, ${JSON.stringify(input.filters.tag)})`,
-      );
+      query.andWhere('json_contains(project.tags, :tag)', {
+        tag: JSON.stringify(input.filters.tag),
+      });
     }
 
     if (!input.canSeeEveryProject) {
-      conditions.push(
-        and(eq(projectMembers.userId, input.userId), eq(projectMembers.status, 'active')),
-      );
+      // Exigir a linha do `LEFT JOIN` transforma o join em filtro: sem
+      // participação ativa, o projeto some da consulta — não da resposta.
+      query.andWhere('member.id IS NOT NULL');
     }
 
-    return this.db
-      .select(projectColumns)
-      .from(projects)
-      .leftJoin(
-        projectMembers,
-        and(
-          eq(projectMembers.projectId, projects.id),
-          eq(projectMembers.userId, input.userId),
-          eq(projectMembers.status, 'active'),
-        ),
-      )
-      .where(and(...conditions))
-      .orderBy(desc(projects.createdAt), desc(projects.id))
-      .limit(input.limit + 1);
+    return query
+      .orderBy('project.createdAt', 'DESC')
+      .addOrderBy('project.id', 'DESC')
+      .limit(input.limit + 1)
+      .getMany();
   }
 
   async findById(projectId: string): Promise<ProjectRow | undefined> {
-    const rows = await this.db
-      .select(projectColumns)
-      .from(projects)
-      .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
-      .limit(1);
+    const row = await this.db.manager
+      .createQueryBuilder(projects, 'project')
+      .select(PROJECT_COLUMNS.map((column) => `project.${column}`))
+      .where('project.id = :projectId', { projectId })
+      .andWhere('project.deletedAt IS NULL')
+      .getOne();
+
+    return row ?? undefined;
+  }
+
+  /**
+   * Projeto dono de uma conversa. Usado pelo guarda das rotas de conversa.
+   *
+   * SQL cru: as entidades não declaram relação entre conversa e projeto (o
+   * mapeamento é explícito, sem `relations`), então o join precisa ser escrito.
+   */
+  async findByConversation(conversationId: string): Promise<ProjectRow | undefined> {
+    const rows: ProjectRow[] = await this.db.query(
+      `select ${PROJECT_COLUMNS_SQL}
+         from conversations c
+         join projects p on p.id = c.project_id
+        where c.id = ?
+          and c.deleted_at is null
+          and p.deleted_at is null
+        limit 1`,
+      [conversationId],
+    );
 
     return rows[0];
   }
 
-  /** Projeto dono de uma conversa. Usado pelo guarda das rotas de conversa. */
-  async findByConversation(conversationId: string): Promise<ProjectRow | undefined> {
-    const rows = await this.db.execute<ProjectRow>(sql`
-      select p.id, p.organization_id as organizationId, p.slug, p.name, p.description,
-             p.status, p.visibility, p.tags, p.created_at as createdAt,
-             p.updated_at as updatedAt, p.created_by as createdBy, p.version
-        from conversations c
-        join projects p on p.id = c.project_id
-       where c.id = ${conversationId}
-         and c.deleted_at is null
-         and p.deleted_at is null
-       limit 1
-    `);
-
-    return firstRow(rows);
-  }
-
-  /** Projeto dono de uma tarefa. */
+  /** Projeto dono de uma tarefa. Mesma razão para o SQL cru de `findByConversation()`. */
   async findByTask(taskId: string): Promise<ProjectRow | undefined> {
-    const rows = await this.db.execute<ProjectRow>(sql`
-      select p.id, p.organization_id as organizationId, p.slug, p.name, p.description,
-             p.status, p.visibility, p.tags, p.created_at as createdAt,
-             p.updated_at as updatedAt, p.created_by as createdBy, p.version
-        from tasks t
-        join projects p on p.id = t.project_id
-       where t.id = ${taskId}
-         and p.deleted_at is null
-       limit 1
-    `);
+    const rows: ProjectRow[] = await this.db.query(
+      `select ${PROJECT_COLUMNS_SQL}
+         from tasks t
+         join projects p on p.id = t.project_id
+        where t.id = ?
+          and p.deleted_at is null
+        limit 1`,
+      [taskId],
+    );
 
-    return firstRow(rows);
+    return rows[0];
   }
 
   /** Política da organização, para reavaliar uma permissão extra na mesma rota. */
   async findOrganizationPolicy(organizationId: string): Promise<Record<string, unknown> | null> {
-    const rows = await this.db
-      .select({ policy: organizations.policy })
-      .from(organizations)
-      .where(eq(organizations.id, organizationId))
-      .limit(1);
+    const row = await this.db.manager
+      .createQueryBuilder(organizations, 'organization')
+      .select('organization.policy')
+      .where('organization.id = :organizationId', { organizationId })
+      .getOne();
 
-    return rows[0]?.policy ?? null;
+    return row?.policy ?? null;
   }
 
   async findSettings(projectId: string): Promise<ProjectSettingsRow | undefined> {
-    const rows = await this.db
-      .select(settingsColumns)
-      .from(projectSettings)
-      .where(eq(projectSettings.projectId, projectId))
-      .limit(1);
+    const row = await this.db.manager
+      .createQueryBuilder(projectSettings, 'settings')
+      .select(SETTINGS_COLUMNS.map((column) => `settings.${column}`))
+      .where('settings.projectId = :projectId', { projectId })
+      .getOne();
 
-    return rows[0];
+    return row ?? undefined;
   }
 
   /** Configuração de vários projetos de uma vez, para não repetir consulta na listagem. */
@@ -200,54 +234,62 @@ export class ProjectRepository {
       return new Map();
     }
 
-    const rows = await this.db
-      .select({ projectId: projectSettings.projectId, ...settingsColumns })
-      .from(projectSettings)
-      .where(
-        or(...projectIds.map((projectId) => eq(projectSettings.projectId, projectId))),
-      );
+    const rows = await this.db.manager
+      .createQueryBuilder(projectSettings, 'settings')
+      .select([
+        'settings.projectId',
+        ...SETTINGS_COLUMNS.map((column) => `settings.${column}`),
+      ])
+      .where('settings.projectId IN (:...projectIds)', { projectIds })
+      .getMany();
 
     return new Map(rows.map(({ projectId, ...settings }) => [projectId, settings]));
   }
 
   async findMember(projectId: string, userId: string): Promise<ProjectMemberRow | undefined> {
-    const rows = await this.db
-      .select({
-        id: projectMembers.id,
-        projectId: projectMembers.projectId,
-        userId: projectMembers.userId,
-        roleSlug: roles.slug,
-        status: projectMembers.status,
-        createdAt: projectMembers.createdAt,
-        userName: users.displayName,
-        userEmail: users.email,
-        userAvatarUrl: users.avatarUrl,
-      })
-      .from(projectMembers)
-      .innerJoin(users, eq(users.id, projectMembers.userId))
-      .leftJoin(roles, eq(roles.id, projectMembers.roleId))
-      .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)))
-      .limit(1);
+    // `getRawMany` porque o resultado mistura três tabelas — o contrato do
+    // membro carrega o slug do papel e o nome, o e-mail e o avatar da pessoa.
+    const rows = await this.db.manager
+      .createQueryBuilder(projectMembers, 'member')
+      .select('member.id', 'id')
+      .addSelect('member.projectId', 'projectId')
+      .addSelect('member.userId', 'userId')
+      .addSelect('role.slug', 'roleSlug')
+      .addSelect('member.status', 'status')
+      .addSelect('member.createdAt', 'createdAt')
+      .addSelect('account.displayName', 'userName')
+      .addSelect('account.email', 'userEmail')
+      .addSelect('account.avatarUrl', 'userAvatarUrl')
+      .innerJoin(users.options.name, 'account', 'account.id = member.userId')
+      .leftJoin(roles.options.name, 'role', 'role.id = member.roleId')
+      .where('member.projectId = :projectId', { projectId })
+      .andWhere('member.userId = :userId', { userId })
+      .limit(1)
+      .getRawMany<ProjectMemberRow>();
 
     return rows[0];
   }
 
   /** Repositórios ligados ao projeto, já no formato do contrato. */
   async listRepositories(projectId: string): Promise<ProjectRepositoryRow[]> {
-    const rows = await this.db
-      .select({
-        id: projectRepositories.id,
-        provider: gitRepositories.provider,
-        cloneUrl: gitRepositories.cloneUrl,
-        htmlUrl: gitRepositories.htmlUrl,
-        repositoryBranch: gitRepositories.defaultBranch,
-        overrideBranch: projectRepositories.defaultBranch,
-        rootPath: projectRepositories.rootPath,
-      })
-      .from(projectRepositories)
-      .innerJoin(gitRepositories, eq(gitRepositories.id, projectRepositories.gitRepositoryId))
-      .where(eq(projectRepositories.projectId, projectId))
-      .orderBy(desc(projectRepositories.isPrimary), desc(projectRepositories.createdAt));
+    const rows = await this.db.manager
+      .createQueryBuilder(projectRepositories, 'link')
+      .select('link.id', 'id')
+      .addSelect('repository.provider', 'provider')
+      .addSelect('repository.cloneUrl', 'cloneUrl')
+      .addSelect('repository.htmlUrl', 'htmlUrl')
+      .addSelect('repository.defaultBranch', 'repositoryBranch')
+      .addSelect('link.defaultBranch', 'overrideBranch')
+      .addSelect('link.rootPath', 'rootPath')
+      .innerJoin(
+        gitRepositories.options.name,
+        'repository',
+        'repository.id = link.gitRepositoryId',
+      )
+      .where('link.projectId = :projectId', { projectId })
+      .orderBy('link.isPrimary', 'DESC')
+      .addOrderBy('link.createdAt', 'DESC')
+      .getRawMany<RepositoryLinkRow>();
 
     return rows.flatMap((row) => {
       const remoteUrl = row.cloneUrl ?? row.htmlUrl;
@@ -271,17 +313,14 @@ export class ProjectRepository {
   }
 
   async slugExists(organizationId: string, slug: string, exceptId?: string): Promise<boolean> {
-    const rows = await this.db
-      .select({ id: projects.id })
-      .from(projects)
-      .where(
-        and(
-          eq(projects.organizationId, organizationId),
-          eq(projects.slug, slug),
-          isNull(projects.deletedAt),
-        ),
-      )
-      .limit(2);
+    const rows = await this.db.manager
+      .createQueryBuilder(projects, 'project')
+      .select('project.id')
+      .where('project.organizationId = :organizationId', { organizationId })
+      .andWhere('project.slug = :slug', { slug })
+      .andWhere('project.deletedAt IS NULL')
+      .limit(2)
+      .getMany();
 
     return rows.some((row) => row.id !== exceptId);
   }
@@ -306,21 +345,24 @@ export class ProjectRepository {
     const projectId = newId();
     const createdAt = new Date();
 
-    await this.db.transaction(async (tx) => {
-      await tx.insert(projects).values({
-        id: projectId,
-        organizationId: input.organizationId,
-        slug: input.slug,
-        name: input.name,
-        description: input.description,
-        visibility: input.visibility,
-        tags: input.tags,
-        createdBy: input.createdBy,
-        createdAt,
-        updatedAt: createdAt,
-      });
+    await runInTransaction(this.db, async (tx) => {
+      await tx.insert(
+        projects,
+        writable<Project>({
+          id: projectId,
+          organizationId: input.organizationId,
+          slug: input.slug,
+          name: input.name,
+          description: input.description,
+          visibility: input.visibility,
+          tags: input.tags,
+          createdBy: input.createdBy,
+          createdAt,
+          updatedAt: createdAt,
+        }),
+      );
 
-      await tx.insert(projectSettings).values({
+      await tx.insert(projectSettings, {
         id: newId(),
         organizationId: input.organizationId,
         projectId,
@@ -337,7 +379,7 @@ export class ProjectRepository {
       // na organização. Fixar um papel aqui congelaria a permissão do criador
       // no momento da criação, e uma mudança de papel na organização deixaria
       // de valer dentro do projeto.
-      await tx.insert(projectMembers).values({
+      await tx.insert(projectMembers, {
         id: newId(),
         organizationId: input.organizationId,
         projectId,
@@ -365,16 +407,19 @@ export class ProjectRepository {
     fields: Record<string, unknown>;
     settings: Record<string, unknown>;
   }): Promise<boolean> {
-    return this.db.transaction(async (tx) => {
+    return runInTransaction(this.db, async (tx) => {
       const result = await tx
+        .createQueryBuilder()
         .update(projects)
         .set({
           ...input.fields,
           ...(input.fields['status'] === 'archived' ? { archivedAt: new Date() } : {}),
-          version: sql`${projects.version} + 1`,
+          version: () => 'version + 1',
           updatedAt: new Date(),
         })
-        .where(and(eq(projects.id, input.projectId), eq(projects.version, input.version)));
+        .where('id = :id', { id: input.projectId })
+        .andWhere('version = :version', { version: input.version })
+        .execute();
 
       if (affectedRows(result) === 0) {
         return false;
@@ -382,68 +427,14 @@ export class ProjectRepository {
 
       if (Object.keys(input.settings).length > 0) {
         await tx
+          .createQueryBuilder()
           .update(projectSettings)
           .set({ ...input.settings, updatedAt: new Date() })
-          .where(eq(projectSettings.projectId, input.projectId));
+          .where('project_id = :projectId', { projectId: input.projectId })
+          .execute();
       }
 
       return true;
     });
   }
-}
-
-/** Linhas afetadas por um `UPDATE` do Drizzle no driver do MySQL. */
-export function affectedRows(result: unknown): number {
-  const header = (result as [{ affectedRows?: number }])[0];
-
-  return header.affectedRows ?? 0;
-}
-
-/**
- * Todas as linhas de um `db.execute()` cru.
- *
- * O driver do MySQL devolve `[linhas, campos]`; o Drizzle repassa isso sem
- * tipar, então a conversão acontece uma vez, aqui.
- */
-export function allRows<T>(result: unknown): T[] {
-  const rows = (result as [T[]])[0];
-
-  return Array.isArray(rows) ? rows : [];
-}
-
-/**
- * Primeira linha de um `db.execute()` cru.
- *
- * O parâmetro de tipo existe para quem chama dizer o que espera
- * (`firstRow<ProjectRow>(…)`); não há como inferi-lo de `unknown`.
- */
-// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-export function firstRow<T>(result: unknown): T | undefined {
-  return allRows<T>(result)[0];
-}
-
-/** Escapa os curingas do `LIKE` para que a busca trate `%` como texto. */
-export function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
-}
-
-/**
- * Condição de keyset: `(created_at, id) < (cursor.at, cursor.id)`.
- *
- * O par completo é necessário porque `created_at` não é único; sem o desempate
- * por `id`, registros criados no mesmo milissegundo apareceriam duas vezes ou
- * sumiriam entre páginas.
- */
-export function keysetCondition(
-  createdAtColumn: Parameters<typeof lt>[0],
-  idColumn: Parameters<typeof lt>[0],
-  after: CursorPayload | undefined,
-): SQL | undefined {
-  if (after === undefined) {
-    return undefined;
-  }
-
-  const at = new Date(after.at);
-
-  return or(lt(createdAtColumn, at), and(eq(createdAtColumn, at), lt(idColumn, after.id)));
 }

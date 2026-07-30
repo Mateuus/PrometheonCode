@@ -4,9 +4,10 @@
 // disponível, na ordem de disponibilidade, respeitando o lote — e o índice
 // `idx_outbox_unpublished` precisa estar ao alcance do otimizador.
 
-import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { runInTransaction } from './client.js';
+import { outboxMessages } from './entities/outbox.js';
 import { newId } from './id.js';
 import {
   enqueueOutboxMessage,
@@ -14,7 +15,6 @@ import {
   markOutboxPublished,
   rescheduleOutboxMessage,
 } from './outbox.js';
-import { outboxMessages } from './schema/outbox.js';
 import { createDisposableDatabase, probeDatabase, type DisposableDatabase } from './test-support.js';
 
 const probe = await probeDatabase();
@@ -100,11 +100,7 @@ describe.skipIf(!probe.reachable)('outbox do worker', () => {
     await rescheduleOutboxMessage(temporary.db, id, minutes(60), 'broker fora do ar');
 
     expect(await fetchUnpublishedOutboxMessages(temporary.db, { now: BASE })).toEqual([]);
-    const [message] = await temporary.db
-      .select()
-      .from(outboxMessages)
-      .where(eq(outboxMessages.id, id))
-      .limit(1);
+    const message = await temporary.db.manager.findOne(outboxMessages, { where: { id } });
     expect(message?.attempts).toBe(1);
     expect(message?.lastError).toBe('broker fora do ar');
 
@@ -114,16 +110,21 @@ describe.skipIf(!probe.reachable)('outbox do worker', () => {
   });
 
   it('a varredura enxerga o índice dedicado', async () => {
-    const [rows] = await temporary.db.execute(sql`
-      EXPLAIN SELECT * FROM outbox_messages
-       WHERE published_at IS NULL AND available_at <= ${BASE}
-       ORDER BY available_at, id
-       LIMIT 100
-    `);
-    const plan = (rows as unknown as Record<string, unknown>[])[0] ?? {};
+    const rows: Record<string, unknown>[] = await temporary.db.query(
+      `EXPLAIN SELECT * FROM outbox_messages
+        WHERE published_at IS NULL AND available_at <= ?
+        ORDER BY available_at, id
+        LIMIT 100`,
+      [BASE],
+    );
+    const plan = rows[0] ?? {};
     const possible = String(plan['possible_keys'] ?? '');
     const used = String(plan['key'] ?? '');
+    const extra = String(plan['Extra'] ?? '');
     expect(`${possible} ${used}`).toContain('idx_outbox_unpublished');
+    // A ordenação sai do próprio índice: `filesort` aqui significaria varrer e
+    // ordenar o outbox inteiro a cada volta do worker.
+    expect(extra).not.toContain('filesort');
   });
 });
 
@@ -132,13 +133,15 @@ async function enqueue(
   temporary: DisposableDatabase,
   input: { aggregateId: string; eventType: string; availableAt: Date },
 ): Promise<string> {
-  return enqueueOutboxMessage(temporary.db, {
-    organizationId: ORGANIZATION_ID,
-    aggregateType: 'task',
-    aggregateId: input.aggregateId,
-    eventType: input.eventType,
-    payload: { aggregateId: input.aggregateId },
-    occurredAt: input.availableAt,
-    availableAt: input.availableAt,
-  });
+  return runInTransaction(temporary.db, async (tx) =>
+    enqueueOutboxMessage(tx, {
+      organizationId: ORGANIZATION_ID,
+      aggregateType: 'task',
+      aggregateId: input.aggregateId,
+      eventType: input.eventType,
+      payload: { aggregateId: input.aggregateId },
+      occurredAt: input.availableAt,
+      availableAt: input.availableAt,
+    }),
+  );
 }

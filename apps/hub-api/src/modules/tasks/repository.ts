@@ -12,46 +12,53 @@ import {
   newId,
   outboxMessages,
   projects,
+  runInTransaction,
   taskAssignments,
   taskDependencies,
   tasks,
   users,
+  writable,
   type Database,
+  type Task,
+  type TransactionExecutor,
 } from '@prometheon/database';
-import { and, desc, eq, inArray, isNull, like, lte, or, sql, type SQL } from 'drizzle-orm';
 
 import { decodeCursor } from '../../shared/cursor.js';
-import { affectedRows, allRows, escapeLike, keysetCondition } from '../projects/repository.js';
+import { affectedRows, applyKeyset, escapeLike } from '../../shared/query.js';
 import type { AssignmentRow, DependencyRow, TaskRow } from './types.js';
 
-export type TransactionExecutor = Parameters<Parameters<Database['transaction']>[0]>[0];
+export type { TransactionExecutor } from '@prometheon/database';
 
-const taskColumns = {
-  id: tasks.id,
-  organizationId: tasks.organizationId,
-  projectId: tasks.projectId,
-  conversationId: tasks.conversationId,
-  number: tasks.number,
-  title: tasks.title,
-  description: tasks.description,
-  status: tasks.status,
-  priority: tasks.priority,
-  tags: tasks.tags,
-  scope: tasks.scope,
-  claimedByUserId: tasks.claimedByUserId,
-  claimedByDeviceId: tasks.claimedByDeviceId,
-  claimedByAgentRunId: tasks.claimedByAgentRunId,
-  claimedAt: tasks.claimedAt,
-  claimExpiresAt: tasks.claimExpiresAt,
-  dueAt: tasks.dueAt,
-  createdAt: tasks.createdAt,
-  updatedAt: tasks.updatedAt,
-  createdBy: tasks.createdBy,
-  version: tasks.version,
-} as const;
+/** Colunas que o contrato de tarefa expõe. Lista explícita: nada de `SELECT *`. */
+const TASK_COLUMNS = [
+  'id',
+  'organizationId',
+  'projectId',
+  'conversationId',
+  'number',
+  'title',
+  'description',
+  'status',
+  'priority',
+  'tags',
+  'scope',
+  'claimedByUserId',
+  'claimedByDeviceId',
+  'claimedByAgentRunId',
+  'claimedAt',
+  'claimExpiresAt',
+  'dueAt',
+  'createdAt',
+  'updatedAt',
+  'createdBy',
+  'version',
+] as const;
 
 /** Estados em que a tarefa ainda é trabalho a fazer. */
 export const CLAIMABLE_STATUSES = ['backlog', 'ready', 'claimed', 'in_progress'] as const;
+
+/** Atribuições que ainda valem: as demais são histórico. */
+const LIVE_ASSIGNMENT_STATUSES = ['assigned', 'accepted'] as const;
 
 export interface TaskListFilters {
   readonly status?: TaskRow['status'] | undefined;
@@ -85,15 +92,16 @@ export class TaskRepository {
    */
   static async nextNumber(tx: TransactionExecutor, projectId: string): Promise<number> {
     await tx
+      .createQueryBuilder()
       .update(projects)
-      .set({ lastTaskNumber: sql`${projects.lastTaskNumber} + 1` })
-      .where(eq(projects.id, projectId));
+      .set({ lastTaskNumber: () => 'last_task_number + 1' })
+      .where('id = :projectId', { projectId })
+      .execute();
 
-    const rows = await tx
-      .select({ lastTaskNumber: projects.lastTaskNumber })
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1);
+    const rows: { lastTaskNumber: number | string }[] = await tx.query(
+      'SELECT last_task_number AS lastTaskNumber FROM projects WHERE id = ? LIMIT 1',
+      [projectId],
+    );
 
     const number = rows[0]?.lastTaskNumber;
 
@@ -101,7 +109,7 @@ export class TaskRepository {
       throw new Error(`O projeto ${projectId} não existe mais.`);
     }
 
-    return number;
+    return Number(number);
   }
 
   async listForProject(input: {
@@ -111,68 +119,83 @@ export class TaskRepository {
     filters: TaskListFilters;
   }): Promise<TaskRow[]> {
     const after = input.cursor === undefined ? undefined : decodeCursor(input.cursor);
-    const conditions: (SQL | undefined)[] = [
-      eq(tasks.projectId, input.projectId),
-      keysetCondition(tasks.createdAt, tasks.id, after),
-    ];
+    const query = this.db.manager
+      .createQueryBuilder(tasks, 'task')
+      .select(TASK_COLUMNS.map((column) => `task.${column}`))
+      .where('task.projectId = :projectId', { projectId: input.projectId });
+
+    applyKeyset(query, 'task', { createdAt: 'createdAt', id: 'id' }, after);
 
     if (input.filters.status !== undefined) {
-      conditions.push(eq(tasks.status, input.filters.status));
+      query.andWhere('task.status = :status', { status: input.filters.status });
     }
 
     if (input.filters.priority !== undefined) {
-      conditions.push(eq(tasks.priority, input.filters.priority));
+      query.andWhere('task.priority = :priority', { priority: input.filters.priority });
     }
 
     if (input.filters.search !== undefined && input.filters.search !== '') {
-      conditions.push(like(tasks.title, `%${escapeLike(input.filters.search)}%`));
+      query.andWhere('task.title LIKE :search', {
+        search: `%${escapeLike(input.filters.search)}%`,
+      });
     }
 
     if (input.filters.tag !== undefined && input.filters.tag !== '') {
-      conditions.push(sql`json_contains(${tasks.tags}, ${JSON.stringify(input.filters.tag)})`);
+      // `JSON_CONTAINS` casa com o elemento inteiro, não com um pedaço dele —
+      // `?tag=api` não pode trazer a tarefa etiquetada como `api-gateway`.
+      query.andWhere('json_contains(task.tags, :tag)', {
+        tag: JSON.stringify(input.filters.tag),
+      });
     }
 
     if (input.filters.assigneeUserId !== undefined) {
-      conditions.push(
-        sql`exists (select 1 from task_assignments a
-                     where a.task_id = ${tasks.id}
-                       and a.assignee_type = 'user'
-                       and a.assignee_id = ${input.filters.assigneeUserId}
-                       and a.status in ('assigned', 'accepted'))`,
+      query.andWhere(
+        `exists (select 1 from task_assignments a
+                  where a.task_id = task.id
+                    and a.assignee_type = 'user'
+                    and a.assignee_id = :assigneeUserId
+                    and a.status in (:...liveStatuses))`,
+        { assigneeUserId: input.filters.assigneeUserId, liveStatuses: [...LIVE_ASSIGNMENT_STATUSES] },
       );
     }
 
     if (input.filters.assigneeType !== undefined) {
-      const assigneeType = input.filters.assigneeType === 'agent' ? 'agent_profile' : 'user';
-
-      conditions.push(
-        input.filters.assigneeType === 'none'
-          ? sql`not exists (select 1 from task_assignments a
-                             where a.task_id = ${tasks.id}
-                               and a.status in ('assigned', 'accepted'))`
-          : sql`exists (select 1 from task_assignments a
-                         where a.task_id = ${tasks.id}
-                           and a.assignee_type = ${assigneeType}
-                           and a.status in ('assigned', 'accepted'))`,
-      );
+      if (input.filters.assigneeType === 'none') {
+        query.andWhere(
+          `not exists (select 1 from task_assignments a
+                        where a.task_id = task.id
+                          and a.status in (:...liveStatuses))`,
+          { liveStatuses: [...LIVE_ASSIGNMENT_STATUSES] },
+        );
+      } else {
+        const assigneeType = input.filters.assigneeType === 'agent' ? 'agent_profile' : 'user';
+        query.andWhere(
+          `exists (select 1 from task_assignments a
+                    where a.task_id = task.id
+                      and a.assignee_type = :assigneeType
+                      and a.status in (:...liveStatuses))`,
+          { assigneeType, liveStatuses: [...LIVE_ASSIGNMENT_STATUSES] },
+        );
+      }
     }
 
-    return this.db
-      .select(taskColumns)
-      .from(tasks)
-      .where(and(...conditions))
-      .orderBy(desc(tasks.createdAt), desc(tasks.id))
-      .limit(input.limit + 1);
+    const rows = await query
+      .orderBy('task.createdAt', 'DESC')
+      .addOrderBy('task.id', 'DESC')
+      .limit(input.limit + 1)
+      .getMany();
+
+    return rows;
   }
 
   async findById(taskId: string): Promise<TaskRow | undefined> {
-    const rows = await this.db
-      .select(taskColumns)
-      .from(tasks)
-      .where(eq(tasks.id, taskId))
-      .limit(1);
+    const row = await this.db.manager
+      .createQueryBuilder(tasks, 'task')
+      .select(TASK_COLUMNS.map((column) => `task.${column}`))
+      .where('task.id = :taskId', { taskId })
+      .getOne();
 
-    return rows[0];
+    return row ?? undefined;
   }
 
   /** Tarefas do projeto entre os IDs pedidos; valida dependências. */
@@ -181,10 +204,12 @@ export class TaskRepository {
       return new Set();
     }
 
-    const rows = await this.db
-      .select({ id: tasks.id })
-      .from(tasks)
-      .where(and(eq(tasks.projectId, projectId), inArray(tasks.id, taskIds)));
+    const rows = await this.db.manager
+      .createQueryBuilder(tasks, 'task')
+      .select('task.id')
+      .where('task.projectId = :projectId', { projectId })
+      .andWhere('task.id IN (:...taskIds)', { taskIds })
+      .getMany();
 
     return new Set(rows.map((row) => row.id));
   }
@@ -194,30 +219,25 @@ export class TaskRepository {
       return new Map();
     }
 
-    const rows = await this.db
-      .select({
-        taskId: taskAssignments.taskId,
-        assigneeType: taskAssignments.assigneeType,
-        assigneeId: taskAssignments.assigneeId,
-        userName: users.displayName,
-        userEmail: users.email,
-        userAvatarUrl: users.avatarUrl,
-      })
-      .from(taskAssignments)
+    const rows: AssignmentRow[] = await this.db.manager
+      .createQueryBuilder(taskAssignments, 'assignment')
+      .select('assignment.task_id', 'taskId')
+      .addSelect('assignment.assignee_type', 'assigneeType')
+      .addSelect('assignment.assignee_id', 'assigneeId')
+      .addSelect('member.display_name', 'userName')
+      .addSelect('member.email', 'userEmail')
+      .addSelect('member.avatar_url', 'userAvatarUrl')
       .leftJoin(
-        users,
-        and(
-          eq(users.id, taskAssignments.assigneeId),
-          eq(taskAssignments.assigneeType, 'user'),
-        ),
+        users.options.name,
+        'member',
+        "member.id = assignment.assignee_id AND assignment.assignee_type = 'user'",
       )
-      .where(
-        and(
-          inArray(taskAssignments.taskId, taskIds),
-          inArray(taskAssignments.status, ['assigned', 'accepted']),
-        ),
-      )
-      .orderBy(desc(taskAssignments.assignedAt));
+      .where('assignment.task_id IN (:...taskIds)', { taskIds })
+      .andWhere('assignment.status IN (:...liveStatuses)', {
+        liveStatuses: [...LIVE_ASSIGNMENT_STATUSES],
+      })
+      .orderBy('assignment.assigned_at', 'DESC')
+      .getRawMany();
 
     const latest = new Map<string, AssignmentRow>();
 
@@ -237,13 +257,11 @@ export class TaskRepository {
       return new Map();
     }
 
-    const rows: DependencyRow[] = await this.db
-      .select({
-        taskId: taskDependencies.taskId,
-        dependsOnTaskId: taskDependencies.dependsOnTaskId,
-      })
-      .from(taskDependencies)
-      .where(inArray(taskDependencies.taskId, taskIds));
+    const rows: DependencyRow[] = await this.db.manager
+      .createQueryBuilder(taskDependencies, 'dependency')
+      .select(['dependency.taskId', 'dependency.dependsOnTaskId'])
+      .where('dependency.taskId IN (:...taskIds)', { taskIds })
+      .getMany();
 
     const grouped = new Map<string, string[]>();
 
@@ -275,33 +293,37 @@ export class TaskRepository {
   }): Promise<string> {
     const taskId = newId();
 
-    await this.db.transaction(async (tx) => {
+    await runInTransaction(this.db, async (tx) => {
       const number = await TaskRepository.nextNumber(tx, input.projectId);
       const createdAt = new Date();
 
-      await tx.insert(tasks).values({
-        id: taskId,
-        organizationId: input.organizationId,
-        projectId: input.projectId,
-        conversationId: input.conversationId,
-        number,
-        title: input.title,
-        description: input.description,
-        // A tarefa nasce em `ready` quando não depende de ninguém e em
-        // `blocked` quando depende: o estado inicial já diz se ela é trabalho
-        // disponível, e é isso que a fila de reivindicação lê.
-        status: input.dependsOn.length > 0 ? 'blocked' : 'ready',
-        priority: input.priority,
-        tags: input.tags,
-        scope: input.scope,
-        dueAt: input.dueAt,
-        createdBy: input.createdBy,
-        createdAt,
-        updatedAt: createdAt,
-      });
+      await tx.insert(
+        tasks,
+        writable<Task>({
+          id: taskId,
+          organizationId: input.organizationId,
+          projectId: input.projectId,
+          conversationId: input.conversationId,
+          number,
+          title: input.title,
+          description: input.description,
+          // A tarefa nasce em `ready` quando não depende de ninguém e em
+          // `blocked` quando depende: o estado inicial já diz se ela é trabalho
+          // disponível, e é isso que a fila de reivindicação lê.
+          status: input.dependsOn.length > 0 ? 'blocked' : 'ready',
+          priority: input.priority,
+          tags: input.tags,
+          scope: input.scope,
+          dueAt: input.dueAt,
+          createdBy: input.createdBy,
+          createdAt,
+          updatedAt: createdAt,
+        }),
+      );
 
       if (input.dependsOn.length > 0) {
-        await tx.insert(taskDependencies).values(
+        await tx.insert(
+          taskDependencies,
           input.dependsOn.map((dependsOnTaskId) => ({
             taskId,
             dependsOnTaskId,
@@ -313,13 +335,13 @@ export class TaskRepository {
       }
 
       if (input.assignee !== null) {
-        await tx.insert(taskAssignments).values({
+        await tx.insert(taskAssignments, {
           id: newId(),
           organizationId: input.organizationId,
           taskId,
           assigneeType: input.assignee.type,
           assigneeId: input.assignee.id,
-          status: 'assigned',
+          status: 'assigned' as const,
           assignedBy: input.createdBy,
           assignedAt: createdAt,
         });
@@ -346,25 +368,29 @@ export class TaskRepository {
     actorId: string;
     onCommitted: (tx: TransactionExecutor, updated: TaskRow) => Promise<void>;
   }): Promise<TaskRow | undefined> {
-    return this.db.transaction(async (tx) => {
+    return runInTransaction(this.db, async (tx) => {
       const result = await tx
+        .createQueryBuilder()
         .update(tasks)
         .set({
           ...input.fields,
-          version: sql`${tasks.version} + 1`,
+          version: () => 'version + 1',
           updatedAt: new Date(),
         })
-        .where(and(eq(tasks.id, input.task.id), eq(tasks.version, input.version)));
+        .where('id = :id', { id: input.task.id })
+        .andWhere('version = :version', { version: input.version })
+        .execute();
 
       if (affectedRows(result) === 0) {
         return undefined;
       }
 
       if (input.dependsOn !== undefined) {
-        await tx.delete(taskDependencies).where(eq(taskDependencies.taskId, input.task.id));
+        await tx.delete(taskDependencies, { taskId: input.task.id });
 
         if (input.dependsOn.length > 0) {
-          await tx.insert(taskDependencies).values(
+          await tx.insert(
+            taskDependencies,
             input.dependsOn.map((dependsOnTaskId) => ({
               taskId: input.task.id,
               dependsOnTaskId,
@@ -380,23 +406,23 @@ export class TaskRepository {
         // Atribuição anterior vira `released` em vez de sumir: o histórico de
         // quem já respondeu pela tarefa é o que sustenta a auditoria.
         await tx
+          .createQueryBuilder()
           .update(taskAssignments)
           .set({ status: 'released', releasedAt: new Date() })
-          .where(
-            and(
-              eq(taskAssignments.taskId, input.task.id),
-              inArray(taskAssignments.status, ['assigned', 'accepted']),
-            ),
-          );
+          .where('task_id = :taskId', { taskId: input.task.id })
+          .andWhere('status IN (:...liveStatuses)', {
+            liveStatuses: [...LIVE_ASSIGNMENT_STATUSES],
+          })
+          .execute();
 
         if (input.assignee !== null) {
-          await tx.insert(taskAssignments).values({
+          await tx.insert(taskAssignments, {
             id: newId(),
             organizationId: input.task.organizationId,
             taskId: input.task.id,
             assigneeType: input.assignee.type,
             assigneeId: input.assignee.id,
-            status: 'assigned',
+            status: 'assigned' as const,
             assignedBy: input.actorId,
             assignedAt: new Date(),
           });
@@ -432,32 +458,31 @@ export class TaskRepository {
       onCommitted: (tx: TransactionExecutor, claimed: TaskRow) => Promise<void>;
     },
   ): Promise<TaskRow | undefined> {
-    return this.db.transaction(async (tx) => {
+    return runInTransaction(this.db, async (tx) => {
       const now = new Date();
       const result = await tx
+        .createQueryBuilder()
         .update(tasks)
         .set({
-          status: 'claimed',
-          claimedByUserId: input.userId,
-          claimedByDeviceId: input.deviceId,
-          claimedByAgentRunId: input.agentRunId,
-          claimedAt: now,
-          claimExpiresAt: input.expiresAt,
-          ...(input.scope === null ? {} : { scope: input.scope }),
-          version: sql`${tasks.version} + 1`,
-          updatedAt: now,
+          ...writable<Task>({
+            status: 'claimed',
+            claimedByUserId: input.userId,
+            claimedByDeviceId: input.deviceId,
+            claimedByAgentRunId: input.agentRunId,
+            claimedAt: now,
+            claimExpiresAt: input.expiresAt,
+            ...(input.scope === null ? {} : { scope: input.scope }),
+            updatedAt: now,
+          }),
+          version: () => 'version + 1',
         })
-        .where(
-          and(
-            eq(tasks.id, input.taskId),
-            inArray(tasks.status, [...CLAIMABLE_STATUSES]),
-            or(
-              isNull(tasks.claimExpiresAt),
-              lte(tasks.claimExpiresAt, now),
-              eq(tasks.claimedByUserId, input.userId),
-            ),
-          ),
-        );
+        .where('id = :id', { id: input.taskId })
+        .andWhere('status IN (:...claimable)', { claimable: [...CLAIMABLE_STATUSES] })
+        .andWhere(
+          '(claim_expires_at IS NULL OR claim_expires_at <= :now OR claimed_by_user_id = :userId)',
+          { now, userId: input.userId },
+        )
+        .execute();
 
       if (affectedRows(result) === 0) {
         return undefined;
@@ -485,8 +510,9 @@ export class TaskRepository {
     status: TaskRow['status'];
     onCommitted: (tx: TransactionExecutor, released: TaskRow) => Promise<void>;
   }): Promise<TaskRow | undefined> {
-    return this.db.transaction(async (tx) => {
+    return runInTransaction(this.db, async (tx) => {
       const result = await tx
+        .createQueryBuilder()
         .update(tasks)
         .set({
           status: input.status,
@@ -496,10 +522,12 @@ export class TaskRepository {
           claimedAt: null,
           claimExpiresAt: null,
           ...(input.status === 'done' ? { completedAt: new Date() } : {}),
-          version: sql`${tasks.version} + 1`,
+          version: () => 'version + 1',
           updatedAt: new Date(),
         })
-        .where(and(eq(tasks.id, input.taskId), eq(tasks.claimedByUserId, input.userId)));
+        .where('id = :id', { id: input.taskId })
+        .andWhere('claimed_by_user_id = :userId', { userId: input.userId })
+        .execute();
 
       if (affectedRows(result) === 0) {
         return undefined;
@@ -523,7 +551,8 @@ export class TaskRepository {
    * foi o relógio.
    *
    * `SKIP LOCKED` deixa duas instâncias varrerem ao mesmo tempo sem disputarem
-   * as mesmas linhas.
+   * as mesmas linhas. É SQL cru porque o `FOR UPDATE SKIP LOCKED` do query
+   * builder só existe em consultas de entidade, e aqui interessa apenas o `id`.
    */
   async releaseExpired(input: {
     projectId: string;
@@ -533,23 +562,23 @@ export class TaskRepository {
   }): Promise<TaskRow[]> {
     const now = input.now ?? new Date();
 
-    return this.db.transaction(async (tx) => {
-      const candidates = allRows<{ id: string }>(
-        await tx.execute(sql`
-          select id from tasks
-           where project_id = ${input.projectId}
-             and status = 'claimed'
-             and claim_expires_at is not null
-             and claim_expires_at <= ${now}
-           limit ${input.limit ?? 50}
-           for update skip locked
-        `),
+    return runInTransaction(this.db, async (tx) => {
+      const candidates: { id: string }[] = await tx.query(
+        `select id from tasks
+          where project_id = ?
+            and status = 'claimed'
+            and claim_expires_at is not null
+            and claim_expires_at <= ?
+          limit ${input.limit ?? 50}
+          for update skip locked`,
+        [input.projectId, now],
       );
 
       const released: TaskRow[] = [];
 
       for (const candidate of candidates) {
         const result = await tx
+          .createQueryBuilder()
           .update(tasks)
           .set({
             status: 'ready',
@@ -558,16 +587,13 @@ export class TaskRepository {
             claimedByAgentRunId: null,
             claimedAt: null,
             claimExpiresAt: null,
-            version: sql`${tasks.version} + 1`,
+            version: () => 'version + 1',
             updatedAt: now,
           })
-          .where(
-            and(
-              eq(tasks.id, candidate.id),
-              eq(tasks.status, 'claimed'),
-              lte(tasks.claimExpiresAt, now),
-            ),
-          );
+          .where('id = :id', { id: candidate.id })
+          .andWhere("status = 'claimed'")
+          .andWhere('claim_expires_at <= :now', { now })
+          .execute();
 
         if (affectedRows(result) === 0) {
           continue;
@@ -585,13 +611,13 @@ export class TaskRepository {
 
   /** Tarefa já criada com a mesma chave de idempotência (ver módulo de mensagens). */
   async findByIdempotencyKey(dedupeKey: string): Promise<string | undefined> {
-    const rows = await this.db
-      .select({ aggregateId: outboxMessages.aggregateId })
-      .from(outboxMessages)
-      .where(eq(outboxMessages.dedupeKey, dedupeKey))
-      .limit(1);
+    const row = await this.db.manager
+      .createQueryBuilder(outboxMessages, 'outbox')
+      .select('outbox.aggregateId')
+      .where('outbox.dedupeKey = :dedupeKey', { dedupeKey })
+      .getOne();
 
-    return rows[0]?.aggregateId;
+    return row?.aggregateId;
   }
 
   /**
@@ -602,44 +628,48 @@ export class TaskRepository {
    * trabalho desapareceria da fila justamente quando ficou pronto para começar.
    *
    * A condição é `NOT EXISTS` de bloqueador em aberto — e não "o bloqueador que
-   * acabou de terminar", porque uma tarefa pode depender de várias.
+   * acabou de terminar", porque uma tarefa pode depender de várias. O `FOR
+   * UPDATE` segura as candidatas até o fim da transação, para que duas
+   * conclusões simultâneas não desbloqueiem a mesma tarefa duas vezes.
    */
   async unblockDependents(input: {
     tx: TransactionExecutor;
     completedTaskId: string;
     at: Date;
   }): Promise<string[]> {
-    const candidates = allRows<{ id: string }>(
-      await input.tx.execute(sql`
-        select t.id
-          from tasks t
-          join task_dependencies d on d.task_id = t.id
-         where d.depends_on_task_id = ${input.completedTaskId}
-           and d.type = 'blocks'
-           and t.status = 'blocked'
-           and not exists (
-                 select 1
-                   from task_dependencies other
-                   join tasks blocker on blocker.id = other.depends_on_task_id
-                  where other.task_id = t.id
-                    and other.type = 'blocks'
-                    and blocker.status not in ('done', 'cancelled')
-               )
-         for update
-      `),
+    const candidates: { id: string }[] = await input.tx.query(
+      `select t.id
+         from tasks t
+         join task_dependencies d on d.task_id = t.id
+        where d.depends_on_task_id = ?
+          and d.type = 'blocks'
+          and t.status = 'blocked'
+          and not exists (
+                select 1
+                  from task_dependencies other
+                  join tasks blocker on blocker.id = other.depends_on_task_id
+                 where other.task_id = t.id
+                   and other.type = 'blocks'
+                   and blocker.status not in ('done', 'cancelled')
+              )
+        for update`,
+      [input.completedTaskId],
     );
 
     const unblocked: string[] = [];
 
     for (const candidate of candidates) {
       const result = await input.tx
+        .createQueryBuilder()
         .update(tasks)
         .set({
           status: 'ready',
-          version: sql`${tasks.version} + 1`,
+          version: () => 'version + 1',
           updatedAt: input.at,
         })
-        .where(and(eq(tasks.id, candidate.id), eq(tasks.status, 'blocked')));
+        .where('id = :id', { id: candidate.id })
+        .andWhere("status = 'blocked'")
+        .execute();
 
       if (affectedRows(result) > 0) {
         unblocked.push(candidate.id);
@@ -657,10 +687,13 @@ export class TaskRepository {
 
 /** Lê a tarefa de dentro da transação, já com as colunas do contrato. */
 async function readTask(tx: TransactionExecutor, taskId: string): Promise<TaskRow> {
-  const rows = await tx.select(taskColumns).from(tasks).where(eq(tasks.id, taskId)).limit(1);
-  const row = rows[0];
+  const row = await tx
+    .createQueryBuilder(tasks, 'task')
+    .select(TASK_COLUMNS.map((column) => `task.${column}`))
+    .where('task.id = :taskId', { taskId })
+    .getOne();
 
-  if (row === undefined) {
+  if (row === null) {
     throw new Error(`A tarefa ${taskId} sumiu no meio da transação.`);
   }
 

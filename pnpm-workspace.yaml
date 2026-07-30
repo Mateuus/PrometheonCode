@@ -4,23 +4,19 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
+# Scripts de build aprovados. O pnpm exige a lista explícita: sem ela, o pacote
+# instala mas não compila o binário nativo, e a falha só aparece em runtime.
+# `argon2` é o caso crítico — sem binário, nenhuma senha é conferida.
 allowBuilds:
-  argon2: set this to true or false
-  esbuild: set this to true or false
-  msgpackr-extract: set this to true or false
-  sharp: set this to true or false
-  unrs-resolver: set this to true or false
+  argon2: true
+  esbuild: true
+  msgpackr-extract: true
+  sharp: true
+  unrs-resolver: true
+  '@swc/core': true
 
 minimumReleaseAgeExclude:
   - bullmq@5.81.3
-
-# Scripts de build aprovados. O pnpm 10+ exige lista explícita.
-onlyBuiltDependencies:
-  - esbuild
-  - sharp
-  - unrs-resolver
-  - '@swc/core'
-  - argon2
 
 # Um script de build fora da lista vira aviso, não erro de install.
 strictDepBuilds: false

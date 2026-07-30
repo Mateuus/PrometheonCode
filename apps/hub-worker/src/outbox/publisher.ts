@@ -35,8 +35,6 @@
 // eventos estão parados e há quanto tempo. É o número que denuncia worker
 // morto: publicações continuam zeradas, o atraso cresce sem parar.
 
-import { and, asc, eq, isNull, lte, sql } from 'drizzle-orm';
-
 import {
   markOutboxPublished,
   outboxMessages,
@@ -112,20 +110,20 @@ export interface OutboxLag {
 }
 
 /** Colunas lidas na varredura. Lista explícita: nada de `SELECT *`. */
-const PENDING_COLUMNS = {
-  id: outboxMessages.id,
-  organizationId: outboxMessages.organizationId,
-  projectId: outboxMessages.projectId,
-  aggregateType: outboxMessages.aggregateType,
-  aggregateId: outboxMessages.aggregateId,
-  aggregateSequence: outboxMessages.aggregateSequence,
-  eventType: outboxMessages.eventType,
-  eventVersion: outboxMessages.eventVersion,
-  payload: outboxMessages.payload,
-  occurredAt: outboxMessages.occurredAt,
-  availableAt: outboxMessages.availableAt,
-  attempts: outboxMessages.attempts,
-} as const;
+const PENDING_COLUMNS = [
+  'outbox.id',
+  'outbox.organizationId',
+  'outbox.projectId',
+  'outbox.aggregateType',
+  'outbox.aggregateId',
+  'outbox.aggregateSequence',
+  'outbox.eventType',
+  'outbox.eventVersion',
+  'outbox.payload',
+  'outbox.occurredAt',
+  'outbox.availableAt',
+  'outbox.attempts',
+] as const;
 
 const EMPTY_BATCH: OutboxBatchResult = {
   scanned: 0,
@@ -381,14 +379,17 @@ export class OutboxPublisher {
    */
   async #deadLetter(message: OutboxRecord, attempt: number, reason: string): Promise<void> {
     const now = this.#now();
-    await this.#options.db
+    await this.#options.db.manager
+      .createQueryBuilder()
       .update(outboxMessages)
       .set({
         publishedAt: now,
         attempts: attempt,
         lastError: `${DEAD_LETTER_PREFIX} ${reason}`.slice(0, 2_000),
       })
-      .where(and(eq(outboxMessages.id, message.id), isNull(outboxMessages.publishedAt)));
+      .where('id = :id', { id: message.id })
+      .andWhere('published_at IS NULL')
+      .execute();
 
     this.#options.metrics.increment(METRIC.outboxDeadLetteredTotal, {
       eventType: message.eventType,
@@ -406,26 +407,28 @@ export class OutboxPublisher {
   }
 
   async #alreadyPublished(id: string): Promise<boolean> {
-    const rows = await this.#options.db
-      .select({ publishedAt: outboxMessages.publishedAt })
-      .from(outboxMessages)
-      .where(eq(outboxMessages.id, id))
-      .limit(1);
-    return rows[0]?.publishedAt != null;
+    const row = await this.#options.db.manager
+      .createQueryBuilder(outboxMessages, 'outbox')
+      .select('outbox.publishedAt')
+      .where('outbox.id = :id', { id })
+      .getOne();
+    return row?.publishedAt != null;
   }
 
   async #fetchPending(): Promise<OutboxRecord[]> {
-    const rows = await this.#options.db
-      .select(PENDING_COLUMNS)
-      .from(outboxMessages)
-      .where(
-        and(
-          isNull(outboxMessages.publishedAt),
-          lte(outboxMessages.availableAt, this.#now()),
-        ),
-      )
-      .orderBy(asc(outboxMessages.availableAt), asc(outboxMessages.id))
-      .limit(this.#options.batchSize);
+    // A forma da consulta é o que casa com `idx_outbox_unpublished`: filtro por
+    // `published_at IS NULL`, corte por `available_at` e ordenação `(available_at,
+    // id)` que sai do próprio índice. Um teste roda `EXPLAIN` sobre ela e
+    // reprova se aparecer `filesort` ou se o índice não for usado.
+    const rows = await this.#options.db.manager
+      .createQueryBuilder(outboxMessages, 'outbox')
+      .select([...PENDING_COLUMNS])
+      .where('outbox.publishedAt IS NULL')
+      .andWhere('outbox.availableAt <= :now', { now: this.#now() })
+      .orderBy('outbox.availableAt', 'ASC')
+      .addOrderBy('outbox.id', 'ASC')
+      .limit(this.#options.batchSize)
+      .getMany();
 
     return rows;
   }
@@ -435,29 +438,29 @@ export class OutboxPublisher {
    * antigo espera. Duas consultas indexadas, não um `SELECT *` na tabela.
    */
   async sampleLag(): Promise<OutboxLag> {
-    const [counts] = await this.#options.db
-      // `count(*)` é BIGINT: o driver pode devolver número ou string.
-      .select({ pending: sql<number | string>`count(*)` })
-      .from(outboxMessages)
-      .where(isNull(outboxMessages.publishedAt));
+    const pendingCount = await this.#options.db.manager
+      .createQueryBuilder(outboxMessages, 'outbox')
+      .where('outbox.publishedAt IS NULL')
+      .getCount();
 
-    const [oldest] = await this.#options.db
-      .select({ occurredAt: outboxMessages.occurredAt })
-      .from(outboxMessages)
-      .where(isNull(outboxMessages.publishedAt))
-      .orderBy(asc(outboxMessages.availableAt), asc(outboxMessages.id))
-      .limit(1);
+    const oldest = await this.#options.db.manager
+      .createQueryBuilder(outboxMessages, 'outbox')
+      .select('outbox.occurredAt')
+      .where('outbox.publishedAt IS NULL')
+      .orderBy('outbox.availableAt', 'ASC')
+      .addOrderBy('outbox.id', 'ASC')
+      .limit(1)
+      .getOne();
 
-    const pending = Number(counts?.pending ?? 0);
     const oldestOccurredAt = oldest?.occurredAt ?? null;
     const lagMs =
       oldestOccurredAt === null
         ? 0
         : Math.max(0, this.#now().getTime() - oldestOccurredAt.getTime());
 
-    const lag: OutboxLag = { pending, oldestOccurredAt, lagMs };
+    const lag: OutboxLag = { pending: pendingCount, oldestOccurredAt, lagMs };
     this.#lastLag = lag;
-    this.#options.metrics.setGauge(METRIC.outboxPending, pending);
+    this.#options.metrics.setGauge(METRIC.outboxPending, pendingCount);
     this.#options.metrics.setGauge(METRIC.outboxLagSeconds, lagMs / 1_000);
     return lag;
   }

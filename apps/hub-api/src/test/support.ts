@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { loadConfig, type AppConfig } from '@prometheon/config';
-import { newId, runMigrations, runSeed } from '@prometheon/database';
+import { closeDatabase, newId, runMigrations, runSeed } from '@prometheon/database';
 import type { FastifyInstance } from 'fastify';
 import { createConnection } from 'mysql2/promise';
 import { Redis } from 'ioredis';
@@ -136,7 +136,7 @@ export async function createHarness(options: { prefix?: string } = {}): Promise<
   await runSeed({ database: databaseName });
 
   const config = testConfig({ databaseName });
-  const handles = createDatabaseHandles(config, { connectionLimit: 5 });
+  const database = await createDatabaseHandles(config, { connectionLimit: 5 });
 
   // Cada harness captura e-mail em um diretório próprio: duas suítes rodando
   // uma depois da outra não podem ler a mensagem uma da outra.
@@ -148,7 +148,7 @@ export async function createHarness(options: { prefix?: string } = {}): Promise<
     captureDirectory: mailDirectory,
   });
 
-  const { app, authService } = await buildApp({ config, databaseHandles: handles, mailer });
+  const { app, authService } = await buildApp({ config, database, mailer });
 
   await app.ready();
 
@@ -162,7 +162,7 @@ export async function createHarness(options: { prefix?: string } = {}): Promise<
     dispose: async () => {
       await authService.flushPendingMail();
       await app.close();
-      await handles.pool.end();
+      await closeDatabase(database);
       await mailer.close();
 
       const cleanup = await createConnection({

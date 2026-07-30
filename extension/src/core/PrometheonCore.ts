@@ -27,6 +27,7 @@ import type { SettingsStore } from '../storage/SettingsStore';
 import type { McpConfigStore } from '../workspace/McpConfigStore';
 import type { WorkspaceInitializer } from '../workspace/WorkspaceInitializer';
 import type { WorkspaceService } from '../workspace/WorkspaceService';
+import { applyLanguage, isLanguageChoice, languageChoice, type LanguageChoice } from '../i18n';
 import { HubNotConfiguredError, serializeError } from '../utils/errors';
 import { newId } from '../utils/ids';
 import { parseHubUrl } from '../hub/HubClient';
@@ -150,6 +151,13 @@ export class PrometheonCore implements vscode.Disposable {
       deps.workspace.onDidChange(() => {
         void this.onWorkspaceChanged();
       }),
+      // O idioma também pode ser trocado pelas configurações do VS Code; o
+      // painel precisa acompanhar de qualquer um dos dois lugares.
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('prometheon.language')) {
+          void this.refreshLanguage();
+        }
+      }),
     );
   }
 
@@ -191,6 +199,7 @@ export class PrometheonCore implements vscode.Disposable {
   get snapshot(): PrometheonViewState {
     return {
       extensionVersion: this.deps.extensionVersion,
+      language: languageChoice(),
       chatType: this.chatType,
       workMode: this.workMode,
       autonomy: this.autonomy,
@@ -323,6 +332,9 @@ export class PrometheonCore implements vscode.Disposable {
       case 'settings.selectMainAgent':
         await this.setMainAgent(message.payload.agentId);
         return;
+      case 'settings.setLanguage':
+        await this.setLanguage(message.payload.language);
+        return;
       case 'settings.openEditor':
         await this.openSettingsEditor();
         return;
@@ -413,6 +425,29 @@ export class PrometheonCore implements vscode.Disposable {
 
   async cancel(runId: string): Promise<void> {
     await this.deps.localChat.cancel(runId);
+  }
+
+  // ---------- Idioma ----------
+
+  /**
+   * Troca o idioma do painel. A escolha vai para a configuração do usuário —
+   * é preferência de pessoa, não do projeto — e o HTML da webview é refeito,
+   * porque o texto viaja junto dele.
+   */
+  async setLanguage(choice: LanguageChoice): Promise<void> {
+    await vscode.workspace
+      .getConfiguration('prometheon')
+      .update('language', choice, vscode.ConfigurationTarget.Global);
+    await this.refreshLanguage();
+  }
+
+  /** Relê a preferência e redesenha a interface, se algo mudou. */
+  private async refreshLanguage(): Promise<void> {
+    const preferred = vscode.workspace.getConfiguration('prometheon').get<string>('language');
+    if (applyLanguage(isLanguageChoice(preferred) ? preferred : 'auto')) {
+      this.deps.bus.emit('language.changed', languageChoice());
+      await this.publish();
+    }
   }
 
   // ---------- Perguntas do agente ----------

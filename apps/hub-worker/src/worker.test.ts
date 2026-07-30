@@ -8,9 +8,15 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { enqueueOutboxMessage, newId, projects } from '@prometheon/database';
+import {
+  enqueueOutboxMessage,
+  newId,
+  projects,
+  runInTransaction,
+  writable,
+  type Project,
+} from '@prometheon/database';
 import { createLogger } from '@prometheon/logger';
-import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 
 import type { OutboxEnvelope } from './outbox/envelope.js';
@@ -83,9 +89,9 @@ describe.skipIf(unavailable)('runtime do worker', () => {
       health: { enabled: true, host: '127.0.0.1', port: 0, filePath: undefined },
     };
 
-    const runtime: WorkerRuntime = createWorkerRuntime({
+    const runtime: WorkerRuntime = await createWorkerRuntime({
       settings,
-      database: { db: temporary.db, pool: temporary.pool },
+      database: temporary.db,
       logger,
       onlyQueues: ['dead-letter'],
     });
@@ -116,13 +122,18 @@ describe.skipIf(unavailable)('runtime do worker', () => {
     expect(((await ready.json()) as { state: string }).state).toBe('ready');
 
     const organizationId = newId();
-    const eventId = await enqueueOutboxMessage(temporary.db, {
-      organizationId,
-      aggregateType: 'task',
-      aggregateId: newId(),
-      eventType: 'task.created',
-      payload: { hello: 'world' },
-    });
+    // O evento só é gravável dentro de uma transação: `enqueueOutboxMessage`
+    // recusa o gerenciador global em tempo de compilação, e é isso que garante
+    // que mudança e evento saiam juntos.
+    const eventId = await runInTransaction(temporary.db, async (tx) =>
+      enqueueOutboxMessage(tx, {
+        organizationId,
+        aggregateType: 'task',
+        aggregateId: newId(),
+        eventType: 'task.created',
+        payload: { hello: 'world' },
+      }),
+    );
     runtime.publisher.notify();
 
     const deadline = Date.now() + 10_000;
@@ -174,20 +185,23 @@ describe.skipIf(unavailable)('runtime do worker', () => {
         await new Promise((resolve) => setTimeout(resolve, 1_500));
         // O efeito só acontece no fim: se o encerramento tivesse abandonado o
         // job, este projeto não existiria.
-        await deps.db.insert(projects).values({
-          id: newId(),
-          organizationId: fixtures.organizationId,
-          slug: marker,
-          name: marker,
-        });
+        await deps.db.manager.insert(
+          projects,
+          writable<Project>({
+            id: newId(),
+            organizationId: fixtures.organizationId,
+            slug: marker,
+            name: marker,
+          }),
+        );
         finishedAt = Date.now();
         return { status: 'done' };
       },
     };
 
-    const runtime = createWorkerRuntime({
+    const runtime = await createWorkerRuntime({
       settings: disposable.settings,
-      database: { db: temporary.db, pool: temporary.pool },
+      database: temporary.db,
       logger,
       onlyQueues: ['retention'],
       handlers: { retention: slowHandler },
@@ -221,11 +235,12 @@ describe.skipIf(unavailable)('runtime do worker', () => {
     expect(shutdownEndedAt).toBeGreaterThanOrEqual(finishedAt);
     expect(shutdownEndedAt - shutdownStartedAt).toBeGreaterThan(200);
 
-    const [row] = await temporary.db
-      .select({ id: projects.id })
-      .from(projects)
-      .where(eq(projects.slug, marker))
-      .limit(1);
+    const row = await temporary.db.manager
+      .createQueryBuilder(projects, 'project')
+      .select('project.id')
+      .where('project.slug = :slug', { slug: marker })
+      .limit(1)
+      .getOne();
     expect(row?.id).toBeDefined();
 
     expect(runtime.health.state).toBe('stopped');
@@ -242,9 +257,9 @@ describe.skipIf(unavailable)('runtime do worker', () => {
       },
     };
 
-    const runtime = createWorkerRuntime({
+    const runtime = await createWorkerRuntime({
       settings: disposable.settings,
-      database: { db: temporary.db, pool: temporary.pool },
+      database: temporary.db,
       logger,
       onlyQueues: ['retention', 'dead-letter'],
       handlers: { retention: strictHandler },

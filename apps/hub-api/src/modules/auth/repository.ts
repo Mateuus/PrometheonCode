@@ -1,9 +1,9 @@
 /**
  * Acesso ao banco do módulo de autenticação.
  *
- * Só consultas: nenhuma regra de negócio, nenhuma decisão de segurança. Tudo é
- * Drizzle, então tudo é query parametrizada — o `Docs/09` pede isso e a forma
- * mais segura de garantir é não haver SQL concatenado em lugar algum.
+ * Só consultas: nenhuma regra de negócio, nenhuma decisão de segurança. Tudo
+ * passa pelo TypeORM, então tudo é query parametrizada — o `Docs/09` pede isso e
+ * a forma mais segura de garantir é não haver SQL concatenado em lugar algum.
  */
 
 import {
@@ -16,12 +16,24 @@ import {
   plans,
   refreshTokens,
   roles,
+  runInTransaction,
   securityEvents,
   userSessions,
   users,
+  writable,
   type Database,
+  type DeviceStatus,
+  type Executor,
+  type Invitation,
+  type OrganizationMember,
+  type RefreshToken,
+  type SecurityEvent,
+  type User,
+  type UserSession,
 } from '@prometheon/database';
-import { and, eq, isNull } from 'drizzle-orm';
+import type { SelectQueryBuilder } from 'typeorm';
+
+import { affectedRows } from '../../shared/query.js';
 
 export interface UserRow {
   id: string;
@@ -46,6 +58,32 @@ export interface MembershipRow {
   policy: Record<string, unknown> | null;
 }
 
+/** Credencial de dispositivo com o estado da máquina que a apresentou. */
+export interface DeviceCredentialRow {
+  id: string;
+  deviceId: string;
+  userId: string | null;
+  expiresAt: Date;
+  revokedAt: Date | null;
+  scope: string | null;
+  deviceStatus: DeviceStatus;
+}
+
+/** Colunas que o contrato de usuário expõe. Lista explícita: nada de `SELECT *`. */
+const USER_COLUMNS = [
+  'id',
+  'email',
+  'displayName',
+  'passwordHash',
+  'emailVerifiedAt',
+  'status',
+  'avatarUrl',
+  'locale',
+  'timezone',
+  'createdAt',
+  'updatedAt',
+] as const;
+
 export class AuthRepository {
   constructor(private readonly db: Database) {}
 
@@ -54,23 +92,21 @@ export class AuthRepository {
   // -------------------------------------------------------------------------
 
   async findUserByEmail(email: string): Promise<UserRow | undefined> {
-    const rows = await this.db
-      .select()
-      .from(users)
-      .where(and(eq(users.email, email), isNull(users.deletedAt)))
-      .limit(1);
+    const row = await this.userQuery()
+      .where('user.email = :email', { email })
+      .andWhere('user.deletedAt IS NULL')
+      .getOne();
 
-    return rows[0];
+    return (row as UserRow | null) ?? undefined;
   }
 
   async findUserById(id: string): Promise<UserRow | undefined> {
-    const rows = await this.db
-      .select()
-      .from(users)
-      .where(and(eq(users.id, id), isNull(users.deletedAt)))
-      .limit(1);
+    const row = await this.userQuery()
+      .where('user.id = :id', { id })
+      .andWhere('user.deletedAt IS NULL')
+      .getOne();
 
-    return rows[0];
+    return (row as UserRow | null) ?? undefined;
   }
 
   /**
@@ -89,18 +125,22 @@ export class AuthRepository {
   }): Promise<{ userId: string; organizationId: string | null }> {
     const userId = newId();
 
-    return this.db.transaction(async (tx) => {
-      await tx.insert(users).values({
+    return runInTransaction(this.db, async (tx) => {
+      const now = new Date();
+
+      await tx.insert(users, {
         id: userId,
         email: input.email,
         displayName: input.displayName,
         passwordHash: input.passwordHash,
-        passwordUpdatedAt: new Date(),
+        passwordUpdatedAt: now,
         locale: input.locale ?? 'en',
         timezone: input.timezone ?? 'UTC',
         // `pending` até a verificação de e-mail; o login já funciona, o que a
         // conta não verificada não faz é entrar em organização de terceiro.
         status: 'pending',
+        createdAt: now,
+        updatedAt: now,
       });
 
       if (input.organizationName === undefined) {
@@ -118,24 +158,23 @@ export class AuthRepository {
   }
 
   async markEmailVerified(userId: string): Promise<void> {
-    await this.db
-      .update(users)
-      .set({ emailVerifiedAt: new Date(), status: 'active', updatedAt: new Date() })
-      .where(eq(users.id, userId));
+    await this.db.manager.update(
+      users,
+      { id: userId },
+      { emailVerifiedAt: new Date(), status: 'active', updatedAt: new Date() },
+    );
   }
 
   async updatePassword(userId: string, passwordHash: string): Promise<void> {
-    await this.db
-      .update(users)
-      .set({ passwordHash, passwordUpdatedAt: new Date(), updatedAt: new Date() })
-      .where(eq(users.id, userId));
+    await this.db.manager.update(
+      users,
+      { id: userId },
+      { passwordHash, passwordUpdatedAt: new Date(), updatedAt: new Date() },
+    );
   }
 
   async touchLogin(userId: string): Promise<void> {
-    await this.db
-      .update(users)
-      .set({ lastLoginAt: new Date() })
-      .where(eq(users.id, userId));
+    await this.db.manager.update(users, { id: userId }, { lastLoginAt: new Date() });
   }
 
   // -------------------------------------------------------------------------
@@ -143,60 +182,31 @@ export class AuthRepository {
   // -------------------------------------------------------------------------
 
   async listMemberships(userId: string): Promise<MembershipRow[]> {
-    const rows = await this.db
-      .select({
-        organizationId: organizations.id,
-        organizationName: organizations.name,
-        organizationSlug: organizations.slug,
-        roleSlug: roles.slug,
-        status: organizationMembers.status,
-        policy: organizations.policy,
-      })
-      .from(organizationMembers)
-      .innerJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
-      .innerJoin(roles, eq(roles.id, organizationMembers.roleId))
-      .where(and(eq(organizationMembers.userId, userId), isNull(organizations.deletedAt)))
-      .orderBy(organizations.createdAt);
-
-    return rows;
+    return this.membershipQuery()
+      .where('member.userId = :userId', { userId })
+      .andWhere('organization.deletedAt IS NULL')
+      .orderBy('organization.createdAt', 'ASC')
+      .getRawMany<MembershipRow>();
   }
 
   async findMembership(
     organizationId: string,
     userId: string,
   ): Promise<MembershipRow | undefined> {
-    const rows = await this.db
-      .select({
-        organizationId: organizations.id,
-        organizationName: organizations.name,
-        organizationSlug: organizations.slug,
-        roleSlug: roles.slug,
-        status: organizationMembers.status,
-        policy: organizations.policy,
-      })
-      .from(organizationMembers)
-      .innerJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
-      .innerJoin(roles, eq(roles.id, organizationMembers.roleId))
-      .where(
-        and(
-          eq(organizationMembers.organizationId, organizationId),
-          eq(organizationMembers.userId, userId),
-          isNull(organizations.deletedAt),
-        ),
-      )
-      .limit(1);
+    const rows = await this.membershipQuery()
+      .where('member.organizationId = :organizationId', { organizationId })
+      .andWhere('member.userId = :userId', { userId })
+      .andWhere('organization.deletedAt IS NULL')
+      .limit(1)
+      .getRawMany<MembershipRow>();
 
     return rows[0];
   }
 
-  async findInvitationByHash(tokenHash: string) {
-    const rows = await this.db
-      .select()
-      .from(invitations)
-      .where(eq(invitations.tokenHash, tokenHash))
-      .limit(1);
+  async findInvitationByHash(tokenHash: string): Promise<Invitation | undefined> {
+    const row = await this.db.manager.findOne(invitations, { where: { tokenHash } });
 
-    return rows[0];
+    return row ?? undefined;
   }
 
   async acceptInvitation(input: {
@@ -205,18 +215,19 @@ export class AuthRepository {
     roleId: string;
     userId: string;
   }): Promise<void> {
-    await this.db.transaction(async (tx) => {
-      await tx
-        .update(invitations)
-        .set({
+    await runInTransaction(this.db, async (tx) => {
+      await tx.update(
+        invitations,
+        { id: input.invitationId },
+        {
           status: 'accepted',
           acceptedAt: new Date(),
           acceptedByUserId: input.userId,
           updatedAt: new Date(),
-        })
-        .where(eq(invitations.id, input.invitationId));
+        },
+      );
 
-      await tx.insert(organizationMembers).values({
+      await tx.insert(organizationMembers, {
         id: newId(),
         organizationId: input.organizationId,
         userId: input.userId,
@@ -241,7 +252,7 @@ export class AuthRepository {
   }): Promise<string> {
     const id = newId();
 
-    await this.db.insert(userSessions).values({
+    await this.db.manager.insert(userSessions, {
       id,
       userId: input.userId,
       organizationId: input.organizationId,
@@ -255,35 +266,39 @@ export class AuthRepository {
     return id;
   }
 
-  async findSession(sessionId: string) {
-    const rows = await this.db
-      .select()
-      .from(userSessions)
-      .where(eq(userSessions.id, sessionId))
-      .limit(1);
+  async findSession(sessionId: string): Promise<UserSession | undefined> {
+    const row = await this.db.manager.findOne(userSessions, { where: { id: sessionId } });
 
-    return rows[0];
+    return row ?? undefined;
   }
 
   async touchSession(sessionId: string): Promise<void> {
-    await this.db
-      .update(userSessions)
-      .set({ lastSeenAt: new Date(), updatedAt: new Date() })
-      .where(eq(userSessions.id, sessionId));
+    await this.db.manager.update(
+      userSessions,
+      { id: sessionId },
+      { lastSeenAt: new Date(), updatedAt: new Date() },
+    );
   }
 
   async revokeSession(sessionId: string, reason: string): Promise<void> {
-    await this.db
+    // `revoked_at IS NULL` preserva o instante e o motivo da primeira revogação:
+    // uma segunda chamada não reescreve o que já ficou registrado.
+    await this.db.manager
+      .createQueryBuilder()
       .update(userSessions)
       .set({ revokedAt: new Date(), revokedReason: reason, updatedAt: new Date() })
-      .where(and(eq(userSessions.id, sessionId), isNull(userSessions.revokedAt)));
+      .where('id = :sessionId', { sessionId })
+      .andWhere('revoked_at IS NULL')
+      .execute();
   }
 
   async listActiveSessionIds(userId: string): Promise<string[]> {
-    const rows = await this.db
-      .select({ id: userSessions.id })
-      .from(userSessions)
-      .where(and(eq(userSessions.userId, userId), isNull(userSessions.revokedAt)));
+    const rows = await this.db.manager
+      .createQueryBuilder(userSessions, 'session')
+      .select('session.id')
+      .where('session.userId = :userId', { userId })
+      .andWhere('session.revokedAt IS NULL')
+      .getMany();
 
     return rows.map((row) => row.id);
   }
@@ -295,15 +310,21 @@ export class AuthRepository {
       return [];
     }
 
-    await this.db
+    await this.db.manager
+      .createQueryBuilder()
       .update(userSessions)
       .set({ revokedAt: new Date(), revokedReason: reason, updatedAt: new Date() })
-      .where(and(eq(userSessions.userId, userId), isNull(userSessions.revokedAt)));
+      .where('user_id = :userId', { userId })
+      .andWhere('revoked_at IS NULL')
+      .execute();
 
-    await this.db
+    await this.db.manager
+      .createQueryBuilder()
       .update(refreshTokens)
       .set({ revokedAt: new Date(), revokedReason: reason, updatedAt: new Date() })
-      .where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)));
+      .where('user_id = :userId', { userId })
+      .andWhere('revoked_at IS NULL')
+      .execute();
 
     return ids;
   }
@@ -319,7 +340,7 @@ export class AuthRepository {
   }): Promise<string> {
     const id = newId();
 
-    await this.db.insert(refreshTokens).values({
+    await this.db.manager.insert(refreshTokens, {
       id,
       sessionId: input.sessionId,
       userId: input.userId,
@@ -333,14 +354,10 @@ export class AuthRepository {
     return id;
   }
 
-  async findRefreshTokenByHash(tokenHash: string) {
-    const rows = await this.db
-      .select()
-      .from(refreshTokens)
-      .where(eq(refreshTokens.tokenHash, tokenHash))
-      .limit(1);
+  async findRefreshTokenByHash(tokenHash: string): Promise<RefreshToken | undefined> {
+    const row = await this.db.manager.findOne(refreshTokens, { where: { tokenHash } });
 
-    return rows[0];
+    return row ?? undefined;
   }
 
   /**
@@ -351,15 +368,17 @@ export class AuthRepository {
    * linhas, e quem chamou trata isso como reuso.
    */
   async consumeRefreshToken(tokenId: string): Promise<boolean> {
-    const result = await this.db
+    const result = await this.db.manager
+      .createQueryBuilder()
       .update(refreshTokens)
       .set({ usedAt: new Date(), updatedAt: new Date() })
-      .where(and(eq(refreshTokens.id, tokenId), isNull(refreshTokens.usedAt)));
+      .where('id = :tokenId', { tokenId })
+      .andWhere('used_at IS NULL')
+      .execute();
 
-    // O driver do mysql2 devolve `affectedRows` no primeiro elemento.
-    const affected = (result as unknown as [{ affectedRows?: number }])[0].affectedRows ?? 0;
-
-    return affected > 0;
+    // Zero linhas não é falha da consulta: é o banco dizendo que outro refresh
+    // chegou primeiro.
+    return affectedRows(result) > 0;
   }
 
   /**
@@ -371,16 +390,22 @@ export class AuthRepository {
    * RFC 6749bis descreve e o que o `Docs/09` chama de rotação.
    */
   async revokeTokenFamily(sessionId: string, reason: string): Promise<void> {
-    await this.db.transaction(async (tx) => {
+    await runInTransaction(this.db, async (tx) => {
       await tx
+        .createQueryBuilder()
         .update(refreshTokens)
         .set({ revokedAt: new Date(), revokedReason: reason, updatedAt: new Date() })
-        .where(and(eq(refreshTokens.sessionId, sessionId), isNull(refreshTokens.revokedAt)));
+        .where('session_id = :sessionId', { sessionId })
+        .andWhere('revoked_at IS NULL')
+        .execute();
 
       await tx
+        .createQueryBuilder()
         .update(userSessions)
         .set({ revokedAt: new Date(), revokedReason: reason, updatedAt: new Date() })
-        .where(and(eq(userSessions.id, sessionId), isNull(userSessions.revokedAt)));
+        .where('id = :sessionId', { sessionId })
+        .andWhere('revoked_at IS NULL')
+        .execute();
     });
   }
 
@@ -398,20 +423,18 @@ export class AuthRepository {
     ip: string | null;
   }): Promise<string> {
     if (input.fingerprint !== null) {
-      const existing = await this.db
-        .select({ id: devices.id })
-        .from(devices)
-        .where(
-          and(eq(devices.userId, input.userId), eq(devices.fingerprint, input.fingerprint)),
-        )
-        .limit(1);
+      const found = await this.db.manager
+        .createQueryBuilder(devices, 'device')
+        .select('device.id')
+        .where('device.userId = :userId', { userId: input.userId })
+        .andWhere('device.fingerprint = :fingerprint', { fingerprint: input.fingerprint })
+        .getOne();
 
-      const found = existing[0];
-
-      if (found !== undefined) {
-        await this.db
-          .update(devices)
-          .set({
+      if (found !== null) {
+        await this.db.manager.update(
+          devices,
+          { id: found.id },
+          {
             name: input.name,
             platform: input.platform,
             clientVersion: input.clientVersion,
@@ -421,8 +444,8 @@ export class AuthRepository {
             lastSeenAt: new Date(),
             lastIp: input.ip,
             updatedAt: new Date(),
-          })
-          .where(eq(devices.id, found.id));
+          },
+        );
 
         return found.id;
       }
@@ -430,7 +453,7 @@ export class AuthRepository {
 
     const id = newId();
 
-    await this.db.insert(devices).values({
+    await this.db.manager.insert(devices, {
       id,
       userId: input.userId,
       name: input.name,
@@ -456,7 +479,7 @@ export class AuthRepository {
   }): Promise<string> {
     const id = newId();
 
-    await this.db.insert(deviceTokens).values({
+    await this.db.manager.insert(deviceTokens, {
       id,
       deviceId: input.deviceId,
       userId: input.userId,
@@ -470,37 +493,45 @@ export class AuthRepository {
     return id;
   }
 
-  async findDeviceCredential(tokenHash: string) {
-    const rows = await this.db
-      .select({
-        id: deviceTokens.id,
-        deviceId: deviceTokens.deviceId,
-        userId: deviceTokens.userId,
-        expiresAt: deviceTokens.expiresAt,
-        revokedAt: deviceTokens.revokedAt,
-        scope: deviceTokens.scope,
-        deviceStatus: devices.status,
-      })
-      .from(deviceTokens)
-      .innerJoin(devices, eq(devices.id, deviceTokens.deviceId))
-      .where(
-        and(eq(deviceTokens.tokenHash, tokenHash), eq(deviceTokens.type, 'device_credential')),
-      )
-      .limit(1);
+  /**
+   * Credencial de dispositivo pelo hash apresentado.
+   *
+   * O `status` do dispositivo vem no mesmo `SELECT` porque quem autentica
+   * precisa das duas coisas: a credencial pode estar válida e a máquina já ter
+   * sido revogada. São colunas de tabelas diferentes, então o resultado é linha
+   * crua, não entidade hidratada.
+   */
+  async findDeviceCredential(tokenHash: string): Promise<DeviceCredentialRow | undefined> {
+    const rows = await this.db.manager
+      .createQueryBuilder(deviceTokens, 'token')
+      .select('token.id', 'id')
+      .addSelect('token.deviceId', 'deviceId')
+      .addSelect('token.userId', 'userId')
+      .addSelect('token.expiresAt', 'expiresAt')
+      .addSelect('token.revokedAt', 'revokedAt')
+      .addSelect('token.scope', 'scope')
+      .addSelect('device.status', 'deviceStatus')
+      .innerJoin(devices.options.name, 'device', 'device.id = token.deviceId')
+      .where('token.tokenHash = :tokenHash', { tokenHash })
+      .andWhere('token.type = :type', { type: 'device_credential' })
+      .limit(1)
+      .getRawMany<DeviceCredentialRow>();
 
     return rows[0];
   }
 
   async touchDeviceCredential(tokenId: string, deviceId: string): Promise<void> {
-    await this.db
-      .update(deviceTokens)
-      .set({ lastUsedAt: new Date(), updatedAt: new Date() })
-      .where(eq(deviceTokens.id, tokenId));
+    await this.db.manager.update(
+      deviceTokens,
+      { id: tokenId },
+      { lastUsedAt: new Date(), updatedAt: new Date() },
+    );
 
-    await this.db
-      .update(devices)
-      .set({ lastSeenAt: new Date(), updatedAt: new Date() })
-      .where(eq(devices.id, deviceId));
+    await this.db.manager.update(
+      devices,
+      { id: deviceId },
+      { lastSeenAt: new Date(), updatedAt: new Date() },
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -522,17 +553,50 @@ export class AuthRepository {
     userAgent?: string | null;
     details?: Record<string, unknown>;
   }): Promise<void> {
-    await this.db.insert(securityEvents).values({
-      id: newId(),
-      type: input.type,
-      severity: input.severity,
-      userId: input.userId ?? null,
-      organizationId: input.organizationId ?? null,
-      ip: input.ip ?? null,
-      userAgent: input.userAgent ?? null,
-      details: input.details ?? null,
-      occurredAt: new Date(),
-    });
+    await this.db.manager.insert(
+      securityEvents,
+      writable<SecurityEvent>({
+        id: newId(),
+        type: input.type,
+        severity: input.severity,
+        userId: input.userId ?? null,
+        organizationId: input.organizationId ?? null,
+        ip: input.ip ?? null,
+        userAgent: input.userAgent ?? null,
+        details: input.details ?? null,
+        occurredAt: new Date(),
+      }),
+    );
+  }
+
+  /** Base das leituras de usuário: só as colunas do contrato. */
+  private userQuery(): SelectQueryBuilder<User> {
+    return this.db.manager
+      .createQueryBuilder(users, 'user')
+      .select(USER_COLUMNS.map((column) => `user.${column}`));
+  }
+
+  /**
+   * Base das leituras de associação: organização, papel e situação.
+   *
+   * Mistura colunas de três tabelas, então o resultado é linha crua — uma
+   * entidade hidratada precisaria de relações que o schema não declara.
+   */
+  private membershipQuery(): SelectQueryBuilder<OrganizationMember> {
+    return this.db.manager
+      .createQueryBuilder(organizationMembers, 'member')
+      .select('organization.id', 'organizationId')
+      .addSelect('organization.name', 'organizationName')
+      .addSelect('organization.slug', 'organizationSlug')
+      .addSelect('role.slug', 'roleSlug')
+      .addSelect('member.status', 'status')
+      .addSelect('organization.policy', 'policy')
+      .innerJoin(
+        organizations.options.name,
+        'organization',
+        'organization.id = member.organizationId',
+      )
+      .innerJoin(roles.options.name, 'role', 'role.id = member.roleId');
   }
 }
 
@@ -540,41 +604,47 @@ export class AuthRepository {
  * Cria uma organização com o usuário como dono.
  *
  * Fica fora da classe porque o registro e o módulo de organizações usam a mesma
- * sequência: plano padrão, slug livre, papel `owner`.
+ * sequência: plano padrão, slug livre, papel `owner`. Aceita tanto o
+ * `DataSource` quanto o gerenciador de uma transação já aberta — o registro
+ * precisa que a organização nasça junto com a conta.
  */
 export async function createOrganizationFor(
-  db: Database,
+  db: Database | Executor,
   userId: string,
   name: string,
 ): Promise<string> {
-  const planRows = await db
-    .select({ id: plans.id })
-    .from(plans)
-    .where(and(eq(plans.isDefault, true), eq(plans.isActive, true)))
-    .limit(1);
+  const executor = manager(db);
 
-  const planId = planRows[0]?.id;
+  const plan = await executor
+    .createQueryBuilder(plans, 'plan')
+    .select('plan.id')
+    .where('plan.isDefault = :isDefault', { isDefault: true })
+    .andWhere('plan.isActive = :isActive', { isActive: true })
+    .getOne();
+
+  const planId = plan?.id;
 
   if (planId === undefined) {
     throw new Error('No default plan is configured. Run the database seed first.');
   }
 
-  const ownerRoleRows = await db
-    .select({ id: roles.id })
-    .from(roles)
-    .where(and(isNull(roles.organizationId), eq(roles.slug, 'owner')))
-    .limit(1);
+  const ownerRole = await executor
+    .createQueryBuilder(roles, 'role')
+    .select('role.id')
+    .where('role.organizationId IS NULL')
+    .andWhere('role.slug = :slug', { slug: 'owner' })
+    .getOne();
 
-  const ownerRoleId = ownerRoleRows[0]?.id;
+  const ownerRoleId = ownerRole?.id;
 
   if (ownerRoleId === undefined) {
     throw new Error('The system roles are missing. Run the database seed first.');
   }
 
   const organizationId = newId();
-  const slug = await uniqueSlug(db, name);
+  const slug = await uniqueSlug(executor, name);
 
-  await db.insert(organizations).values({
+  await executor.insert(organizations, {
     id: organizationId,
     slug,
     name,
@@ -584,7 +654,7 @@ export async function createOrganizationFor(
     createdBy: userId,
   });
 
-  await db.insert(organizationMembers).values({
+  await executor.insert(organizationMembers, {
     id: newId(),
     organizationId,
     userId,
@@ -598,7 +668,8 @@ export async function createOrganizationFor(
 }
 
 /** Slug a partir do nome, com sufixo numérico quando já existir. */
-export async function uniqueSlug(db: Database, name: string): Promise<string> {
+export async function uniqueSlug(db: Database | Executor, name: string): Promise<string> {
+  const executor = manager(db);
   const base =
     name
       .toLowerCase()
@@ -610,17 +681,22 @@ export async function uniqueSlug(db: Database, name: string): Promise<string> {
 
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const candidate = attempt === 0 ? base : `${base}-${String(attempt + 1)}`;
-    const rows = await db
-      .select({ id: organizations.id })
-      .from(organizations)
-      .where(eq(organizations.slug, candidate))
-      .limit(1);
+    const taken = await executor
+      .createQueryBuilder(organizations, 'organization')
+      .select('organization.id')
+      .where('organization.slug = :candidate', { candidate })
+      .getOne();
 
-    if (rows.length === 0) {
+    if (taken === null) {
       return candidate;
     }
   }
 
   // Depois de 50 colisões, desiste de ser bonito e usa um sufixo aleatório.
   return `${base}-${newId().slice(-6).toLowerCase()}`;
+}
+
+/** Aceita tanto o `DataSource` quanto um `EntityManager` já aberto. */
+function manager(db: Database | Executor): Executor {
+  return 'manager' in db ? db.manager : db;
 }

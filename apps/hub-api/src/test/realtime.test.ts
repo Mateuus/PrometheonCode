@@ -16,7 +16,13 @@
  * - duas conexões da mesma pessoa, e o fechamento de uma.
  */
 
-import { enqueueOutboxMessage, newId, projectMembers, projects } from '@prometheon/database';
+import {
+  enqueueOutboxMessage,
+  newId,
+  projectMembers,
+  projects,
+  runInTransaction,
+} from '@prometheon/database';
 import { child } from '@prometheon/logger';
 import {
   createKeyNamespace,
@@ -86,14 +92,16 @@ describe.skipIf(!probe.ok)('realtime', () => {
     projectId: string | null;
     payload?: Record<string, unknown>;
   }): Promise<string> {
-    const id = await enqueueOutboxMessage(harness.app.db, {
-      organizationId: owner.organizationId,
-      projectId: input.projectId,
-      aggregateType: 'task',
-      aggregateId: newId(),
-      eventType: input.eventType,
-      payload: input.payload ?? { taskId: newId() },
-    });
+    const id = await runInTransaction(harness.app.db, async (tx) =>
+      enqueueOutboxMessage(tx, {
+        organizationId: owner.organizationId,
+        projectId: input.projectId,
+        aggregateType: 'task',
+        aggregateId: newId(),
+        eventType: input.eventType,
+        payload: input.payload ?? { taskId: newId() },
+      }),
+    );
 
     await publisher.runOnce();
 
@@ -112,7 +120,7 @@ describe.skipIf(!probe.ok)('realtime', () => {
     openProjectId = newId();
     privateProjectId = newId();
 
-    await harness.app.db.insert(projects).values([
+    await harness.app.db.manager.insert(projects, [
       {
         id: openProjectId,
         organizationId: owner.organizationId,
@@ -132,7 +140,7 @@ describe.skipIf(!probe.ok)('realtime', () => {
     ]);
 
     // A dona participa do projeto privado; o intruso do outro teste não.
-    await harness.app.db.insert(projectMembers).values({
+    await harness.app.db.manager.insert(projectMembers, {
       id: newId(),
       organizationId: owner.organizationId,
       projectId: privateProjectId,

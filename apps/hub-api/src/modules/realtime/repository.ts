@@ -1,8 +1,8 @@
 /**
  * Acesso ao banco do módulo de tempo real.
  *
- * Só consultas, todas por Drizzle — nenhuma decisão de autorização acontece
- * aqui; quem decide é `service.ts`, com `authorize()` de `@prometheon/permissions`.
+ * Só consultas — nenhuma decisão de autorização acontece aqui; quem decide é
+ * `service.ts`, com `authorize()` de `@prometheon/permissions`.
  */
 
 import {
@@ -17,7 +17,6 @@ import {
   users,
   type Database,
 } from '@prometheon/database';
-import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, or } from 'drizzle-orm';
 
 export interface RealtimeMembership {
   readonly organizationId: string;
@@ -71,58 +70,45 @@ export class RealtimeRepository {
     organizationId: string,
     userId: string,
   ): Promise<RealtimeMembership | undefined> {
-    const rows = await this.db
-      .select({
-        organizationId: organizations.id,
-        roleSlug: roles.slug,
-        status: organizationMembers.status,
-        policy: organizations.policy,
-      })
-      .from(organizationMembers)
-      .innerJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
-      .innerJoin(roles, eq(roles.id, organizationMembers.roleId))
-      .where(
-        and(
-          eq(organizationMembers.organizationId, organizationId),
-          eq(organizationMembers.userId, userId),
-          isNull(organizations.deletedAt),
-        ),
-      )
-      .limit(1);
+    const rows = await this.db.manager
+      .createQueryBuilder(organizationMembers, 'member')
+      .select('organization.id', 'organizationId')
+      .addSelect('role.slug', 'roleSlug')
+      .addSelect('member.status', 'status')
+      .addSelect('organization.policy', 'policy')
+      .innerJoin(organizations.options.name, 'organization', 'organization.id = member.organizationId')
+      .innerJoin(roles.options.name, 'role', 'role.id = member.roleId')
+      .where('member.organizationId = :organizationId', { organizationId })
+      .andWhere('member.userId = :userId', { userId })
+      .andWhere('organization.deleted_at IS NULL')
+      .limit(1)
+      .getRawMany<RealtimeMembership>();
 
     return rows[0];
   }
 
   async findProject(projectId: string): Promise<RealtimeProject | undefined> {
-    const rows = await this.db
-      .select({
-        id: projects.id,
-        organizationId: projects.organizationId,
-        visibility: projects.visibility,
-        status: projects.status,
-      })
-      .from(projects)
-      .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
-      .limit(1);
+    const row = await this.db.manager
+      .createQueryBuilder(projects, 'project')
+      .select(['project.id', 'project.organizationId', 'project.visibility', 'project.status'])
+      .where('project.id = :projectId', { projectId })
+      .andWhere('project.deletedAt IS NULL')
+      .getOne();
 
-    return rows[0];
+    return row ?? undefined;
   }
 
   /** `true` quando existe associação ativa da pessoa com o projeto. */
   async isProjectMember(projectId: string, userId: string): Promise<boolean> {
-    const rows = await this.db
-      .select({ id: projectMembers.id })
-      .from(projectMembers)
-      .where(
-        and(
-          eq(projectMembers.projectId, projectId),
-          eq(projectMembers.userId, userId),
-          eq(projectMembers.status, 'active'),
-        ),
-      )
-      .limit(1);
+    const found = await this.db.manager
+      .createQueryBuilder(projectMembers, 'member')
+      .select('member.id')
+      .where('member.projectId = :projectId', { projectId })
+      .andWhere('member.userId = :userId', { userId })
+      .andWhere("member.status = 'active'")
+      .getOne();
 
-    return rows.length > 0;
+    return found !== null;
   }
 
   /**
@@ -132,33 +118,27 @@ export class RealtimeRepository {
    * revogação dele (`Docs/09`); a conexão reconfere isto a cada revalidação.
    */
   async isDeviceUsable(deviceId: string): Promise<boolean> {
-    const rows = await this.db
-      .select({ status: devices.status })
-      .from(devices)
-      .where(eq(devices.id, deviceId))
-      .limit(1);
+    const device = await this.db.manager
+      .createQueryBuilder(devices, 'device')
+      .select('device.status')
+      .where('device.id = :deviceId', { deviceId })
+      .getOne();
 
-    const status = rows[0]?.status;
-
-    if (status !== 'active') {
+    if (device?.status !== 'active') {
       return false;
     }
 
     // Dispositivo ativo mas com todas as credenciais revogadas não vale mais:
     // a revogação acontece no token, não no dispositivo.
-    const credentials = await this.db
-      .select({ id: deviceTokens.id })
-      .from(deviceTokens)
-      .where(
-        and(
-          eq(deviceTokens.deviceId, deviceId),
-          eq(deviceTokens.type, 'device_credential'),
-          isNull(deviceTokens.revokedAt),
-        ),
-      )
-      .limit(1);
+    const credential = await this.db.manager
+      .createQueryBuilder(deviceTokens, 'token')
+      .select('token.id')
+      .where('token.deviceId = :deviceId', { deviceId })
+      .andWhere("token.type = 'device_credential'")
+      .andWhere('token.revokedAt IS NULL')
+      .getOne();
 
-    return credentials.length > 0;
+    return credential !== null;
   }
 
   /**
@@ -176,41 +156,32 @@ export class RealtimeRepository {
    * evento de um projeto privado não é.
    */
   async listAccessibleProjects(organizationId: string, userId: string): Promise<string[]> {
-    const rows = await this.db
-      .select({ id: projects.id })
-      .from(projects)
+    const rows = await this.db.manager
+      .createQueryBuilder(projects, 'project')
+      .select('project.id', 'id')
       .leftJoin(
-        projectMembers,
-        and(
-          eq(projectMembers.projectId, projects.id),
-          eq(projectMembers.userId, userId),
-          eq(projectMembers.status, 'active'),
-        ),
+        projectMembers.options.name,
+        'member',
+        "member.project_id = project.id AND member.user_id = :userId AND member.status = 'active'",
+        { userId },
       )
-      .where(
-        and(
-          eq(projects.organizationId, organizationId),
-          isNull(projects.deletedAt),
-          or(eq(projects.visibility, 'organization'), isNotNull(projectMembers.id)),
-        ),
-      );
+      .where('project.organizationId = :organizationId', { organizationId })
+      .andWhere('project.deletedAt IS NULL')
+      .andWhere("(project.visibility = 'organization' OR member.id IS NOT NULL)")
+      .getRawMany<{ id: string }>();
 
     return rows.map((row) => row.id);
   }
 
   async findUser(userId: string): Promise<RealtimeUser | undefined> {
-    const rows = await this.db
-      .select({
-        id: users.id,
-        displayName: users.displayName,
-        email: users.email,
-        avatarUrl: users.avatarUrl,
-      })
-      .from(users)
-      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
-      .limit(1);
+    const row = await this.db.manager
+      .createQueryBuilder(users, 'user')
+      .select(['user.id', 'user.displayName', 'user.email', 'user.avatarUrl'])
+      .where('user.id = :userId', { userId })
+      .andWhere('user.deletedAt IS NULL')
+      .getOne();
 
-    return rows[0];
+    return row ?? undefined;
   }
 
   /** Pessoas de um lote de identificadores, para montar a presença. */
@@ -219,15 +190,11 @@ export class RealtimeRepository {
       return [];
     }
 
-    return this.db
-      .select({
-        id: users.id,
-        displayName: users.displayName,
-        email: users.email,
-        avatarUrl: users.avatarUrl,
-      })
-      .from(users)
-      .where(inArray(users.id, [...userIds]));
+    return this.db.manager
+      .createQueryBuilder(users, 'user')
+      .select(['user.id', 'user.displayName', 'user.email', 'user.avatarUrl'])
+      .where('user.id IN (:...userIds)', { userIds: [...userIds] })
+      .getMany();
   }
 
   /**
@@ -249,31 +216,32 @@ export class RealtimeRepository {
       return [];
     }
 
-    return this.db
-      .select({
-        id: outboxMessages.id,
-        organizationId: outboxMessages.organizationId,
-        projectId: outboxMessages.projectId,
-        aggregateType: outboxMessages.aggregateType,
-        aggregateId: outboxMessages.aggregateId,
-        aggregateSequence: outboxMessages.aggregateSequence,
-        eventType: outboxMessages.eventType,
-        eventVersion: outboxMessages.eventVersion,
-        payload: outboxMessages.payload,
-        occurredAt: outboxMessages.occurredAt,
+    const rows = await this.db.manager
+      .createQueryBuilder(outboxMessages, 'outbox')
+      .select([
+        'outbox.id',
+        'outbox.organizationId',
+        'outbox.projectId',
+        'outbox.aggregateType',
+        'outbox.aggregateId',
+        'outbox.aggregateSequence',
+        'outbox.eventType',
+        'outbox.eventVersion',
+        'outbox.payload',
+        'outbox.occurredAt',
+      ])
+      .where('outbox.organizationId IN (:...organizationIds)', {
+        organizationIds: [...query.organizationIds],
       })
-      .from(outboxMessages)
-      .where(
-        and(
-          inArray(outboxMessages.organizationId, [...query.organizationIds]),
-          gte(outboxMessages.id, query.sinceId),
-          gt(outboxMessages.id, query.afterCursor),
-          // Só o que o worker já publicou: entregar um evento ainda não
-          // publicado furaria a ordem que o publicador garante por agregado.
-          isNotNull(outboxMessages.publishedAt),
-        ),
-      )
-      .orderBy(asc(outboxMessages.id))
-      .limit(query.limit);
+      .andWhere('outbox.id >= :sinceId', { sinceId: query.sinceId })
+      .andWhere('outbox.id > :afterCursor', { afterCursor: query.afterCursor })
+      // Só o que o worker já publicou: entregar um evento ainda não publicado
+      // furaria a ordem que o publicador garante por agregado.
+      .andWhere('outbox.publishedAt IS NOT NULL')
+      .orderBy('outbox.id', 'ASC')
+      .limit(query.limit)
+      .getMany();
+
+    return rows;
   }
 }

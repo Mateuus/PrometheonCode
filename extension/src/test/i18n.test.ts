@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 import { EXTENSION_ID } from '../constants';
+import { applyLanguage, initializeLanguage, languageChoice, t, webviewStrings } from '../i18n';
 import { WEBVIEW_STRINGS } from '../i18n/catalog';
 
 /** Idiomas que o produto promete hoje, além do inglês (que é a fonte). */
@@ -91,6 +92,35 @@ suite('Localização', () => {
       const missing = [...used].filter((key) => bundle[key] === undefined);
       assert.deepEqual(missing, [], `faltam chaves em ${file}`);
     }
+  });
+
+  test('o idioma escolhido no painel vence o idioma do VS Code', () => {
+    initializeLanguage(extensionRoot(), 'pt-br');
+    assert.equal(languageChoice(), 'pt-br');
+    assert.equal(t('Sessions'), 'Sessões');
+    assert.equal(t('Submit answers'), 'Enviar respostas');
+
+    applyLanguage('es');
+    assert.equal(t('Sessions'), 'Sesiones');
+
+    // Inglês é a fonte: sem bundle, o próprio texto volta.
+    applyLanguage('en');
+    assert.equal(t('Sessions'), 'Sessions');
+
+    // Texto fora do catálogo não vira chave crua na tela.
+    applyLanguage('pt-br');
+    assert.equal(t('Frase que ninguém traduziu'), 'Frase que ninguém traduziu');
+
+    applyLanguage('auto');
+    assert.equal(languageChoice(), 'auto');
+  });
+
+  test('o catálogo da webview sai indexado pelo texto em inglês', () => {
+    initializeLanguage(extensionRoot(), 'pt-br');
+    const strings = webviewStrings();
+    assert.equal(strings['Sessions'], 'Sessões');
+    assert.equal(strings['Question from the agent'], 'Pergunta do agente');
+    applyLanguage('auto');
   });
 
   test('os três arquivos do manifest declaram exatamente as mesmas chaves', () => {

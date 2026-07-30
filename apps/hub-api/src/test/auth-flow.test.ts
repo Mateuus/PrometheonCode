@@ -12,7 +12,6 @@
  */
 
 import { refreshTokens, users } from '@prometheon/database';
-import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { hashToken } from '../shared/crypto.js';
@@ -118,10 +117,10 @@ describe.skipIf(!probe.ok)('fluxo de autenticação', () => {
     expect(login.payload).not.toContain(password);
 
     // O refresh token só existe hasheado no banco.
-    const stored = await harness.app.db
-      .select({ id: refreshTokens.id })
-      .from(refreshTokens)
-      .where(eq(refreshTokens.tokenHash, hashToken(session.tokens.refreshToken)));
+    const stored = await harness.app.db.manager.find(refreshTokens, {
+      select: { id: true },
+      where: { tokenHash: hashToken(session.tokens.refreshToken) },
+    });
 
     expect(stored).toHaveLength(1);
 
@@ -251,10 +250,10 @@ describe.skipIf(!probe.ok)('fluxo de autenticação', () => {
     expect(body<{ data: unknown }>(second).data).toEqual(body<{ data: unknown }>(first).data);
 
     // A segunda tentativa não criou conta nova.
-    const rows = await harness.app.db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.email, email));
+    const rows = await harness.app.db.manager.find(users, {
+      select: { id: true },
+      where: { email },
+    });
 
     expect(rows).toHaveLength(1);
 

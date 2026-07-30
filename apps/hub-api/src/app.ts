@@ -23,6 +23,7 @@
  */
 
 import { API_PREFIX } from '@prometheon/contracts';
+import type { Database } from '@prometheon/database';
 import { configureRootLogger, getRootLogger } from '@prometheon/logger';
 import Fastify, {
   LogController,
@@ -65,7 +66,7 @@ import { ProjectService } from './modules/projects/service.js';
 import { taskRoutes } from './modules/tasks/routes.js';
 import { TaskService } from './modules/tasks/service.js';
 import { registerAuth } from './plugins/auth.js';
-import { registerDatabase, type DatabaseHandles } from './plugins/database.js';
+import { registerDatabase } from './plugins/database.js';
 import { registerErrorHandler } from './plugins/error-handler.js';
 import { registerObservability } from './plugins/observability.js';
 import { registerOpenapi } from './plugins/openapi.js';
@@ -78,8 +79,8 @@ import { registerSecurity } from './plugins/security.js';
 export interface BuildAppOptions {
   /** Configuração pronta. Os testes passam a deles; o servidor lê do ambiente. */
   readonly config?: AppConfig | undefined;
-  /** Banco já aberto, usado pelos testes contra banco descartável. */
-  readonly databaseHandles?: DatabaseHandles | undefined;
+  /** Conexão já aberta, usada pelos testes contra banco descartável. */
+  readonly database?: Database | undefined;
   /** Serviço de e-mail já montado, para o teste inspecionar as mensagens. */
   readonly mailer?: MailService | undefined;
   /**
@@ -133,8 +134,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<BuiltApp>
   registerObservability(app);
 
   await registerDatabase(app, {
-    handles: options.databaseHandles,
-    owned: options.databaseHandles === undefined,
+    db: options.database,
+    owned: options.database === undefined,
   });
   await registerRedis(app);
 

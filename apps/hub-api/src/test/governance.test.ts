@@ -25,9 +25,11 @@ import {
   projects,
   roles,
   securityEvents,
+  writable,
+  type SecurityEvent,
 } from '@prometheon/database';
-import { and, eq, isNull } from 'drizzle-orm';
 import { Redis } from 'ioredis';
+import { IsNull } from 'typeorm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { assertPlanLimit } from '../modules/billing/limits.js';
@@ -63,7 +65,7 @@ describe.skipIf(!probe.ok)('planos, limites e governança', () => {
 
     projectId = newId();
 
-    await harness.app.db.insert(projects).values({
+    await harness.app.db.manager.insert(projects, {
       id: projectId,
       organizationId: owner.organizationId,
       slug: 'governance',
@@ -75,7 +77,7 @@ describe.skipIf(!probe.ok)('planos, limites e governança', () => {
     // teste é mais honesto que criar quinhentos itens para bater no teto real.
     tinyPlanId = newId();
 
-    await harness.app.db.insert(plans).values({
+    await harness.app.db.manager.insert(plans, {
       id: tinyPlanId,
       code: 'tiny',
       name: 'Tiny',
@@ -266,11 +268,11 @@ describe.skipIf(!probe.ok)('planos, limites e governança', () => {
   });
 
   it('refuses a downgrade that does not fit the current usage', async () => {
-    const reviewerRole = await harness.app.db
-      .select({ id: roles.id })
-      .from(roles)
-      .where(and(eq(roles.slug, 'reviewer'), isNull(roles.organizationId)))
-      .limit(1);
+    const reviewerRole = await harness.app.db.manager.find(roles, {
+      select: { id: true },
+      where: { slug: 'reviewer', organizationId: IsNull() },
+      take: 1,
+    });
 
     const teammate = await registerAndLogin(harness, {
       name: 'Governance Reviewer',
@@ -278,7 +280,7 @@ describe.skipIf(!probe.ok)('planos, limites e governança', () => {
       password: 'Sup3r-S3nha-F0rte!',
     });
 
-    await harness.app.db.insert(organizationMembers).values({
+    await harness.app.db.manager.insert(organizationMembers, {
       id: newId(),
       organizationId: owner.organizationId,
       userId: teammate.userId,
@@ -290,7 +292,7 @@ describe.skipIf(!probe.ok)('planos, limites e governança', () => {
 
     const cramped = newId();
 
-    await harness.app.db.insert(plans).values({
+    await harness.app.db.manager.insert(plans, {
       id: cramped,
       code: 'solo',
       name: 'Solo',
@@ -418,16 +420,19 @@ describe.skipIf(!probe.ok)('planos, limites e governança', () => {
   });
 
   it('reads security events for whoever has audit.read', async () => {
-    await harness.app.db.insert(securityEvents).values({
-      id: newId(),
-      organizationId: owner.organizationId,
-      userId: owner.userId,
-      type: 'login_failed',
-      severity: 'high',
-      ip: '203.0.113.10',
-      details: { attempts: 3 },
-      occurredAt: new Date(),
-    });
+    await harness.app.db.manager.insert(
+      securityEvents,
+      writable<SecurityEvent>({
+        id: newId(),
+        organizationId: owner.organizationId,
+        userId: owner.userId,
+        type: 'login_failed',
+        severity: 'high',
+        ip: '203.0.113.10',
+        details: { attempts: 3 },
+        occurredAt: new Date(),
+      }),
+    );
 
     const response = await harness.app.inject({
       method: 'GET',
@@ -505,11 +510,10 @@ describe.skipIf(!probe.ok)('planos, limites e governança', () => {
       expect(bundle).not.toContain(forbidden);
     }
 
-    const [stored] = await harness.app.db
-      .select({ status: dataExportJobs.status })
-      .from(dataExportJobs)
-      .where(eq(dataExportJobs.id, job.id))
-      .limit(1);
+    const stored = await harness.app.db.manager.findOne(dataExportJobs, {
+      select: { status: true },
+      where: { id: job.id },
+    });
 
     expect(stored?.status).toBe('completed');
   });

@@ -10,6 +10,7 @@ import type {
   ConversationSummary,
   ImageAttachment,
 } from '../../chat/types';
+import type { LanguageChoice } from '../../i18n/language';
 import {
   IMAGE_MIME_TYPES,
   MAX_STEP_OUTPUT_CHARS,
@@ -72,6 +73,27 @@ declare const acquireVsCodeApi: () => {
 };
 
 const api = acquireVsCodeApi();
+
+/**
+ * Dicionário do idioma ativo, entregue no HTML pela extensão e indexado pelo
+ * texto em inglês. A webview não alcança `vscode.l10n`; o que não estiver aqui
+ * aparece em inglês, que é a fonte.
+ */
+const STRINGS: Readonly<Record<string, string>> = (() => {
+  try {
+    const parsed: unknown = JSON.parse(document.body.dataset['strings'] ?? '{}');
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, string>)
+      : {};
+  } catch {
+    return {};
+  }
+})();
+
+/** Texto da interface no idioma ativo. A chave é a própria frase em inglês. */
+function s(english: string): string {
+  return STRINGS[english] ?? english;
+}
 
 /** Estado leve preservado quando a view é escondida e reconstruída. */
 interface PersistedUi {
@@ -735,18 +757,36 @@ function formatTokens(count: number): string {
 // ---------- Modal de configuração ----------
 
 const SECTION_LABELS: Record<SettingsSection, string> = {
-  accounts: 'Accounts',
-  agents: 'Agents',
-  workspace: 'Workspace',
-  mcp: 'MCP',
+  general: s('General'),
+  accounts: s('Accounts'),
+  agents: s('Agents'),
+  workspace: s('Workspace'),
+  mcp: s('MCP'),
 };
 
 const SECTION_ICONS: Record<SettingsSection, string> = {
+  general: 'sliders',
   accounts: 'person',
   agents: 'agent',
   workspace: 'folder',
   mcp: 'plug',
 };
+
+/** Idiomas oferecidos no painel, na ordem em que aparecem no menu. */
+const LANGUAGE_OPTIONS: readonly {
+  readonly value: LanguageChoice;
+  readonly label: string;
+  readonly description: string;
+}[] = [
+  { value: 'auto', label: s('Follow VS Code'), description: s('Use the display language of the editor.') },
+  { value: 'en', label: s('English'), description: s('Source language of the interface.') },
+  {
+    value: 'pt-br',
+    label: s('Português (Brasil)'),
+    description: s('Interface in Brazilian Portuguese.'),
+  },
+  { value: 'es', label: s('Español'), description: s('Interface in Spanish.') },
+];
 
 const ROLE_ICONS: Record<AgentRole, string> = {
   orchestrator: 'agent-team',
@@ -935,6 +975,8 @@ function renderSettingsNav(): void {
 
 function renderSection(): readonly Node[] {
   switch (settingsSection) {
+    case 'general':
+      return renderGeneralSection();
     case 'accounts':
       return renderAccountsSection();
     case 'agents':
@@ -1110,6 +1152,43 @@ function warningNote(text: string): HTMLElement {
   note.className = 'settings-warning';
   note.textContent = text;
   return note;
+}
+
+// ---------- Seção General ----------
+
+/**
+ * Preferências que valem para o painel inteiro. Hoje, o idioma: a escolha vai
+ * para as configurações do usuário e a webview é redesenhada com o texto novo.
+ */
+function renderGeneralSection(): readonly Node[] {
+  const language = state?.language ?? 'auto';
+  return [
+    sectionHeading(
+      s('General'),
+      s(
+        'Applies to this panel. Menus and commands contributed to VS Code follow the editor language.',
+      ),
+    ),
+    menuField(
+      s('Interface language'),
+      LANGUAGE_OPTIONS.map((option) => ({
+        value: option.value,
+        label: option.label,
+        description: option.description,
+        icon: 'globe',
+      })),
+      language,
+      (value) => {
+        if (isLanguageChoice(value) && value !== language) {
+          post({ type: 'settings.setLanguage', payload: { language: value } });
+        }
+      },
+    ),
+  ];
+}
+
+function isLanguageChoice(value: string): value is LanguageChoice {
+  return LANGUAGE_OPTIONS.some((option) => option.value === value);
 }
 
 // ---------- Seção Accounts ----------
@@ -2100,12 +2179,12 @@ function renderDictation(speech: PrometheonViewState['speech']): void {
   dom.dictate.setAttribute('aria-pressed', String(listening));
   dom.dictate.disabled = state?.chatType === 'web' || transcribing;
   dom.dictate.title = !speech.available
-    ? (speech.detail ?? 'Dictation unavailable.')
+    ? (speech.detail ?? s('Dictation unavailable.'))
     : listening
-      ? 'Listening… tap Ctrl+D to stop'
+      ? s('Listening… tap Ctrl+D to stop')
       : transcribing
-        ? 'Transcribing…'
-        : 'Dictate — tap or hold Ctrl+D to record';
+        ? s('Transcribing…')
+        : s('Dictate — tap or hold Ctrl+D to record');
 }
 
 /** Insere o texto ditado onde está o cursor, sem apagar o que já foi escrito. */
@@ -2156,9 +2235,9 @@ function renderSessions(): void {
   dom.sessionEmpty.textContent =
     sessions.length === 0
       ? state?.chatType === 'web'
-        ? 'Web sessions need a connected Hub.'
-        : 'No sessions yet.'
-      : 'No session matches this search.';
+        ? s('Web sessions need a connected Hub.')
+        : s('No sessions yet.')
+      : s('No session matches this search.');
 
   dom.sessionList.replaceChildren(...visible.map(renderSessionItem));
 }
@@ -2200,7 +2279,7 @@ function renderSessionItem(session: ConversationSummary): HTMLElement {
  * Rótulo da escolha livre. Nunca vai no `selected` da resposta: o que o usuário
  * escreve viaja em `custom`, e o núcleo só aceita rótulos que ele mesmo ofereceu.
  */
-const OTHER_LABEL = 'Other';
+const OTHER_LABEL = s('Other');
 
 interface QuestionDraft {
   /** Rótulos marcados entre as opções oferecidas pelo agente. */
@@ -2316,7 +2395,7 @@ function renderQuestionOptions(item: AgentQuestion, index: number): DocumentFrag
     input.className = 'question-custom';
     input.value = draft.custom;
     input.maxLength = MAX_CUSTOM_ANSWER_LENGTH;
-    input.placeholder = 'Type your answer…';
+    input.placeholder = s('Type your answer…');
     input.setAttribute('aria-label', item.question);
     input.addEventListener('input', () => {
       draft.custom = input.value;
@@ -2459,7 +2538,7 @@ function renderStep(step: AgentStep): HTMLElement {
 
   const tool = document.createElement('span');
   tool.className = 'step-tool';
-  tool.textContent = step.kind === 'question' ? 'Asked' : step.tool;
+  tool.textContent = step.kind === 'question' ? s('Asked') : step.tool;
 
   const target = document.createElement('span');
   target.className = 'step-target';
@@ -2467,7 +2546,9 @@ function renderStep(step: AgentStep): HTMLElement {
 
   const detail = document.createElement('span');
   detail.className = 'step-detail';
-  detail.textContent = step.detail ?? '';
+  // O resumo de uma pergunta cancelada é texto nosso, e é traduzível; o resto
+  // do detalhe vem do agente e passa intacto.
+  detail.textContent = step.kind === 'question' ? s(step.detail ?? '') : (step.detail ?? '');
 
   const hasOutput = step.output !== undefined && step.output !== '';
   if (!hasOutput) {
@@ -2550,7 +2631,7 @@ function renderMessage(message: ChatMessage): HTMLElement {
   const author = document.createElement('span');
   author.className = 'author';
   author.textContent =
-    message.author === 'user' ? 'You' : (message.agentName ?? capitalize(message.author));
+    message.author === 'user' ? s('You') : (message.agentName ?? capitalize(message.author));
   header.append(author);
 
   if (message.author === 'agent' && message.agentId !== undefined) {
@@ -2641,7 +2722,7 @@ function renderAgents(agents: readonly ActiveAgentSummary[]): void {
       const stop = document.createElement('button');
       stop.type = 'button';
       stop.className = 'agent-stop';
-      stop.textContent = 'Stop';
+      stop.textContent = s('Stop');
       stop.disabled = agent.status === 'completed' || agent.status === 'stopped';
       stop.addEventListener('click', () =>
         post({ type: 'agents.stop', payload: { sessionId: agent.sessionId } }),

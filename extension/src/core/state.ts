@@ -1,5 +1,6 @@
 import type { AgentQuestionRequest } from '../agents/questions';
 import type { ChatMessage, ConversationSummary } from '../chat/types';
+import type { LanguageChoice } from '../i18n/language';
 import type {
   AccountSummary,
   ActiveAgentSummary,
@@ -20,6 +21,8 @@ import type {
 /** Snapshot completo enviado à webview. É a única fonte de verdade da UI. */
 export interface PrometheonViewState {
   readonly extensionVersion: string;
+  /** Idioma escolhido para o painel; `auto` segue o VS Code. */
+  readonly language: LanguageChoice;
   readonly chatType: ChatType;
   readonly workMode: WorkMode;
   readonly autonomy: Autonomy;

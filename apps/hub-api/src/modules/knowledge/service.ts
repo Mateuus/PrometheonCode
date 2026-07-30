@@ -36,12 +36,16 @@ import {
   knowledgeSources,
   knowledgeVersions,
   newId,
+  runInTransaction,
+  writable,
   type Database,
+  type KnowledgeItem as KnowledgeItemEntity,
+  type TransactionExecutor,
 } from '@prometheon/database';
-import { and, eq, sql } from 'drizzle-orm';
 
 import { buildPage, type CursorPage } from '../../shared/cursor.js';
 import { conflict } from '../../shared/errors.js';
+import { affectedRows } from '../../shared/query.js';
 import { toIso, toIsoOrNull } from '../../shared/time.js';
 import { assertPlanLimit } from '../billing/limits.js';
 import { diffLines } from './diff.js';
@@ -58,8 +62,6 @@ import {
   type KnowledgeSourceRow,
   type KnowledgeVersionRow,
 } from './repository.js';
-
-type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 
 /** Pastas do Vault Obsidian (`Docs/10`), por categoria. */
 const VAULT_FOLDER: Readonly<Record<string, string>> = {
@@ -327,8 +329,6 @@ export class KnowledgeService {
         ? undefined
         : await this.repository.findItem(payload.knowledgeId);
 
-    let nextNumber = 1;
-
     if (payload.knowledgeId !== undefined) {
       if (
         existing?.organizationId !== input.organizationId ||
@@ -347,9 +347,6 @@ export class KnowledgeService {
           'This knowledge item already has a version awaiting review. Review it before proposing another.',
         );
       }
-
-      nextNumber =
-        versions.reduce((highest, version) => Math.max(highest, version.versionNumber), 0) + 1;
     } else {
       // Item novo consome uma vaga do plano; versão nova de item existente, não.
       await assertPlanLimit(this.db, {
@@ -364,39 +361,46 @@ export class KnowledgeService {
     const slug = existing?.slug ?? (await this.uniqueSlug(input, payload.title));
     const now = new Date();
 
-    await this.db.transaction(async (tx) => {
+    await runInTransaction(this.db, async (tx) => {
       if (existing === undefined) {
-        await tx.insert(knowledgeItems).values({
-          id: itemId,
-          organizationId: input.organizationId,
-          projectId: input.projectId,
-          slug,
-          title: payload.title,
-          category: payload.category,
-          status: 'proposed',
-          origin: payload.origin,
-          confidence: payload.confidence,
-          scope: payload.scope ?? null,
-          path: `${VAULT_FOLDER[payload.category] ?? 'Home'}/${slug}.md`,
-          currentVersionId: null,
-          tags: payload.tags,
-          createdBy: input.actorId,
-        });
+        await tx.insert(
+          knowledgeItems,
+          writable<KnowledgeItemEntity>({
+            id: itemId,
+            organizationId: input.organizationId,
+            projectId: input.projectId,
+            slug,
+            title: payload.title,
+            category: payload.category,
+            status: 'proposed',
+            origin: payload.origin,
+            confidence: payload.confidence,
+            scope: payload.scope ?? null,
+            path: `${VAULT_FOLDER[payload.category] ?? 'Home'}/${slug}.md`,
+            currentVersionId: null,
+            tags: payload.tags,
+            createdBy: input.actorId,
+          }),
+        );
       } else {
         // O item continua apontando para a versão vigente: a proposta ainda não
         // vale nada. Só o estado muda, para a listagem mostrar que há revisão
         // pendente.
         await tx
+          .createQueryBuilder()
           .update(knowledgeItems)
           .set({
             status: 'proposed',
             updatedAt: now,
-            version: sql`${knowledgeItems.version} + 1`,
+            version: () => 'version + 1',
           })
-          .where(eq(knowledgeItems.id, itemId));
+          .where('id = :itemId', { itemId })
+          .execute();
       }
 
-      await tx.insert(knowledgeVersions).values({
+      const nextNumber = await nextVersionNumber(tx, itemId);
+
+      await tx.insert(knowledgeVersions, {
         id: versionId,
         organizationId: input.organizationId,
         knowledgeItemId: itemId,
@@ -414,7 +418,8 @@ export class KnowledgeService {
       });
 
       if (payload.sources.length > 0) {
-        await tx.insert(knowledgeSources).values(
+        await tx.insert(
+          knowledgeSources,
           payload.sources.map((source) => ({
             id: newId(),
             organizationId: input.organizationId,
@@ -433,10 +438,14 @@ export class KnowledgeService {
 
       if (payload.relations.length > 0) {
         for (const relation of payload.relations) {
-          // `INSERT IGNORE`: a relação tem unique natural, e repetir uma que já
-          // existe não é erro do usuário.
+          // A relação tem unique natural, e repetir uma que já existe não é erro
+          // do usuário: o `ON DUPLICATE KEY UPDATE relation_type =
+          // VALUES(relation_type)` reescreve a linha com o mesmo valor, ou seja,
+          // não muda nada e não falha.
           await tx
-            .insert(knowledgeRelations)
+            .createQueryBuilder()
+            .insert()
+            .into(knowledgeRelations)
             .values({
               id: newId(),
               organizationId: input.organizationId,
@@ -445,7 +454,8 @@ export class KnowledgeService {
               relationType: relation.relation,
               createdBy: input.actorId,
             })
-            .onDuplicateKeyUpdate({ set: { relationType: relation.relation } });
+            .orUpdate(['relation_type'])
+            .execute();
         }
       }
 
@@ -516,7 +526,7 @@ export class KnowledgeService {
     const reviewId = newId();
     const now = new Date();
 
-    await this.db.transaction(async (tx) => {
+    await runInTransaction(this.db, async (tx) => {
       const claimed = await this.applyDecision(tx, {
         row,
         pending,
@@ -530,7 +540,7 @@ export class KnowledgeService {
         throw reviewConflict();
       }
 
-      await tx.insert(knowledgeReviews).values({
+      await tx.insert(knowledgeReviews, {
         id: reviewId,
         organizationId: input.organizationId,
         knowledgeItemId: row.id,
@@ -586,7 +596,7 @@ export class KnowledgeService {
    * momento, não só do que vale hoje.
    */
   private async applyDecision(
-    tx: Transaction,
+    tx: TransactionExecutor,
     input: {
       row: KnowledgeItemRow;
       pending: KnowledgeVersionRow;
@@ -608,48 +618,59 @@ export class KnowledgeService {
           : 'proposed';
 
     const claim = await tx
+      .createQueryBuilder()
       .update(knowledgeItems)
       .set({
-        status: nextStatus,
-        ...(decision === 'approve'
-          ? {
-              currentVersionId: pending.id,
-              title: pending.title,
-              origin: pending.origin,
-              confidence: pending.confidence,
-              approvedAt: now,
-            }
-          : {}),
-        updatedAt: now,
-        version: sql`${knowledgeItems.version} + 1`,
+        ...writable<KnowledgeItemEntity>({
+          status: nextStatus,
+          ...(decision === 'approve'
+            ? {
+                currentVersionId: pending.id,
+                title: pending.title,
+                origin: pending.origin,
+                confidence: pending.confidence,
+                approvedAt: now,
+              }
+            : {}),
+          updatedAt: now,
+        }),
+        version: () => 'version + 1',
       })
-      .where(and(eq(knowledgeItems.id, row.id), eq(knowledgeItems.version, input.version)));
+      .where('id = :id', { id: row.id })
+      .andWhere('version = :version', { version: input.version })
+      .execute();
 
-    if (claim[0].affectedRows === 0) {
+    if (affectedRows(claim) === 0) {
       return false;
     }
 
     if (decision === 'approve') {
       if (input.currentVersionId !== null) {
         await tx
+          .createQueryBuilder()
           .update(knowledgeVersions)
           .set({ status: 'superseded', updatedAt: now })
-          .where(eq(knowledgeVersions.id, input.currentVersionId));
+          .where('id = :id', { id: input.currentVersionId })
+          .execute();
       }
 
       await tx
+        .createQueryBuilder()
         .update(knowledgeVersions)
         .set({ status: 'approved', updatedAt: now })
-        .where(eq(knowledgeVersions.id, pending.id));
+        .where('id = :id', { id: pending.id })
+        .execute();
     }
 
     if (decision === 'reject') {
       // Conhecimento rejeitado continua gravado (histórico) mas não volta a ser
       // injetado nos agentes — a consulta do contexto filtra por `status`.
       await tx
+        .createQueryBuilder()
         .update(knowledgeVersions)
         .set({ status: 'rejected', updatedAt: now })
-        .where(eq(knowledgeVersions.id, pending.id));
+        .where('id = :id', { id: pending.id })
+        .execute();
     }
 
     return true;
@@ -676,4 +697,32 @@ export class KnowledgeService {
 
     return `${base}-${newId().slice(-8).toLowerCase()}`;
   }
+}
+
+/**
+ * Reserva o próximo número de versão do item, dentro da transação.
+ *
+ * `(knowledge_item_id, version_number)` tem unique natural, então o número não
+ * pode sair de um `MAX(...) + 1` lido fora de lock: duas propostas simultâneas
+ * para o mesmo item leriam o mesmo máximo e a segunda viraria erro 500 em vez
+ * de simplesmente receber o número seguinte. O `FOR UPDATE` segura a faixa do
+ * índice único até o commit — a segunda transação só lê depois que a primeira
+ * gravou.
+ *
+ * É SQL cru porque o que interessa é o agregado com o lock, e o query builder
+ * só aplica `FOR UPDATE` a consultas de entidade.
+ */
+async function nextVersionNumber(
+  tx: TransactionExecutor,
+  knowledgeItemId: string,
+): Promise<number> {
+  const rows: { next: number | string | null }[] = await tx.query(
+    `select coalesce(max(version_number), 0) + 1 as next
+       from knowledge_versions
+      where knowledge_item_id = ?
+      for update`,
+    [knowledgeItemId],
+  );
+
+  return Number(rows[0]?.next ?? 1);
 }

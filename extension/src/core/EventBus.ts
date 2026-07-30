@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { AgentQuestionRequest } from '../agents/questions';
 import type { ChatEvent, ImageAttachment } from '../chat/types';
+import type { LanguageChoice } from '../i18n/language';
 import type { PrometheonViewState } from './state';
 import type {
   ActiveAgentSummary,
@@ -20,6 +21,8 @@ export interface PrometheonEventMap {
   'attachments.added': readonly ImageAttachment[];
   'speech.transcript': string;
   'activity.changed': ActivityStatus;
+  /** O idioma mudou; a webview precisa do HTML refeito. */
+  'language.changed': LanguageChoice;
   /** Abre o modal de pergunta do agente. */
   'question.ask': AgentQuestionRequest;
   /** Fecha o modal, respondido ou não. */

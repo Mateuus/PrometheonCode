@@ -8,6 +8,7 @@ import {
   type AgentQuestionRequest,
 } from '../agents/questions';
 import { IMAGE_MIME_TYPES, type ChatEvent, type ImageAttachment } from '../chat/types';
+import { LANGUAGE_CHOICES, type LanguageChoice } from '../i18n/language';
 import type { PrometheonViewState } from '../core/state';
 import {
   AGENT_AUTONOMY_MODES,
@@ -51,9 +52,10 @@ import { PROVIDER_IDS } from '../providers/types';
 export type WorkspaceSetupChoice = 'current' | 'external' | 'skip';
 
 /** Seções do modal de configuração, na ordem em que aparecem na navegação. */
-export type SettingsSection = 'accounts' | 'agents' | 'workspace' | 'mcp';
+export type SettingsSection = 'general' | 'accounts' | 'agents' | 'workspace' | 'mcp';
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  'general',
   'accounts',
   'agents',
   'workspace',
@@ -139,6 +141,10 @@ export type WebviewToExtensionMessage =
   | { readonly type: 'settings.setWorkMode'; readonly payload: { readonly mode: WorkMode } }
   | { readonly type: 'settings.setAutonomy'; readonly payload: { readonly autonomy: Autonomy } }
   | { readonly type: 'settings.selectMainAgent'; readonly payload: { readonly agentId: string } }
+  | {
+      readonly type: 'settings.setLanguage';
+      readonly payload: { readonly language: LanguageChoice };
+    }
   /** Abre as configurações da extensão no editor do VS Code (botão de engrenagem). */
   | { readonly type: 'settings.openEditor' }
   | {
@@ -674,6 +680,11 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
     case 'settings.setAutonomy': {
       const autonomy = payload === undefined ? null : oneOf(payload['autonomy'], AUTONOMY_LEVELS);
       return autonomy === null ? null : { type: 'settings.setAutonomy', payload: { autonomy } };
+    }
+
+    case 'settings.setLanguage': {
+      const language = payload === undefined ? null : oneOf(payload['language'], LANGUAGE_CHOICES);
+      return language === null ? null : { type: 'settings.setLanguage', payload: { language } };
     }
 
     case 'settings.selectMainAgent': {

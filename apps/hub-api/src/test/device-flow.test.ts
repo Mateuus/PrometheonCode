@@ -7,7 +7,6 @@
  */
 
 import { devices, deviceTokens } from '@prometheon/database';
-import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { hashToken } from '../shared/crypto.js';
@@ -146,19 +145,19 @@ describe.skipIf(!probe.ok)('device flow', () => {
     expect(issued.organizationId).toBe(owner.organizationId);
 
     // Só o hash é guardado.
-    const stored = await harness.app.db
-      .select({ id: deviceTokens.id, hash: deviceTokens.tokenHash })
-      .from(deviceTokens)
-      .where(eq(deviceTokens.deviceId, issued.deviceId));
+    const stored = await harness.app.db.manager.find(deviceTokens, {
+      select: { id: true, tokenHash: true },
+      where: { deviceId: issued.deviceId },
+    });
 
     expect(stored).toHaveLength(1);
-    expect(stored[0]?.hash).toBe(hashToken(issued.deviceToken));
-    expect(stored[0]?.hash).not.toBe(issued.deviceToken);
+    expect(stored[0]?.tokenHash).toBe(hashToken(issued.deviceToken));
+    expect(stored[0]?.tokenHash).not.toBe(issued.deviceToken);
 
-    const device = await harness.app.db
-      .select({ status: devices.status })
-      .from(devices)
-      .where(eq(devices.id, issued.deviceId));
+    const device = await harness.app.db.manager.find(devices, {
+      select: { status: true },
+      where: { id: issued.deviceId },
+    });
 
     expect(device[0]?.status).toBe('active');
 

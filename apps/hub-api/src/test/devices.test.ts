@@ -63,7 +63,7 @@ describe.skipIf(!probe.ok)('devices', () => {
     projectId = newId();
     otherProjectId = newId();
 
-    await harness.app.db.insert(projects).values([
+    await harness.app.db.manager.insert(projects, [
       {
         id: projectId,
         organizationId: owner.organizationId,
@@ -301,7 +301,7 @@ describe.skipIf(!probe.ok)('devices', () => {
 
   it('deixa a credencial do dispositivo bater o próprio heartbeat', async () => {
     // Associa a dona ao projeto privado, para o dispositivo poder declará-lo.
-    await harness.app.db.insert(projectMembers).values({
+    await harness.app.db.manager.insert(projectMembers, {
       id: newId(),
       organizationId: owner.organizationId,
       projectId: otherProjectId,
