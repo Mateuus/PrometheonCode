@@ -49,6 +49,17 @@ export function registerCommands({ core, provider, logger }: CommandDeps): vscod
       await core.disableBypass();
     }),
 
+    register('prometheon.addAccount', async () => {
+      await core.addAccount();
+      await provider.reveal();
+    }),
+
+    register('prometheon.manageAccounts', async () => {
+      await core.refreshAccounts();
+      await provider.reveal();
+      provider.post({ type: 'accounts.open' });
+    }),
+
     register('prometheon.openSettings', async () => {
       await vscode.commands.executeCommand('workbench.action.openSettings', `@ext:${EXTENSION_ID}`);
     }),

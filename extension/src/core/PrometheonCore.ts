@@ -2,17 +2,34 @@ import * as vscode from 'vscode';
 import type { AgentRegistry } from '../agents/AgentRegistry';
 import type { LocalChatService } from '../chat/LocalChatService';
 import type { WebChatService } from '../chat/WebChatService';
-import type { ChatMessage } from '../chat/types';
+import { UNTITLED } from '../chat/LocalChatService';
+import {
+  IMAGE_MIME_TYPES,
+  type ChatMessage,
+  type ConversationSummary,
+  type ImageAttachment,
+  type ImageMimeType,
+} from '../chat/types';
 import type { HubClient } from '../hub/types';
 import type { Logger } from '../logger';
 import type { PermissionService } from '../permissions/PermissionService';
+import type { SpeechService } from '../speech/SpeechService';
+import type { ProviderProfileService } from '../providers/ProviderProfileService';
+import type { UsageTracker } from '../providers/UsageTracker';
 import type { LocalStateStore } from '../storage/LocalStateStore';
 import type { SettingsStore } from '../storage/SettingsStore';
 import type { WorkspaceInitializer } from '../workspace/WorkspaceInitializer';
 import type { WorkspaceService } from '../workspace/WorkspaceService';
 import { HubNotConfiguredError, serializeError } from '../utils/errors';
+import { newId } from '../utils/ids';
 import { parseHubUrl } from '../hub/HubClient';
-import type { WebviewToExtensionMessage, WorkspaceSetupChoice } from '../views/messages';
+import {
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENT_BYTES,
+  type DraftAttachment,
+  type WebviewToExtensionMessage,
+  type WorkspaceSetupChoice,
+} from '../views/messages';
 import type { EventBus } from './EventBus';
 import type { PrometheonViewState } from './state';
 import {
@@ -35,10 +52,18 @@ import {
   type BypassGrant,
   type BypassScope,
   type ChatType,
+  type AccountSummary,
+  type ActivityStatus,
   type HubConnectionStatus,
+  type SpeechStatus,
   type WorkMode,
   type WorkspaceStatus,
 } from './types';
+
+/** Motivo mostrado na interface enquanto nenhum motor de voz está registrado. */
+const NO_SPEECH_ENGINE = 'No speech engine configured yet.';
+
+const IDLE_ACTIVITY: ActivityStatus = { phase: 'idle', label: '', startedAt: null };
 
 export interface PrometheonCoreDeps {
   readonly extensionVersion: string;
@@ -49,6 +74,9 @@ export interface PrometheonCoreDeps {
   readonly webChat: WebChatService;
   readonly hub: HubClient;
   readonly permissions: PermissionService;
+  readonly speech: SpeechService;
+  readonly profiles: ProviderProfileService;
+  readonly usage: UsageTracker;
   readonly local: LocalStateStore;
   readonly settings: SettingsStore;
   readonly workspace: WorkspaceService;
@@ -70,10 +98,19 @@ export class PrometheonCore implements vscode.Disposable {
   private agents: readonly AgentSummary[] = [];
   private activeAgents: ActiveAgentSummary[] = [];
   private conversationId: string | null = null;
+  private conversationTitle: string = UNTITLED;
   private messages: readonly ChatMessage[] = [];
+  private sessions: readonly ConversationSummary[] = [];
   private busy = false;
   private currentRunId: string | null = null;
   private hubStatus: HubConnectionStatus = { state: 'local-only' };
+  private speechStatus: SpeechStatus = {
+    available: false,
+    state: 'idle',
+    detail: NO_SPEECH_ENGINE,
+  };
+  private accounts: readonly AccountSummary[] = [];
+  private activity: ActivityStatus = IDLE_ACTIVITY;
   private workspaceStatus: WorkspaceStatus = {
     configured: false,
     folderName: null,
@@ -118,6 +155,8 @@ export class PrometheonCore implements vscode.Disposable {
     });
 
     this.hubStatus = this.deps.hub.getStatus();
+    await this.refreshSpeechStatus();
+    await this.refreshAccounts();
     this.workspaceStatus = await this.deps.workspace.status();
     await this.ensureConversation();
     await this.publish();
@@ -134,9 +173,14 @@ export class PrometheonCore implements vscode.Disposable {
       agents: this.agents,
       activeAgents: this.activeAgents,
       hub: this.hubStatus,
+      speech: this.speechStatus,
+      accounts: this.accounts,
+      activity: this.activity,
       workspace: this.workspaceStatus,
       conversationId: this.conversationId,
+      conversationTitle: this.conversationTitle,
       messages: this.messages,
+      sessions: this.sessions,
       busy: this.busy,
     };
   }
@@ -152,7 +196,7 @@ export class PrometheonCore implements vscode.Disposable {
         await this.publish();
         return;
       case 'chat.send':
-        await this.send(message.payload.content);
+        await this.send(message.payload.content, message.payload.attachments);
         return;
       case 'chat.cancel':
         await this.cancel(message.payload.runId);
@@ -162,6 +206,37 @@ export class PrometheonCore implements vscode.Disposable {
         return;
       case 'chat.clearLocal':
         await this.clearLocalChat();
+        return;
+      case 'chat.openSession':
+        await this.openSession(message.payload.conversationId);
+        return;
+      case 'chat.attachImages':
+        await this.attachImages();
+        return;
+      case 'speech.start':
+        await this.startDictation();
+        return;
+      case 'speech.stop':
+        await this.stopDictation();
+        return;
+      case 'speech.cancel':
+        await this.cancelDictation();
+        return;
+      case 'accounts.refresh':
+        await this.refreshAccounts();
+        await this.publish();
+        return;
+      case 'accounts.add':
+        await this.addAccount();
+        return;
+      case 'accounts.login':
+        await this.loginAccount(message.payload.profileId);
+        return;
+      case 'accounts.logout':
+        await this.logoutAccount(message.payload.profileId);
+        return;
+      case 'accounts.remove':
+        await this.removeAccount(message.payload.profileId);
         return;
       case 'chat.selectType':
         await this.setChatType(message.payload.chatType);
@@ -192,7 +267,7 @@ export class PrometheonCore implements vscode.Disposable {
 
   // ---------- Chat ----------
 
-  async send(content: string): Promise<void> {
+  async send(content: string, drafts: readonly DraftAttachment[] = []): Promise<void> {
     if (this.chatType === 'web') {
       // O contrato do Web Chat já falha por si; aqui só evitamos iniciar o run.
       this.deps.bus.emit('chat.error', serializeError(new HubNotConfiguredError()));
@@ -202,25 +277,37 @@ export class PrometheonCore implements vscode.Disposable {
       return;
     }
 
+    const attachments = drafts.map<ImageAttachment>((draft) => ({ id: newId('att'), ...draft }));
     const conversationId = await this.ensureConversation();
     this.busy = true;
+    this.setActivity('sending', 'Sending…');
     await this.publish();
 
     try {
       for await (const event of this.deps.localChat.sendMessage({
         conversationId,
         content,
+        ...(attachments.length === 0 ? {} : { attachments }),
         workMode: this.workMode,
         autonomy: this.autonomy,
         mainAgentId: this.mainAgentId,
       })) {
         if (event.type === 'agent.status') {
           this.upsertActiveAgent(event.agent);
+          this.trackActivity(event.agent.status);
           this.deps.bus.emit('agents.updated', this.activeAgents);
+          this.deps.bus.emit('activity.changed', this.activity);
           continue;
         }
         if (event.type === 'run.started') {
           this.currentRunId = event.runId;
+          this.setActivity('thinking', 'Thinking…');
+          this.deps.bus.emit('activity.changed', this.activity);
+        }
+        if (event.type === 'message.completed' && event.usage !== undefined) {
+          // O uso é contabilizado no perfil que executou, não no agente.
+          await this.deps.usage.record(this.usageProfileId(), event.usage);
+          await this.refreshAccounts();
         }
         this.deps.bus.emit('chat.event', event);
         if (event.type === 'run.failed') {
@@ -233,6 +320,8 @@ export class PrometheonCore implements vscode.Disposable {
     } finally {
       this.busy = false;
       this.currentRunId = null;
+      this.activity = IDLE_ACTIVITY;
+      this.deps.bus.emit('activity.changed', this.activity);
       await this.expireOneTaskBypass();
       await this.publish();
     }
@@ -255,9 +344,84 @@ export class PrometheonCore implements vscode.Disposable {
   async newLocalChat(): Promise<void> {
     const conversation = await this.deps.localChat.createConversation({ chatType: 'local' });
     this.conversationId = conversation.id;
+    this.conversationTitle = conversation.title;
     this.activeAgents = [];
     await this.setChatType('local');
     await this.publish();
+  }
+
+  /** Abre uma sessão já existente do histórico local. */
+  async openSession(conversationId: string): Promise<void> {
+    if (this.busy) {
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: 'Wait for the current run to finish before switching sessions.',
+      });
+      return;
+    }
+    const session = (await this.deps.localChat.listConversations()).find(
+      (item) => item.id === conversationId,
+    );
+    if (session === undefined) {
+      this.deps.bus.emit('notification', { level: 'warning', message: 'Session not found.' });
+      return;
+    }
+    this.conversationId = session.id;
+    this.conversationTitle = session.title;
+    this.activeAgents = [];
+    await this.deps.local.setActiveConversationId(session.id);
+    if (this.chatType !== session.chatType) {
+      await this.setChatType(session.chatType);
+      return;
+    }
+    await this.publish();
+  }
+
+  /**
+   * Escolhe imagens em disco e devolve os bytes para a webview montar as
+   * miniaturas. A leitura acontece aqui: a webview nunca abre arquivo.
+   */
+  async attachImages(): Promise<void> {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectMany: true,
+      openLabel: 'Attach',
+      title: 'Attach images',
+      filters: { Images: ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
+    });
+    if (picked === undefined || picked.length === 0) {
+      return;
+    }
+
+    const attachments: ImageAttachment[] = [];
+    for (const uri of picked.slice(0, MAX_ATTACHMENTS_PER_MESSAGE)) {
+      const mimeType = imageMimeType(uri.fsPath);
+      if (mimeType === null) {
+        this.deps.bus.emit('notification', {
+          level: 'warning',
+          message: `Unsupported image format: ${baseName(uri.fsPath)}`,
+        });
+        continue;
+      }
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+        this.deps.bus.emit('notification', {
+          level: 'warning',
+          message: `${baseName(uri.fsPath)} is larger than ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB.`,
+        });
+        continue;
+      }
+      attachments.push({
+        id: newId('att'),
+        name: baseName(uri.fsPath),
+        mimeType,
+        data: Buffer.from(bytes).toString('base64'),
+        byteSize: bytes.byteLength,
+      });
+    }
+
+    if (attachments.length > 0) {
+      this.deps.bus.emit('attachments.added', attachments);
+    }
   }
 
   async clearLocalChat(): Promise<void> {
@@ -265,6 +429,7 @@ export class PrometheonCore implements vscode.Disposable {
       return;
     }
     await this.deps.localChat.clearConversation(this.conversationId);
+    this.conversationTitle = UNTITLED;
     this.activeAgents = [];
     await this.publish();
   }
@@ -467,6 +632,241 @@ export class PrometheonCore implements vscode.Disposable {
     await this.configureWorkspace('current');
   }
 
+  // ---------- Contas de provedor ----------
+
+  /**
+   * Relê os perfis e o que os CLIs reportam. Envolve rodar `auth status` de cada
+   * perfil, então acontece sob demanda — abrir o painel de contas, criar perfil,
+   * concluir um run — e não a cada publicação de estado.
+   */
+  async refreshAccounts(): Promise<void> {
+    try {
+      const statuses = await this.deps.profiles.statuses();
+      this.accounts = statuses.map((status) => ({
+        profileId: status.profile.id,
+        name: status.profile.name,
+        providerId: status.profile.providerId,
+        providerName: status.providerName,
+        configDirectory: status.profile.configDirectory,
+        cliInstalled: status.installation.installed,
+        ...optionalText('cliVersion', status.installation.version),
+        authenticated: status.auth.authenticated,
+        ...optionalText('accountLabel', status.auth.accountLabel),
+        ...optionalText('organization', status.auth.organization),
+        ...optionalText('plan', status.auth.plan),
+        ...optionalText('authMethod', status.auth.authMethod),
+        ...optionalText('message', status.auth.message),
+        usage: this.deps.usage.usageFor(status.profile.id),
+      }));
+    } catch (error) {
+      this.deps.logger.error(`Falha ao ler as contas: ${serializeError(error).message}`);
+      this.accounts = [];
+    }
+  }
+
+  /** Cria uma conta local para um provedor e já oferece o login oficial. */
+  async addAccount(): Promise<void> {
+    const providers = this.deps.profiles.providers;
+    if (providers.length === 0) {
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: 'No provider adapter is available yet.',
+      });
+      return;
+    }
+
+    const provider =
+      providers.length === 1
+        ? providers[0]
+        : (
+            await vscode.window.showQuickPick(
+              providers.map((adapter) => ({ label: adapter.displayName, adapter })),
+              { title: 'Prometheon: New account', placeHolder: 'Which CLI?' },
+            )
+          )?.adapter;
+    if (provider === undefined) {
+      return;
+    }
+
+    const name = await vscode.window.showInputBox({
+      title: `New ${provider.displayName} account`,
+      prompt: 'A name to tell this account apart, like "Mateus27" or "Empresa1".',
+      ignoreFocusOut: true,
+      validateInput: (value) => (value.trim() === '' ? 'Give the account a name.' : null),
+    });
+    if (name === undefined || name.trim() === '') {
+      return;
+    }
+
+    const profile = await this.deps.profiles.create({
+      name: name.trim(),
+      providerId: provider.providerId,
+    });
+    await this.refreshAccounts();
+    await this.publish();
+
+    const signIn = 'Sign in now';
+    const choice = await vscode.window.showInformationMessage(
+      `Account "${profile.name}" created with its own ${provider.configEnvironmentVariable}. Sign in through the official CLI flow to use it.`,
+      signIn,
+    );
+    if (choice === signIn) {
+      await this.loginAccount(profile.id);
+    }
+  }
+
+  async loginAccount(profileId: string): Promise<void> {
+    await this.deps.profiles.login(profileId);
+    // O login roda num terminal e termina quando o usuário quiser; o estado é
+    // relido quando ele reabrir o painel de contas.
+    this.deps.bus.emit('notification', {
+      level: 'info',
+      message: 'Finish the sign-in in the terminal, then refresh the accounts panel.',
+    });
+  }
+
+  async logoutAccount(profileId: string): Promise<void> {
+    const profile = await this.deps.profiles.require(profileId);
+    const confirm = 'Sign out';
+    const answer = await vscode.window.showWarningMessage(
+      `Sign out of "${profile.name}"?`,
+      { modal: true, detail: 'The isolated configuration directory is kept.' },
+      confirm,
+    );
+    if (answer !== confirm) {
+      return;
+    }
+    await this.deps.profiles.logout(profileId);
+    await this.refreshAccounts();
+    await this.publish();
+  }
+
+  /** Remove o perfil da lista. As credenciais em disco não são tocadas. */
+  async removeAccount(profileId: string): Promise<void> {
+    const profile = await this.deps.profiles.require(profileId);
+    const confirm = 'Remove profile';
+    const answer = await vscode.window.showWarningMessage(
+      `Remove the profile "${profile.name}" from Prometheon?`,
+      {
+        modal: true,
+        detail: `The credentials in ${profile.configDirectory} are left untouched — delete that folder yourself if you also want to drop the sign-in.`,
+      },
+      confirm,
+    );
+    if (answer !== confirm) {
+      return;
+    }
+    await this.deps.profiles.remove(profileId);
+    await this.refreshAccounts();
+    await this.publish();
+  }
+
+  // ---------- Atividade ----------
+
+  private setActivity(phase: ActivityStatus['phase'], label: string): void {
+    const agent = this.agents.find((item) => item.id === this.mainAgentId);
+    const account = this.accounts.find((item) => item.profileId === this.usageProfileId());
+    const detail = [
+      agent?.displayName ?? this.mainAgentId,
+      account === undefined ? null : `${account.providerName} · ${account.name}`,
+      WORK_MODE_LABELS[this.workMode],
+    ]
+      .filter((part): part is string => part !== null)
+      .join(' · ');
+
+    this.activity = {
+      phase,
+      label,
+      detail,
+      startedAt: this.activity.phase === 'idle' ? Date.now() : this.activity.startedAt,
+    };
+  }
+
+  /** Traduz o estado do agente para o que a interface mostra acima do chat. */
+  private trackActivity(status: ActiveAgentSummary['status']): void {
+    switch (status) {
+      case 'starting':
+        this.setActivity('sending', 'Starting…');
+        break;
+      case 'working':
+        this.setActivity('working', 'Working…');
+        break;
+      case 'waiting':
+      case 'blocked':
+        this.setActivity('waiting', 'Waiting for approval…');
+        break;
+      default:
+        this.activity = IDLE_ACTIVITY;
+    }
+  }
+
+  /**
+   * Perfil ao qual o uso é creditado. Enquanto os agentes não têm binding com
+   * um Provider Profile, cai no primeiro perfil conhecido — ou num balde local.
+   */
+  private usageProfileId(): string {
+    return this.accounts[0]?.profileId ?? 'local';
+  }
+
+  // ---------- Ditado ----------
+
+  /**
+   * Começa a ouvir. Sem motor registrado nada é gravado: a interface é avisada
+   * do motivo, em vez de ficar com um botão que não faz nada.
+   */
+  async startDictation(): Promise<void> {
+    if (!(await this.refreshSpeechStatus())) {
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: this.speechStatus.detail ?? NO_SPEECH_ENGINE,
+      });
+      await this.publish();
+      return;
+    }
+    try {
+      await this.deps.speech.start();
+    } catch (error) {
+      const serialized = serializeError(error);
+      this.deps.logger.info(`Ditado não iniciado: ${serialized.message}`);
+      this.deps.bus.emit('notification', { level: 'warning', message: serialized.message });
+    }
+    await this.refreshSpeechStatus();
+    await this.publish();
+  }
+
+  /** Encerra a captura e entrega o texto à webview, que o insere no rascunho. */
+  async stopDictation(): Promise<void> {
+    try {
+      const transcript = await this.deps.speech.stop();
+      if (transcript !== null) {
+        this.deps.bus.emit('speech.transcript', transcript);
+      }
+    } catch (error) {
+      const serialized = serializeError(error);
+      this.deps.logger.error(`Falha ao transcrever: ${serialized.message}`);
+      this.deps.bus.emit('notification', { level: 'error', message: serialized.message });
+    }
+    await this.refreshSpeechStatus();
+    await this.publish();
+  }
+
+  async cancelDictation(): Promise<void> {
+    await this.deps.speech.cancel();
+    await this.refreshSpeechStatus();
+    await this.publish();
+  }
+
+  /** Reavalia disponibilidade e estado do motor. Devolve se dá para ditar. */
+  private async refreshSpeechStatus(): Promise<boolean> {
+    const available = await this.deps.speech.isAvailable();
+    this.speechStatus = {
+      available,
+      state: this.deps.speech.state,
+      ...(available ? {} : { detail: NO_SPEECH_ENGINE }),
+    };
+    return available;
+  }
+
   // ---------- Hub ----------
 
   async connectHub(): Promise<void> {
@@ -570,6 +970,7 @@ export class PrometheonCore implements vscode.Disposable {
     }
     const conversation = await this.deps.localChat.createConversation({ chatType: 'local' });
     this.conversationId = conversation.id;
+    this.conversationTitle = conversation.title;
     this.messages = conversation.messages;
     return conversation.id;
   }
@@ -722,7 +1123,30 @@ export class PrometheonCore implements vscode.Disposable {
         this.messages = [];
       }
     }
+    await this.refreshSessions();
     this.deps.bus.emit('state.changed', this.snapshot);
+  }
+
+  /**
+   * Lista as sessões do tipo de chat selecionado, da mais recente para a mais
+   * antiga. Sem Hub, o Web Chat simplesmente não tem sessões para mostrar.
+   */
+  private async refreshSessions(): Promise<void> {
+    const service = this.chatType === 'web' ? this.deps.webChat : this.deps.localChat;
+    let sessions: readonly ConversationSummary[] = [];
+    try {
+      sessions = await service.listConversations();
+    } catch (error) {
+      this.deps.logger.info(`Sessões indisponíveis: ${serializeError(error).message}`);
+    }
+    this.sessions = [...sessions]
+      .filter((session) => session.chatType === this.chatType)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+
+    const current = this.sessions.find((session) => session.id === this.conversationId);
+    if (current !== undefined) {
+      this.conversationTitle = current.title;
+    }
   }
 
   dispose(): void {
@@ -730,4 +1154,31 @@ export class PrometheonCore implements vscode.Disposable {
       disposable.dispose();
     }
   }
+}
+
+const IMAGE_EXTENSIONS: Record<string, ImageMimeType> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+};
+
+/** Mime derivado da extensão, restrito à lista de formatos aceitos. */
+function imageMimeType(fsPath: string): ImageMimeType | null {
+  const extension = fsPath.split('.').pop()?.toLowerCase() ?? '';
+  const mimeType = IMAGE_EXTENSIONS[extension];
+  return mimeType !== undefined && IMAGE_MIME_TYPES.includes(mimeType) ? mimeType : null;
+}
+
+function baseName(fsPath: string): string {
+  return fsPath.split(/[\\/]/).pop() ?? fsPath;
+}
+
+/** Campo opcional só entra no objeto quando tem valor — nada de `undefined`. */
+function optionalText<K extends string>(
+  key: K,
+  value: string | undefined,
+): Record<K, string> | object {
+  return value === undefined ? {} : ({ [key]: value } as Record<K, string>);
 }

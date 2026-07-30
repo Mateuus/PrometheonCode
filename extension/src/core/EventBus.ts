@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
-import type { ChatEvent } from '../chat/types';
+import type { ChatEvent, ImageAttachment } from '../chat/types';
 import type { PrometheonViewState } from './state';
 import type {
   ActiveAgentSummary,
+  ActivityStatus,
   HubConnectionStatus,
   SerializedError,
   UiNotification,
@@ -15,6 +16,9 @@ export interface PrometheonEventMap {
   'chat.error': SerializedError;
   'agents.updated': readonly ActiveAgentSummary[];
   'hub.status': HubConnectionStatus;
+  'attachments.added': readonly ImageAttachment[];
+  'speech.transcript': string;
+  'activity.changed': ActivityStatus;
   notification: UiNotification;
 }
 

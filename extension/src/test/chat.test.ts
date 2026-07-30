@@ -98,6 +98,75 @@ suite('Chat', () => {
     assert.equal(persisted[1]?.content, completed);
   });
 
+  test('a sessão nasce "Untitled" e é nomeada pela primeira mensagem', async () => {
+    const api = await getApi();
+    const conversation = await api.localChat.createConversation({ chatType: 'local' });
+    assert.equal(conversation.title, 'Untitled');
+
+    for await (const _event of api.localChat.sendMessage({
+      conversationId: conversation.id,
+      content: 'Como está o build?\nsegunda linha',
+      workMode: 'plan',
+      autonomy: 'manual',
+      mainAgentId: 'mock',
+    })) {
+      // consome o stream até o fim
+    }
+
+    const summaries = await api.localChat.listConversations();
+    const summary = summaries.find((item) => item.id === conversation.id);
+    assert.equal(summary?.title, 'Como está o build?');
+  });
+
+  test('o histórico de sessões acompanha o tipo de chat selecionado', async () => {
+    const api = await getApi();
+    await api.core.setChatType('local');
+    await api.core.newLocalChat();
+
+    const opened = api.core.snapshot.conversationId;
+    assert.ok(opened, 'esperava uma conversa aberta');
+    assert.ok(
+      api.core.snapshot.sessions.some((session) => session.id === opened),
+      'a sessão aberta deve aparecer no histórico local',
+    );
+    assert.ok(api.core.snapshot.sessions.every((session) => session.chatType === 'local'));
+
+    // Sem Hub não há sessões remotas para listar, e isso não pode quebrar a view.
+    await api.core.setChatType('web');
+    assert.deepEqual(api.core.snapshot.sessions, []);
+    await api.core.setChatType('local');
+  });
+
+  test('a mensagem carrega as imagens anexadas até o agente', async () => {
+    const api = await getApi();
+    const conversation = await api.localChat.createConversation({ chatType: 'local' });
+
+    let completed = '';
+    for await (const event of api.localChat.sendMessage({
+      conversationId: conversation.id,
+      content: '',
+      attachments: [
+        { id: 'att_1', name: 'shot.png', mimeType: 'image/png', data: 'AAAA', byteSize: 3 },
+      ],
+      workMode: 'plan',
+      autonomy: 'manual',
+      mainAgentId: 'mock',
+    })) {
+      if (event.type === 'message.completed') {
+        completed = event.content;
+      }
+    }
+
+    const persisted = await api.localChat.getMessages(conversation.id);
+    assert.equal(persisted[0]?.attachments?.length, 1);
+    assert.equal(persisted[0]?.attachments?.[0]?.name, 'shot.png');
+    assert.match(completed, /1 imagem/);
+
+    // Uma mensagem só de imagem também nomeia a sessão.
+    const summaries = await api.localChat.listConversations();
+    assert.equal(summaries.find((item) => item.id === conversation.id)?.title, '1 image');
+  });
+
   test('limpar a conversa local apaga só as mensagens', async () => {
     const api = await getApi();
     const conversation = await api.localChat.createConversation({ chatType: 'local' });

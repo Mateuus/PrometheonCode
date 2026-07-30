@@ -10,6 +10,11 @@ import { EventBus } from './core/EventBus';
 import { DisabledHubClient } from './hub/DisabledHubClient';
 import { Logger } from './logger';
 import { PermissionService } from './permissions/PermissionService';
+import { SpeechService } from './speech/SpeechService';
+import { ClaudeCodeAdapter } from './providers/ClaudeCodeAdapter';
+import { ProviderProfileService } from './providers/ProviderProfileService';
+import { ProviderProfileStore } from './providers/ProviderProfileStore';
+import { UsageTracker } from './providers/UsageTracker';
 import { LocalStateStore } from './storage/LocalStateStore';
 import { SecretStore } from './storage/SecretStore';
 import { SettingsStore } from './storage/SettingsStore';
@@ -25,6 +30,9 @@ export interface PrometheonApi {
   readonly localChat: LocalChatService;
   readonly webChat: WebChatService;
   readonly permissions: PermissionService;
+  readonly speech: SpeechService;
+  readonly profiles: ProviderProfileService;
+  readonly usage: UsageTracker;
   readonly localState: LocalStateStore;
   readonly secrets: SecretStore;
   readonly settings: SettingsStore;
@@ -43,6 +51,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
   const workspace = new WorkspaceService(settings, localState);
   const permissions = new PermissionService(logger);
   const initializer = new WorkspaceInitializer(settings, permissions, logger);
+  // Nenhum motor de voz registrado ainda: a interface mostra o microfone
+  // desabilitado com o motivo, e o serviço aceita um provider quando existir.
+  const speech = new SpeechService(logger);
+
+  // Contas locais dos CLIs. O Claude Code é o primeiro adaptador; os demais
+  // entram no mesmo registro sem tocar no núcleo.
+  const profileStore = new ProviderProfileStore(logger);
+  const profiles = new ProviderProfileService(profileStore, logger);
+  profiles.register(new ClaudeCodeAdapter(logger));
+  const usage = new UsageTracker(localState);
 
   const registry = new AgentRegistry();
   registry.register(new MockAgentAdapter());
@@ -60,6 +78,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
     webChat,
     hub,
     permissions,
+    speech,
+    profiles,
+    usage,
     local: localState,
     settings,
     workspace,
@@ -81,14 +102,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
     bus.on('chat.error', (payload) => provider.post({ type: 'chat.error', payload })),
     bus.on('agents.updated', (payload) => provider.post({ type: 'agents.updated', payload })),
     bus.on('hub.status', (payload) => provider.post({ type: 'hub.status', payload })),
+    bus.on('attachments.added', (attachments) =>
+      provider.post({ type: 'attachments.added', payload: { attachments } }),
+    ),
+    bus.on('activity.changed', (payload) => provider.post({ type: 'activity', payload })),
+    bus.on('speech.transcript', (text) =>
+      provider.post({ type: 'speech.transcript', payload: { text } }),
+    ),
     bus.on('notification', (payload) => provider.post({ type: 'notification', payload })),
   );
 
   // O mesmo provider atende os dois locais: Activity Bar e Secondary Side Bar
   // (onde fica o chat nativo do VS Code). Ver PrometheonViewProvider.
+  // `retainContextWhenHidden` mantém o rascunho — texto e imagens ainda não
+  // enviadas — quando o painel é escondido; sem isso a webview é destruída.
+  const viewOptions = { webviewOptions: { retainContextWhenHidden: true } };
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(CHAT_VIEW_ID, provider),
-    vscode.window.registerWebviewViewProvider(CHAT_VIEW_SECONDARY_ID, provider),
+    vscode.window.registerWebviewViewProvider(CHAT_VIEW_ID, provider, viewOptions),
+    vscode.window.registerWebviewViewProvider(CHAT_VIEW_SECONDARY_ID, provider, viewOptions),
     ...registerCommands({ core, provider, logger }),
   );
 
@@ -101,6 +132,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
     localChat,
     webChat,
     permissions,
+    speech,
+    profiles,
+    usage,
     localState,
     secrets,
     settings,

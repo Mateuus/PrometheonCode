@@ -1,3 +1,5 @@
+import type { ImageAttachment } from '../chat/types';
+import type { TokenUsage } from '../providers/UsageTracker';
 import type {
   ActiveAgentStatus,
   Autonomy,
@@ -32,6 +34,8 @@ export interface StartAgentInput {
 
 export interface AgentInput {
   readonly content: string;
+  /** Imagens enviadas junto da mensagem. Adaptadores sem suporte devem ignorá-las. */
+  readonly attachments?: readonly ImageAttachment[];
   readonly workMode: WorkMode;
   readonly autonomy: Autonomy;
 }
@@ -39,7 +43,8 @@ export interface AgentInput {
 export type AgentEvent =
   | { readonly type: 'status'; readonly status: ActiveAgentStatus }
   | { readonly type: 'delta'; readonly text: string }
-  | { readonly type: 'completed'; readonly text: string }
+  /** `usage` vem do CLI quando ele reporta; adaptadores sem isso omitem. */
+  | { readonly type: 'completed'; readonly text: string; readonly usage?: TokenUsage }
   | { readonly type: 'failed'; readonly error: SerializedError }
   | { readonly type: 'cancelled' };
 

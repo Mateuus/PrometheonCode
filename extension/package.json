@@ -41,14 +41,14 @@
         {
           "id": "prometheon",
           "title": "Prometheon",
-          "icon": "media/prometheon-view.svg"
+          "icon": "media/prometheon-view-mono.svg"
         }
       ],
       "secondarySidebar": [
         {
           "id": "prometheon-secondary",
           "title": "Prometheon",
-          "icon": "media/prometheon-view.svg"
+          "icon": "media/prometheon-view-mono.svg"
         }
       ]
     },
@@ -58,7 +58,7 @@
           "type": "webview",
           "id": "prometheon.chatView",
           "name": "Prometheon",
-          "icon": "media/prometheon-view.svg"
+          "icon": "media/prometheon-view-mono.svg"
         }
       ],
       "prometheon-secondary": [
@@ -66,7 +66,7 @@
           "type": "webview",
           "id": "prometheon.chatViewSecondary",
           "name": "Prometheon",
-          "icon": "media/prometheon-view.svg"
+          "icon": "media/prometheon-view-mono.svg"
         }
       ]
     },
@@ -110,6 +110,17 @@
       {
         "command": "prometheon.disableBypassPermissions",
         "title": "Disable Bypass Permissions",
+        "category": "Prometheon"
+      },
+      {
+        "command": "prometheon.manageAccounts",
+        "title": "Accounts & Usage",
+        "category": "Prometheon",
+        "icon": "$(account)"
+      },
+      {
+        "command": "prometheon.addAccount",
+        "title": "Add Account",
         "category": "Prometheon"
       },
       {
@@ -165,6 +176,11 @@
           "command": "prometheon.showDiagnostics",
           "when": "view == prometheon.chatView || view == prometheon.chatViewSecondary",
           "group": "3_help@1"
+        },
+        {
+          "command": "prometheon.manageAccounts",
+          "when": "view == prometheon.chatView || view == prometheon.chatViewSecondary",
+          "group": "1_orchestration@5"
         }
       ],
       "commandPalette": [

@@ -122,6 +122,55 @@ export interface WorkspaceStatus {
   readonly skipped: boolean;
 }
 
+/**
+ * Conta de provedor como a interface a exibe. Só metadados: nada aqui vem do
+ * conteúdo do diretório de credenciais.
+ */
+export interface AccountSummary {
+  readonly profileId: string;
+  readonly name: string;
+  readonly providerId: string;
+  readonly providerName: string;
+  readonly configDirectory: string;
+  readonly cliInstalled: boolean;
+  readonly cliVersion?: string;
+  readonly authenticated: boolean;
+  readonly accountLabel?: string;
+  readonly organization?: string;
+  readonly plan?: string;
+  readonly authMethod?: string;
+  readonly message?: string;
+  /** Tokens contados pelo Prometheon nesta máquina, não pelo provedor. */
+  readonly usage: {
+    readonly today: { readonly input: number; readonly output: number };
+    readonly last7Days: { readonly input: number; readonly output: number };
+    readonly total: { readonly input: number; readonly output: number };
+    readonly runs: number;
+    readonly lastRunAt: number | null;
+  };
+}
+
+/** Situação do ditado, para a interface saber se e como oferecer o microfone. */
+export interface SpeechStatus {
+  /** Há motor de voz pronto. Sem isso o botão fica desabilitado, com o motivo. */
+  readonly available: boolean;
+  readonly state: 'idle' | 'listening' | 'transcribing';
+  /** Texto já pronto para exibir, explicando por que o ditado está indisponível. */
+  readonly detail?: string;
+}
+
+/**
+ * O que o agente está fazendo agora, mostrado acima do composer enquanto o run
+ * acontece. `label` é curto ("Thinking…"); `detail` diz qual perfil e conta
+ * estão em uso — o documento exige que isso nunca fique escondido.
+ */
+export interface ActivityStatus {
+  readonly phase: 'idle' | 'sending' | 'thinking' | 'working' | 'waiting';
+  readonly label: string;
+  readonly detail?: string;
+  readonly startedAt: number | null;
+}
+
 export interface UiNotification {
   readonly level: 'info' | 'warning' | 'error';
   readonly message: string;

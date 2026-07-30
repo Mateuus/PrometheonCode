@@ -25,6 +25,9 @@ interface RunState {
   readonly messageId: string;
 }
 
+/** Nome de uma sessão que ainda não recebeu a primeira mensagem. */
+export const UNTITLED = 'Untitled';
+
 /**
  * Chat que funciona sem conta e sem servidor. O histórico fica em
  * `workspaceState` e nunca sai da máquina — nada aqui fala com o Hub.
@@ -48,7 +51,7 @@ export class LocalChatService implements ChatService {
     const now = Date.now();
     const conversation: Conversation = {
       id: newId('conv'),
-      title: input.title ?? 'Local chat',
+      title: input.title ?? UNTITLED,
       chatType: input.chatType,
       createdAt: now,
       updatedAt: now,
@@ -74,7 +77,21 @@ export class LocalChatService implements ChatService {
     if (conversation === undefined) {
       throw new ConversationNotFoundError(conversationId);
     }
-    await this.replace({ ...conversation, messages: [], messageCount: 0, updatedAt: Date.now() });
+    await this.replace({
+      ...conversation,
+      messages: [],
+      messageCount: 0,
+      title: UNTITLED,
+      updatedAt: Date.now(),
+    });
+  }
+
+  async rename(conversationId: string, title: string): Promise<void> {
+    const conversation = this.find(conversationId);
+    if (conversation === undefined) {
+      return;
+    }
+    await this.replace({ ...conversation, title });
   }
 
   async *sendMessage(input: SendMessageInput): AsyncIterable<ChatEvent> {
@@ -84,18 +101,24 @@ export class LocalChatService implements ChatService {
     }
 
     const runId = newId('run');
+    const attachments = input.attachments ?? [];
     const userMessage = await this.append(conversation.id, {
       id: newId('msg'),
       conversationId: conversation.id,
       author: 'user',
       content: input.content,
+      ...(attachments.length === 0 ? {} : { attachments }),
       status: 'sent',
       timestamp: Date.now(),
     });
+    // A sessão continua "Untitled" até a primeira mensagem dar um nome a ela.
+    if (conversation.title === UNTITLED) {
+      await this.rename(conversation.id, sessionTitle(input.content, attachments.length));
+    }
     yield { type: 'run.started', runId, message: userMessage };
 
     const adapter = this.registry.require(input.mainAgentId);
-    const task = firstLine(input.content);
+    const task = sessionTitle(input.content, attachments.length);
     const session = await adapter.start({
       workMode: input.workMode,
       autonomy: input.autonomy,
@@ -136,6 +159,7 @@ export class LocalChatService implements ChatService {
     try {
       for await (const event of adapter.send(session.id, {
         content: input.content,
+        ...(attachments.length === 0 ? {} : { attachments }),
         workMode: input.workMode,
         autonomy: input.autonomy,
       })) {
@@ -165,8 +189,15 @@ export class LocalChatService implements ChatService {
             await this.patchMessage(conversation.id, agentMessage.id, {
               content,
               status: 'sent',
+              ...(event.usage === undefined ? {} : { usage: event.usage }),
             });
-            yield { type: 'message.completed', runId, messageId: agentMessage.id, content };
+            yield {
+              type: 'message.completed',
+              runId,
+              messageId: agentMessage.id,
+              content,
+              ...(event.usage === undefined ? {} : { usage: event.usage }),
+            };
             break;
 
           case 'cancelled':
@@ -249,4 +280,13 @@ export class LocalChatService implements ChatService {
 function firstLine(text: string): string {
   const line = text.trim().split('\n', 1)[0] ?? '';
   return line.length > 60 ? `${line.slice(0, 57)}...` : line;
+}
+
+/** Nome da sessão derivado da primeira mensagem; imagens sozinhas também nomeiam. */
+function sessionTitle(content: string, attachmentCount: number): string {
+  const line = firstLine(content);
+  if (line !== '') {
+    return line;
+  }
+  return attachmentCount === 1 ? '1 image' : `${attachmentCount} images`;
 }

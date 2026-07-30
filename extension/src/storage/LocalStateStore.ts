@@ -1,5 +1,6 @@
 import type * as vscode from 'vscode';
 import type { Conversation } from '../chat/types';
+import type { UsageEntry } from '../providers/UsageTracker';
 import {
   AUTONOMY_LEVELS,
   CHAT_TYPES,
@@ -93,6 +94,18 @@ export class LocalStateStore {
     return this.workspace.update(KEYS.workspaceSkipped, value);
   }
 
+  /**
+   * Contagem de tokens por perfil e dia. Fica no estado global porque as contas
+   * são da máquina, não do projeto aberto.
+   */
+  getUsageEntries(): UsageEntry[] {
+    return this.global.get<UsageEntry[]>(KEYS.usage) ?? [];
+  }
+
+  setUsageEntries(value: readonly UsageEntry[]): Thenable<void> {
+    return this.global.update(KEYS.usage, value);
+  }
+
   getExternalWorkspaceFolder(): string | null {
     return this.workspace.get<string>(KEYS.externalWorkspace) ?? null;
   }
@@ -111,6 +124,7 @@ const KEYS = {
   activeConversation: 'prometheon.local.activeConversation',
   workspaceSkipped: 'prometheon.workspace.skipped',
   externalWorkspace: 'prometheon.workspace.externalFolder',
+  usage: 'prometheon.usage.entries',
 } as const;
 
 function pick<T extends string>(value: string | undefined, allowed: readonly T[], fallback: T): T {

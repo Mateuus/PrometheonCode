@@ -1,19 +1,99 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-  <title>Prometheon</title>
-  <!--
-    Ícone do container na Activity Bar: a malha de quatro nós em volta da chama,
-    reduzida ao essencial. Monocromático em currentColor de propósito — o VS Code
-    recolore este ícone conforme o tema, então cor e gradiente do logo colorido
-    (media/prometheon-icon-*.png) não sobreviveriam aqui.
-  -->
-  <g stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none">
-    <path d="M12 5.8V7M12 15.3v3M5.8 12h3.2M14.9 12h3.3" />
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Prometheon Code</title>
+  <desc id="desc">Chama central conectada a quatro nós de agentes.</desc>
+  <defs>
+    <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1a075e"/>
+      <stop offset=".52" stop-color="#6421d9"/>
+      <stop offset="1" stop-color="#8d20ff"/>
+    </linearGradient>
+    <linearGradient id="cyanViolet" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#19d9ff"/>
+      <stop offset=".52" stop-color="#287cff"/>
+      <stop offset="1" stop-color="#8424f5"/>
+    </linearGradient>
+    <linearGradient id="ember" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#ffb800"/>
+      <stop offset=".55" stop-color="#ff5b00"/>
+      <stop offset="1" stop-color="#ff2d1b"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff36a"/>
+      <stop offset=".45" stop-color="#ffd500"/>
+      <stop offset="1" stop-color="#ff8a00"/>
+    </linearGradient>
+    <radialGradient id="nodeCore">
+      <stop offset="0" stop-color="#b990ff"/>
+      <stop offset=".55" stop-color="#7f27ff"/>
+      <stop offset="1" stop-color="#4b0eb3"/>
+    </radialGradient>
+    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- orbit -->
+  <circle cx="256" cy="256" r="171" fill="none" stroke="url(#cyanViolet)" stroke-width="10"
+          stroke-dasharray="58 18 26 16" stroke-linecap="round"/>
+  <g fill="#7824f4">
+    <circle cx="153" cy="120" r="9"/><circle cx="359" cy="120" r="9"/>
+    <circle cx="392" cy="359" r="9"/><circle cx="120" cy="359" r="9"/>
   </g>
-  <g fill="currentColor">
-    <circle cx="12" cy="3.6" r="2.1" />
-    <circle cx="20.4" cy="12" r="2.1" />
-    <circle cx="12" cy="20.4" r="2.1" />
-    <circle cx="3.6" cy="12" r="2.1" />
-    <path d="M12 6.9c.35 1.5 1.2 2.15 1.95 3.05.65.8.95 1.55.95 2.4 0 1.6-1.3 2.9-2.9 2.9s-2.9-1.3-2.9-2.9c0-1 .45-1.85 1.3-2.75.75-.8 1.3-1.55 1.6-2.7z" />
+
+  <!-- connections -->
+  <g fill="none" stroke="#31106f" stroke-width="18" stroke-linecap="round">
+    <path d="M256 175V105"/><path d="M337 256H407"/>
+    <path d="M256 337V407"/><path d="M175 256H105"/>
   </g>
+  <g fill="none" stroke="url(#gold)" stroke-width="7" stroke-linecap="round">
+    <path d="M256 175V105"/><path d="M337 256H407"/>
+    <path d="M256 337V407"/><path d="M175 256H105"/>
+  </g>
+  <g fill="#ffe43b" stroke="#4b146e" stroke-width="5">
+    <circle cx="256" cy="151" r="9"/><circle cx="361" cy="256" r="9"/>
+    <circle cx="256" cy="361" r="9"/><circle cx="151" cy="256" r="9"/>
+  </g>
+
+  <!-- four agent nodes -->
+  <g id="node">
+    <circle cx="256" cy="77" r="47" fill="url(#violet)" stroke="#22085d" stroke-width="7"/>
+    <circle cx="256" cy="77" r="35" fill="none" stroke="#20d7ff" stroke-width="7"
+            stroke-dasharray="38 10 18 9" stroke-linecap="round"/>
+    <circle cx="256" cy="77" r="17" fill="url(#nodeCore)" stroke="#d1a7ff" stroke-width="4"/>
+    <g fill="#20d7ff">
+      <circle cx="226" cy="55" r="5"/><circle cx="286" cy="55" r="5"/>
+      <circle cx="226" cy="99" r="5"/><circle cx="286" cy="99" r="5"/>
+    </g>
+  </g>
+  <use xlink:href="#node" transform="rotate(90 256 256)"/>
+  <use xlink:href="#node" transform="rotate(180 256 256)"/>
+  <use xlink:href="#node" transform="rotate(270 256 256)"/>
+
+  <!-- central frame -->
+  <circle cx="256" cy="256" r="91" fill="#280958" stroke="#50127e" stroke-width="9"/>
+  <path d="M194 208A82 82 0 0 1 219 181M293 181A82 82 0 0 1 318 208
+           M318 304A82 82 0 0 1 293 331M219 331A82 82 0 0 1 194 304"
+        fill="none" stroke="url(#gold)" stroke-width="12" stroke-linecap="round"/>
+
+  <!-- flame -->
+  <path d="M256 330
+           C213 330 191 302 198 270
+           C204 243 226 231 225 201
+           C240 211 247 223 248 237
+           C263 218 272 199 270 177
+           C303 201 319 233 315 268
+           C312 305 290 330 256 330Z"
+        fill="url(#ember)" stroke="#44105f" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M256 315
+           C232 315 220 298 224 280
+           C227 265 238 258 240 244
+           C248 251 252 258 252 266
+           C263 255 269 244 268 232
+           C285 248 293 269 289 286
+           C286 304 275 315 256 315Z"
+        fill="url(#gold)"/>
+  <path d="M256 304C244 304 238 296 240 286C242 277 250 272 256 261
+           C264 272 272 278 272 288C272 298 266 304 256 304Z"
+        fill="#fff8d5" filter="url(#softGlow)"/>
 </svg>

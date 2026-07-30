@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-labelledby="title desc">
+  <title id="title">Prometheon Code</title>
+  <desc id="desc">Chama central cercada por quatro nós de agentes.</desc>
+
+  <!-- Versão monocromática, para os lugares em que o VS Code usa o ícone como
+       máscara (Activity Bar e Secondary Side Bar): ali só o alfa sobrevive, e
+       gradiente ou cor viraria uma silhueta chapada. Desenhado para 24px, o
+       tamanho em que o ícone é exibido — por isso as hastes internas da arte
+       colorida não estão aqui: nesse tamanho elas encostam na chama e o miolo
+       vira um borrão. A versão colorida (prometheon-view.svg) continua no
+       cabeçalho do painel. -->
+
+  <!-- Órbita, com os intervalos do traçado centrados em cada nó. -->
+  <circle cx="12" cy="12" r="9.4" fill="none" stroke="currentColor" stroke-width="1.15"
+          stroke-linecap="round" stroke-dasharray="8.5 6.26" stroke-dashoffset="11.63"/>
+
+  <!-- Nós dos agentes, sobre a órbita. -->
+  <g fill="currentColor">
+    <circle cx="12" cy="2.6" r="1.8"/><circle cx="21.4" cy="12" r="1.8"/>
+    <circle cx="12" cy="21.4" r="1.8"/><circle cx="2.6" cy="12" r="1.8"/>
+  </g>
+
+  <!-- Chama, com o mesmo contorno da arte colorida. -->
+  <path fill="currentColor" transform="translate(12 12.1) scale(1.42) translate(-12 -12)"
+        d="M12 15.47
+           C9.98 15.47 8.95 14.16 9.28 12.66
+           C9.56 11.39 10.59 10.83 10.55 9.42
+           C11.25 9.89 11.58 10.45 11.63 11.11
+           C12.33 10.22 12.75 9.33 12.66 8.3
+           C14.2 9.42 14.95 10.92 14.77 12.56
+           C14.63 14.3 13.59 15.47 12 15.47Z"/>
+</svg>
