@@ -1,15 +1,21 @@
 # Prometheon Hub — produção.
 #
-# O reverse proxy é o aaPanel, que roda no host. Por isso não há nginx aqui, e
-# por isso a API e o web publicam em `127.0.0.1`: o nginx alcança pelo loopback,
-# e ninguém mais na rede alcança.
+# O reverse proxy não roda neste host — fica noutra máquina da rede. Por isso a
+# API e o web precisam escutar num endereço que o proxy alcance, e `127.0.0.1`
+# não serve: o loopback deste servidor é invisível para qualquer outro.
 #
-# Publicar em `0.0.0.0` seria mais do que "porta aberta na LAN". A API roda com
-# `trustProxy: true` — ela precisa disso para ler o IP real que o nginx repassa
-# em `X-Forwarded-For`, senão o rate limit por IP trataria todo mundo como um
-# endereço só. O efeito colateral é que ela **confia** nesse cabeçalho: quem
-# alcançar a porta diretamente forja o IP que quiser e contorna todos os tetos
-# de tentativa. O `127.0.0.1` é o que fecha isso.
+# `BIND_ADDRESS` existe para essa escolha ser explícita. Com o proxy no mesmo
+# host, use `127.0.0.1`; com ele noutra máquina, o IP da LAN deste servidor —
+# nunca `0.0.0.0`, que publicaria também em interfaces que você não pretendia.
+#
+# Isso é mais do que higiene. A API roda com `trustProxy: true`, que ela precisa
+# para ler o IP real repassado em `X-Forwarded-For` — sem isso o rate limit por
+# IP trataria todo mundo como um endereço só, e a primeira pessoa a errar a
+# senha travaria as demais. O preço é que ela **confia** nesse cabeçalho: quem
+# alcança a porta diretamente forja o IP que quiser e contorna todos os tetos.
+#
+# Com o proxy noutra máquina, o endereço não basta: é preciso uma regra de
+# firewall aceitando essas portas **apenas** do IP do proxy. Está no README.
 #
 # MySQL e Redis não publicam porta nenhuma: falam só pela rede interna.
 
@@ -103,7 +109,7 @@ services:
       SMTP_PORT: '587'
     ports:
       # Só loopback. Ver o comentário no topo do arquivo.
-      - '127.0.0.1:${HUB_API_PORT:-3551}:3551'
+      - '${BIND_ADDRESS:-127.0.0.1}:${HUB_API_PORT:-3551}:3551'
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -161,7 +167,7 @@ services:
       - 0.0.0.0
     env_file: [.env]
     ports:
-      - '127.0.0.1:${HUB_WEB_PORT:-3550}:3550'
+      - '${BIND_ADDRESS:-127.0.0.1}:${HUB_WEB_PORT:-3550}:3550'
     depends_on:
       api:
         condition: service_started

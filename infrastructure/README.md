@@ -113,6 +113,28 @@ painel do aaPanel — o painel tem acesso root à máquina.
 
 ---
 
+## 2.1 Se o reverse proxy estiver noutra máquina
+
+`BIND_ADDRESS` no `.env` passa a ser o IP deste servidor na rede, e não
+`127.0.0.1` — o loopback daqui não é alcançável de outro host.
+
+Isso abre as portas 3550 e 3551 para a rede local inteira, e aí elas precisam
+ser fechadas para todo mundo menos o proxy:
+
+```bash
+ufw allow from IP_DO_PROXY to any port 3550,3551 proto tcp
+ufw deny 3550,3551/tcp
+```
+
+A ordem importa: o `ufw` aplica a primeira regra que casa, então a permissão
+específica precisa vir antes da negação geral.
+
+Sem essa restrição, qualquer máquina da rede fala direto com a API. Como ela
+roda com `trustProxy: true` — necessário para ler o IP real que o proxy repassa
+—, ela **acredita** no `X-Forwarded-For` que receber. Falando direto com a
+porta, dá para inventar um IP diferente a cada tentativa e contornar todos os
+tetos de senha errada.
+
 ## 3. Sites no aaPanel
 
 Crie dois sites, ambos com SSL Let's Encrypt e reverse proxy:
