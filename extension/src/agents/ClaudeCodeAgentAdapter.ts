@@ -1,5 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
+import type { ImageAttachment } from '../chat/types';
 import type { Logger } from '../logger';
 import type { ProviderProfile } from '../providers/types';
 import type { TokenUsage } from '../providers/UsageTracker';
@@ -124,6 +128,12 @@ export class ClaudeCodeAgentAdapter implements AgentAdapter {
 
     session.interrupted = false;
 
+    // As imagens viram arquivo antes de o processo subir: o CLI lê imagem de
+    // caminho, não de base64 no meio do texto. Sem isto, quem anexasse uma
+    // imagem veria o agente responder como se ela não existisse — que é pior do
+    // que recusar o anexo, porque parece que o agente olhou e não achou nada.
+    const attachments = await this.materialize(message.attachments);
+
     const child = spawn(executableOf(session.profile), argumentsFor(session, message), {
       cwd: session.workspaceFolder,
       env: environmentFor(session.profile),
@@ -134,7 +144,7 @@ export class ClaudeCodeAgentAdapter implements AgentAdapter {
 
     // O prompt entra por stdin e a entrada é fechada em seguida: sem isso o CLI
     // fica esperando mais dados e o run nunca termina.
-    child.stdin.write(message.content);
+    child.stdin.write(promptWith(message.content, attachments.paths));
     child.stdin.end();
 
     yield { type: 'status', status: 'working' };
@@ -184,7 +194,52 @@ export class ClaudeCodeAgentAdapter implements AgentAdapter {
       if (child.exitCode === null) {
         child.kill('SIGTERM');
       }
+
+      await attachments.cleanup();
     }
+  }
+
+  /**
+   * Grava os anexos em disco e devolve os caminhos.
+   *
+   * O diretório é temporário e some no fim do run. Deixar imagem do usuário
+   * acumulando em `%TEMP%` é vazamento silencioso: ninguém procura ali, e o que
+   * foi colado numa conversa fica legível para qualquer processo da máquina.
+   *
+   * Uma imagem que falha ao gravar é omitida, e não derruba o run — o agente
+   * responde ao texto, que continua valendo.
+   */
+  private async materialize(
+    attachments: readonly ImageAttachment[] | undefined,
+  ): Promise<{ paths: readonly string[]; cleanup: () => Promise<void> }> {
+    if (attachments === undefined || attachments.length === 0) {
+      return { paths: [], cleanup: async () => undefined };
+    }
+
+    const directory = await mkdtemp(join(tmpdir(), 'prometheon-anexos-'));
+    const paths: string[] = [];
+
+    for (const [index, attachment] of attachments.entries()) {
+      const file = join(directory, `${String(index + 1)}-${safeName(attachment.name)}`);
+
+      try {
+        await writeFile(file, Buffer.from(attachment.data, 'base64'));
+        paths.push(file);
+      } catch (error) {
+        this.logger.error(`Anexo ${attachment.name} não pôde ser gravado: ${String(error)}`);
+      }
+    }
+
+    return {
+      paths,
+      cleanup: async () => {
+        try {
+          await rm(directory, { recursive: true, force: true });
+        } catch (error) {
+          this.logger.debug(`Anexos temporários não removidos: ${String(error)}`);
+        }
+      },
+    };
   }
 
   async interrupt(sessionId: string): Promise<void> {
@@ -590,6 +645,34 @@ function describeExit(code: number | null, stderr: string): SerializedError {
         ? `Claude Code exited with code ${String(code)}.`
         : detail.split('\n').slice(-3).join('\n'),
   };
+}
+
+/**
+ * Junta o texto e os caminhos das imagens num prompt só.
+ *
+ * O CLI reconhece caminho de arquivo no prompt e lê a imagem. Os caminhos vêm
+ * depois do texto, em linhas próprias: no meio da frase eles atrapalhariam a
+ * leitura do pedido, que é o que mais importa.
+ */
+export function promptWith(content: string, paths: readonly string[]): string {
+  if (paths.length === 0) {
+    return content;
+  }
+
+  return [content, '', ...paths].join('\n');
+}
+
+/**
+ * Nome de arquivo seguro.
+ *
+ * O nome vem do que a pessoa colou ou arrastou, e vai virar caminho em disco.
+ * Sem esta limpeza, um nome com `..` ou barra escaparia do diretório temporário
+ * e escreveria onde não devia.
+ */
+export function safeName(value: string): string {
+  const cleaned = value.replace(/[^\w.-]+/g, '-').replace(/^[.-]+/, '');
+
+  return cleaned === '' ? 'imagem.png' : cleaned.slice(0, 60);
 }
 
 function basename(value: string): string {

@@ -1,7 +1,9 @@
 import * as assert from 'node:assert/strict';
 import {
   permissionModeFor,
+  promptWith,
   readUsage,
+  safeName,
   translateLine,
 } from '../agents/ClaudeCodeAgentAdapter';
 import type { AgentEvent } from '../agents/AgentAdapter';
@@ -219,5 +221,39 @@ suite('Claude Code — tradução do stream', () => {
       permissionModeFor({ content: '', workMode: 'edit', autonomy: 'bypass' }),
       'bypassPermissions',
     );
+  });
+});
+
+suite('Claude Code — anexos de imagem', () => {
+  test('os caminhos entram depois do texto, em linhas próprias', () => {
+    // No meio da frase, o caminho atrapalharia a leitura do pedido — que é o
+    // que mais importa para o agente.
+    assert.equal(
+      promptWith('descreva esta tela', ['/tmp/a/1-tela.png']),
+      'descreva esta tela\n\n/tmp/a/1-tela.png',
+    );
+  });
+
+  test('sem anexo, o texto vai intacto', () => {
+    assert.equal(promptWith('só texto', []), 'só texto');
+  });
+
+  test('o nome do arquivo não escapa do diretório temporário', () => {
+    // O nome vem do que a pessoa colou ou arrastou e vira caminho em disco.
+    // Sem a limpeza, `..` e barras escreveriam fora da pasta temporária.
+    assert.equal(safeName('../../etc/passwd'), 'etc-passwd');
+    assert.equal(safeName(String.raw`..\..\windows\system32`), 'windows-system32');
+    assert.equal(safeName('foto boa.png'), 'foto-boa.png');
+  });
+
+  test('nome vazio ou só pontuação vira um nome utilizável', () => {
+    assert.equal(safeName(''), 'imagem.png');
+    assert.equal(safeName('...'), 'imagem.png');
+  });
+
+  test('nome longo é truncado', () => {
+    // Alguns sistemas de arquivos recusam nomes muito longos, e o erro
+    // apareceria como falha do anexo sem explicação.
+    assert.ok(safeName('a'.repeat(300)).length <= 60);
   });
 });
