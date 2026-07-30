@@ -16,8 +16,6 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { sql } from 'drizzle-orm';
-
 import type { Database } from '@prometheon/database';
 import type { Logger } from '@prometheon/logger';
 
@@ -141,8 +139,10 @@ export class HealthServer {
     this.#lastProbeAt = now;
 
     const [database, redis] = await Promise.all([
+      // Consulta trivial: prova que dá para consultar, não só que o
+      // `DataSource` foi inicializado.
       this.#options.db
-        .execute(sql`select 1`)
+        .query('SELECT 1')
         .then(() => true)
         .catch(() => false),
       this.#options.redis

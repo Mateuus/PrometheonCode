@@ -20,8 +20,6 @@
 // A assinatura já foi conferida na borda HTTP (`signature_valid`): entrega com
 // assinatura inválida é descartada lá, não aqui.
 
-import { and, eq } from 'drizzle-orm';
-
 import { webhookDeliveries } from '@prometheon/database';
 
 import { PermanentJobError } from '../../errors.js';
@@ -34,24 +32,23 @@ export const webhooksHandler: JobHandler<typeof webhookJobSchema> = {
   // O provedor reenvia a mesma entrega quando não recebe 2xx: a chave é dele.
   idempotencyKey: (data) => `${data.provider}:${data.externalDeliveryId}`,
   async run({ data, deps, logger }) {
-    const [delivery] = await deps.db
-      .select({
-        id: webhookDeliveries.id,
-        status: webhookDeliveries.status,
-        signatureValid: webhookDeliveries.signatureValid,
-        gitRepositoryId: webhookDeliveries.gitRepositoryId,
-        eventType: webhookDeliveries.eventType,
+    const delivery = await deps.db.manager
+      .createQueryBuilder(webhookDeliveries, 'delivery')
+      .select([
+        'delivery.id',
+        'delivery.status',
+        'delivery.signatureValid',
+        'delivery.gitRepositoryId',
+        'delivery.eventType',
+      ])
+      .where('delivery.id = :deliveryId', { deliveryId: data.deliveryId })
+      .andWhere('delivery.organizationId = :organizationId', {
+        organizationId: data.organizationId,
       })
-      .from(webhookDeliveries)
-      .where(
-        and(
-          eq(webhookDeliveries.id, data.deliveryId),
-          eq(webhookDeliveries.organizationId, data.organizationId),
-        ),
-      )
-      .limit(1);
+      .limit(1)
+      .getOne();
 
-    if (delivery === undefined) {
+    if (delivery === null) {
       // A linha é gravada pela borda HTTP antes de enfileirar. Não existir
       // significa payload errado ou entrega já removida pela retenção.
       throw new PermanentJobError('Entrega de webhook inexistente.', {

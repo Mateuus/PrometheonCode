@@ -57,7 +57,9 @@ export interface DisposableDatabase {
  * Cria um banco temporário já migrado. O nome carrega um sufixo ULID para que
  * execuções simultâneas não briguem pelo mesmo banco.
  */
-export async function createDisposableDatabase(prefix = 'prometheon_test'): Promise<DisposableDatabase> {
+export async function createDisposableDatabase(
+  prefix = 'prometheon_test',
+): Promise<DisposableDatabase> {
   const name = `${prefix}_${newId().slice(-12).toLowerCase()}`;
   const admin = await connectToServer();
   try {
@@ -69,7 +71,7 @@ export async function createDisposableDatabase(prefix = 'prometheon_test'): Prom
   }
 
   await runMigrations({ database: name });
-  const { db, pool } = createDatabase({ database: name, connectionLimit: 2 });
+  const db = await createDatabase({ database: name, connectionLimit: 2 });
 
   let dropped = false;
   const drop = async (): Promise<void> => {
@@ -77,7 +79,7 @@ export async function createDisposableDatabase(prefix = 'prometheon_test'): Prom
       return;
     }
     dropped = true;
-    await pool.end();
+    await db.destroy();
     const cleanup = await connectToServer();
     try {
       await cleanup.query(`DROP DATABASE IF EXISTS \`${name}\``);

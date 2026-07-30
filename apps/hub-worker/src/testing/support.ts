@@ -14,9 +14,10 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createConnection, type Connection, type Pool } from 'mysql2/promise';
+import { createConnection, type Connection } from 'mysql2/promise';
 
 import {
+  closeDatabase,
   createDatabase,
   newId,
   readDatabaseEnv,
@@ -89,7 +90,6 @@ export async function probeRedis(): Promise<ProbeResult> {
 
 export interface DisposableDatabase {
   readonly db: Database;
-  readonly pool: Pool;
   readonly name: string;
   /** Fecha o pool e apaga o banco. Seguro chamar mais de uma vez. */
   drop(): Promise<void>;
@@ -110,19 +110,20 @@ export async function createDisposableDatabase(
   }
 
   await runMigrations({ database: name });
-  const { db, pool } = createDatabase({ database: name, connectionLimit: 5 });
+  // `createDatabase` já devolve o `DataSource` inicializado: a conexão é aberta
+  // aqui, e não na primeira consulta da suíte.
+  const db = await createDatabase({ database: name, connectionLimit: 5 });
 
   let dropped = false;
   return {
     db,
-    pool,
     name,
     async drop(): Promise<void> {
       if (dropped) {
         return;
       }
       dropped = true;
-      await pool.end().catch(() => undefined);
+      await closeDatabase(db).catch(() => undefined);
       const cleanup = await serverConnection();
       try {
         await cleanup.query(`DROP DATABASE IF EXISTS \`${name}\``);

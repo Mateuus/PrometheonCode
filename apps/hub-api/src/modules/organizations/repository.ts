@@ -14,10 +14,13 @@ import {
   roles,
   users,
   type Database,
+  type Invitation,
+  type OrganizationMember,
 } from '@prometheon/database';
-import { and, desc, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import type { SelectQueryBuilder } from 'typeorm';
 
-import { decodeCursor, type CursorPayload } from '../../shared/cursor.js';
+import { decodeCursor } from '../../shared/cursor.js';
+import { affectedRows, applyKeyset } from '../../shared/query.js';
 
 export interface OrganizationRow {
   id: string;
@@ -58,52 +61,56 @@ export class OrganizationRepository {
   ): Promise<OrganizationRow[]> {
     const after = cursor === undefined ? undefined : decodeCursor(cursor);
 
-    const rows = await this.db
-      .select({
-        id: organizations.id,
-        name: organizations.name,
-        slug: organizations.slug,
-        planCode: plans.code,
-        createdAt: organizations.createdAt,
-        updatedAt: organizations.updatedAt,
-        createdBy: organizations.createdBy,
-        version: organizations.version,
-        roleSlug: roles.slug,
-      })
-      .from(organizationMembers)
-      .innerJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
-      .innerJoin(plans, eq(plans.id, organizations.planId))
-      .innerJoin(roles, eq(roles.id, organizationMembers.roleId))
-      .where(
-        and(
-          eq(organizationMembers.userId, userId),
-          isNull(organizations.deletedAt),
-          keysetCondition(organizations.createdAt, organizations.id, after),
-        ),
+    const query = this.db.manager
+      .createQueryBuilder(organizationMembers, 'membership')
+      .select('organization.id', 'id')
+      .addSelect('organization.name', 'name')
+      .addSelect('organization.slug', 'slug')
+      .addSelect('plan.code', 'planCode')
+      .addSelect('organization.createdAt', 'createdAt')
+      .addSelect('organization.updatedAt', 'updatedAt')
+      .addSelect('organization.createdBy', 'createdBy')
+      .addSelect('organization.version', 'version')
+      .addSelect('role.slug', 'roleSlug')
+      .innerJoin(
+        organizations.options.name,
+        'organization',
+        'organization.id = membership.organizationId',
       )
-      .orderBy(desc(organizations.createdAt), desc(organizations.id))
-      .limit(limit + 1);
+      .innerJoin(plans.options.name, 'plan', 'plan.id = organization.planId')
+      .innerJoin(roles.options.name, 'role', 'role.id = membership.roleId')
+      .where('membership.userId = :userId', { userId })
+      .andWhere('organization.deletedAt IS NULL');
 
-    return rows;
+    applyKeyset(query, 'organization', { createdAt: 'createdAt', id: 'id' }, after);
+
+    return query
+      .orderBy('organization.createdAt', 'DESC')
+      .addOrderBy('organization.id', 'DESC')
+      .limit(limit + 1)
+      .getRawMany<OrganizationRow>();
   }
 
   async findById(organizationId: string): Promise<OrganizationRow | undefined> {
-    const rows = await this.db
-      .select({
-        id: organizations.id,
-        name: organizations.name,
-        slug: organizations.slug,
-        planCode: plans.code,
-        createdAt: organizations.createdAt,
-        updatedAt: organizations.updatedAt,
-        createdBy: organizations.createdBy,
-        version: organizations.version,
-        roleSlug: sql<string>`''`,
-      })
-      .from(organizations)
-      .innerJoin(plans, eq(plans.id, organizations.planId))
-      .where(and(eq(organizations.id, organizationId), isNull(organizations.deletedAt)))
-      .limit(1);
+    const rows = await this.db.manager
+      .createQueryBuilder(organizations, 'organization')
+      .select('organization.id', 'id')
+      .addSelect('organization.name', 'name')
+      .addSelect('organization.slug', 'slug')
+      .addSelect('plan.code', 'planCode')
+      .addSelect('organization.createdAt', 'createdAt')
+      .addSelect('organization.updatedAt', 'updatedAt')
+      .addSelect('organization.createdBy', 'createdBy')
+      .addSelect('organization.version', 'version')
+      // A leitura por ID não passa por `organization_members`, então não há
+      // papel a informar; a coluna existe só para o tipo da linha fechar, e
+      // quem chama substitui pelo papel que já resolveu no guarda da rota.
+      .addSelect("''", 'roleSlug')
+      .innerJoin(plans.options.name, 'plan', 'plan.id = organization.planId')
+      .where('organization.id = :organizationId', { organizationId })
+      .andWhere('organization.deletedAt IS NULL')
+      .limit(1)
+      .getRawMany<OrganizationRow>();
 
     return rows[0];
   }
@@ -114,60 +121,24 @@ export class OrganizationRepository {
     cursor: string | undefined,
   ): Promise<MemberRow[]> {
     const after = cursor === undefined ? undefined : decodeCursor(cursor);
+    const query = this.memberQuery().where('member.organizationId = :organizationId', {
+      organizationId,
+    });
 
-    const rows = await this.db
-      .select({
-        id: organizationMembers.id,
-        organizationId: organizationMembers.organizationId,
-        roleSlug: roles.slug,
-        status: organizationMembers.status,
-        invitedBy: organizationMembers.invitedBy,
-        joinedAt: organizationMembers.joinedAt,
-        createdAt: organizationMembers.createdAt,
-        updatedAt: organizationMembers.updatedAt,
-        version: organizationMembers.version,
-        userId: users.id,
-        userName: users.displayName,
-        userEmail: users.email,
-        userAvatarUrl: users.avatarUrl,
-      })
-      .from(organizationMembers)
-      .innerJoin(users, eq(users.id, organizationMembers.userId))
-      .innerJoin(roles, eq(roles.id, organizationMembers.roleId))
-      .where(
-        and(
-          eq(organizationMembers.organizationId, organizationId),
-          keysetCondition(organizationMembers.createdAt, organizationMembers.id, after),
-        ),
-      )
-      .orderBy(desc(organizationMembers.createdAt), desc(organizationMembers.id))
-      .limit(limit + 1);
+    applyKeyset(query, 'member', { createdAt: 'createdAt', id: 'id' }, after);
 
-    return rows;
+    return query
+      .orderBy('member.createdAt', 'DESC')
+      .addOrderBy('member.id', 'DESC')
+      .limit(limit + 1)
+      .getRawMany<MemberRow>();
   }
 
   async findMemberById(memberId: string): Promise<MemberRow | undefined> {
-    const rows = await this.db
-      .select({
-        id: organizationMembers.id,
-        organizationId: organizationMembers.organizationId,
-        roleSlug: roles.slug,
-        status: organizationMembers.status,
-        invitedBy: organizationMembers.invitedBy,
-        joinedAt: organizationMembers.joinedAt,
-        createdAt: organizationMembers.createdAt,
-        updatedAt: organizationMembers.updatedAt,
-        version: organizationMembers.version,
-        userId: users.id,
-        userName: users.displayName,
-        userEmail: users.email,
-        userAvatarUrl: users.avatarUrl,
-      })
-      .from(organizationMembers)
-      .innerJoin(users, eq(users.id, organizationMembers.userId))
-      .innerJoin(roles, eq(roles.id, organizationMembers.roleId))
-      .where(eq(organizationMembers.id, memberId))
-      .limit(1);
+    const rows = await this.memberQuery()
+      .where('member.id = :memberId', { memberId })
+      .limit(1)
+      .getRawMany<MemberRow>();
 
     return rows[0];
   }
@@ -185,40 +156,35 @@ export class OrganizationRepository {
     roleId?: string;
     status?: 'invited' | 'active' | 'suspended';
   }): Promise<boolean> {
-    const result = await this.db
+    const result = await this.db.manager
+      .createQueryBuilder()
       .update(organizationMembers)
       .set({
         ...(input.roleId === undefined ? {} : { roleId: input.roleId }),
         ...(input.status === undefined ? {} : { status: input.status }),
-        version: sql`${organizationMembers.version} + 1`,
+        version: () => 'version + 1',
         updatedAt: new Date(),
       })
-      .where(
-        and(
-          eq(organizationMembers.id, input.memberId),
-          eq(organizationMembers.version, input.version),
-        ),
-      );
+      .where('id = :memberId', { memberId: input.memberId })
+      .andWhere('version = :version', { version: input.version })
+      .execute();
 
-    const affected = (result as unknown as [{ affectedRows?: number }])[0].affectedRows ?? 0;
-
-    return affected > 0;
+    return affectedRows(result) > 0;
   }
 
   async countOwners(organizationId: string): Promise<number> {
-    const rows = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(organizationMembers)
-      .innerJoin(roles, eq(roles.id, organizationMembers.roleId))
-      .where(
-        and(
-          eq(organizationMembers.organizationId, organizationId),
-          eq(roles.slug, 'owner'),
-          eq(organizationMembers.status, 'active'),
-        ),
-      );
+    // Contagem no banco: o número decide se o último dono pode ser rebaixado,
+    // e trazer as linhas para contar em memória só aumentaria a janela.
+    const row = await this.db.manager
+      .createQueryBuilder(organizationMembers, 'member')
+      .select('count(*)', 'value')
+      .innerJoin(roles.options.name, 'role', 'role.id = member.roleId')
+      .where('member.organizationId = :organizationId', { organizationId })
+      .andWhere("role.slug = 'owner'")
+      .andWhere("member.status = 'active'")
+      .getRawOne<{ value: number | string }>();
 
-    return rows[0]?.count ?? 0;
+    return Number(row?.value ?? 0);
   }
 
   async findMemberByUser(
@@ -234,34 +200,39 @@ export class OrganizationRepository {
     organizationId: string,
     userId: string,
   ): Promise<MemberRow[]> {
-    const rows = await this.db
-      .select({
-        id: organizationMembers.id,
-        organizationId: organizationMembers.organizationId,
-        roleSlug: roles.slug,
-        status: organizationMembers.status,
-        invitedBy: organizationMembers.invitedBy,
-        joinedAt: organizationMembers.joinedAt,
-        createdAt: organizationMembers.createdAt,
-        updatedAt: organizationMembers.updatedAt,
-        version: organizationMembers.version,
-        userId: users.id,
-        userName: users.displayName,
-        userEmail: users.email,
-        userAvatarUrl: users.avatarUrl,
-      })
-      .from(organizationMembers)
-      .innerJoin(users, eq(users.id, organizationMembers.userId))
-      .innerJoin(roles, eq(roles.id, organizationMembers.roleId))
-      .where(
-        and(
-          eq(organizationMembers.organizationId, organizationId),
-          eq(organizationMembers.userId, userId),
-        ),
-      )
-      .limit(1);
+    return this.memberQuery()
+      .where('member.organizationId = :organizationId', { organizationId })
+      .andWhere('member.userId = :userId', { userId })
+      .limit(1)
+      .getRawMany<MemberRow>();
+  }
 
-    return rows;
+  /**
+   * Base das leituras de membro: vínculo + pessoa + papel.
+   *
+   * É `getRawMany` porque o resultado mistura colunas de três tabelas — o
+   * contrato do membro carrega o slug do papel e o nome, o e-mail e o avatar de
+   * quem foi convidado, e uma entidade hidratada não comportaria isso sem
+   * declarar relações que o schema não tem.
+   */
+  private memberQuery(): SelectQueryBuilder<OrganizationMember> {
+    return this.db.manager
+      .createQueryBuilder(organizationMembers, 'member')
+      .select('member.id', 'id')
+      .addSelect('member.organizationId', 'organizationId')
+      .addSelect('role.slug', 'roleSlug')
+      .addSelect('member.status', 'status')
+      .addSelect('member.invitedBy', 'invitedBy')
+      .addSelect('member.joinedAt', 'joinedAt')
+      .addSelect('member.createdAt', 'createdAt')
+      .addSelect('member.updatedAt', 'updatedAt')
+      .addSelect('member.version', 'version')
+      .addSelect('account.id', 'userId')
+      .addSelect('account.displayName', 'userName')
+      .addSelect('account.email', 'userEmail')
+      .addSelect('account.avatarUrl', 'userAvatarUrl')
+      .innerJoin(users.options.name, 'account', 'account.id = member.userId')
+      .innerJoin(roles.options.name, 'role', 'role.id = member.roleId');
   }
 
   // -------------------------------------------------------------------------
@@ -280,7 +251,7 @@ export class OrganizationRepository {
     const id = newId();
     const createdAt = new Date();
 
-    await this.db.insert(invitations).values({
+    await this.db.manager.insert(invitations, {
       id,
       organizationId: input.organizationId,
       email: input.email,
@@ -298,60 +269,33 @@ export class OrganizationRepository {
   }
 
   /** Convite pendente para o mesmo e-mail, se houver. */
-  async findPendingInvitation(organizationId: string, email: string) {
-    const rows = await this.db
-      .select()
-      .from(invitations)
-      .where(
-        and(
-          eq(invitations.organizationId, organizationId),
-          eq(invitations.email, email),
-          eq(invitations.status, 'pending'),
-        ),
-      )
-      .limit(1);
+  async findPendingInvitation(
+    organizationId: string,
+    email: string,
+  ): Promise<Invitation | undefined> {
+    const row = await this.db.manager.findOne(invitations, {
+      where: { organizationId, email, status: 'pending' },
+    });
 
-    return rows[0];
+    return row ?? undefined;
   }
 
   async expireInvitation(invitationId: string): Promise<void> {
-    await this.db
-      .update(invitations)
-      .set({ status: 'expired', updatedAt: new Date() })
-      .where(eq(invitations.id, invitationId));
+    await this.db.manager.update(
+      invitations,
+      { id: invitationId },
+      { status: 'expired', updatedAt: new Date() },
+    );
   }
 
   async findRoleIdBySlug(slug: string): Promise<string | undefined> {
-    const rows = await this.db
-      .select({ id: roles.id })
-      .from(roles)
-      .where(and(isNull(roles.organizationId), eq(roles.slug, slug)))
-      .limit(1);
+    const row = await this.db.manager
+      .createQueryBuilder(roles, 'role')
+      .select('role.id')
+      .where('role.organizationId IS NULL')
+      .andWhere('role.slug = :slug', { slug })
+      .getOne();
 
-    return rows[0]?.id;
+    return row?.id;
   }
-}
-
-/**
- * Condição de keyset: `(created_at, id) < (cursor.at, cursor.id)`.
- *
- * O par completo é necessário porque `created_at` não é único; sem o desempate
- * por `id`, registros criados no mesmo milissegundo apareceriam duas vezes ou
- * sumiriam entre páginas.
- */
-function keysetCondition(
-  createdAtColumn: Parameters<typeof lt>[0],
-  idColumn: Parameters<typeof lt>[0],
-  after: CursorPayload | undefined,
-) {
-  if (after === undefined) {
-    return undefined;
-  }
-
-  const at = new Date(after.at);
-
-  return or(
-    lt(createdAtColumn, at),
-    and(eq(createdAtColumn, at), lt(idColumn, after.id)),
-  );
 }

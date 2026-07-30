@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { AppConfig } from '@prometheon/config';
-import { newId, runMigrations, runSeed } from '@prometheon/database';
+import { closeDatabase, newId, runMigrations, runSeed } from '@prometheon/database';
 import type { FastifyInstance } from 'fastify';
 import { Redis } from 'ioredis';
 import { createConnection } from 'mysql2/promise';
@@ -83,7 +83,7 @@ export async function createRealtimeHarness(
     redis: { ...base.redis, keyPrefix },
   };
 
-  const handles = createDatabaseHandles(config, { connectionLimit: 5 });
+  const database = await createDatabaseHandles(config, { connectionLimit: 5 });
   const mailDirectory = await mkdtemp(join(tmpdir(), 'prometheon-rt-mail-'));
   const mailer = await createMailService({
     config,
@@ -93,7 +93,7 @@ export async function createRealtimeHarness(
 
   const { app, authService } = await buildApp({
     config,
-    databaseHandles: handles,
+    database,
     mailer,
     realtimeTimers: false,
   });
@@ -122,7 +122,7 @@ export async function createRealtimeHarness(
     dispose: async () => {
       await authService.flushPendingMail();
       await app.close();
-      await handles.pool.end();
+      await closeDatabase(database);
       await mailer.close();
       await purgeKeys(config, keyPrefix);
 

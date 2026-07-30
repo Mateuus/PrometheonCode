@@ -13,8 +13,12 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { enqueueOutboxMessage, newId, outboxMessages } from '@prometheon/database';
-import { and, eq } from 'drizzle-orm';
+import {
+  enqueueOutboxMessage,
+  newId,
+  outboxMessages,
+  runInTransaction,
+} from '@prometheon/database';
 
 import { createLogger } from '@prometheon/logger';
 
@@ -124,16 +128,20 @@ describe.skipIf(unavailable)('publicador do outbox', () => {
     availableAt?: Date;
     occurredAt?: Date;
   }): Promise<string> {
-    return enqueueOutboxMessage(temporary.db, {
-      organizationId: ORGANIZATION_ID,
-      aggregateType: 'task',
-      aggregateId: input.aggregateId,
-      aggregateSequence: input.sequence ?? null,
-      eventType: input.eventType,
-      payload: { taskId: input.aggregateId, sequence: input.sequence ?? null },
-      ...(input.occurredAt === undefined ? {} : { occurredAt: input.occurredAt }),
-      ...(input.availableAt === undefined ? {} : { availableAt: input.availableAt }),
-    });
+    // `enqueueOutboxMessage` só aceita executor de transação: é assim que o
+    // tipo impede gravar evento fora da transação do domínio.
+    return runInTransaction(temporary.db, async (tx) =>
+      enqueueOutboxMessage(tx, {
+        organizationId: ORGANIZATION_ID,
+        aggregateType: 'task',
+        aggregateId: input.aggregateId,
+        aggregateSequence: input.sequence ?? null,
+        eventType: input.eventType,
+        payload: { taskId: input.aggregateId, sequence: input.sequence ?? null },
+        ...(input.occurredAt === undefined ? {} : { occurredAt: input.occurredAt }),
+        ...(input.availableAt === undefined ? {} : { availableAt: input.availableAt }),
+      }),
+    );
   }
 
   /** Espera até a condição valer ou o prazo estourar. */
@@ -153,17 +161,18 @@ describe.skipIf(unavailable)('publicador do outbox', () => {
     availableAt: Date;
     lastError: string | null;
   }> {
-    const [row] = await temporary.db
-      .select({
-        publishedAt: outboxMessages.publishedAt,
-        attempts: outboxMessages.attempts,
-        availableAt: outboxMessages.availableAt,
-        lastError: outboxMessages.lastError,
-      })
-      .from(outboxMessages)
-      .where(eq(outboxMessages.id, id))
-      .limit(1);
-    if (row === undefined) {
+    const row = await temporary.db.manager
+      .createQueryBuilder(outboxMessages, 'outbox')
+      .select([
+        'outbox.publishedAt',
+        'outbox.attempts',
+        'outbox.availableAt',
+        'outbox.lastError',
+      ])
+      .where('outbox.id = :id', { id })
+      .limit(1)
+      .getOne();
+    if (row === null) {
       throw new Error(`linha ${id} não encontrada`);
     }
     return row;
@@ -332,14 +341,15 @@ describe.skipIf(unavailable)('publicador do outbox', () => {
   });
 
   it('a varredura usa o índice dos não publicados, sem filesort', async () => {
-    const [plan] = await temporary.db.execute(
-      // `EXPLAIN` da consulta exata do publicador.
+    // `EXPLAIN` da consulta exata do publicador. `db.query` devolve as linhas
+    // diretamente — não há mais o par `[linhas, campos]` do driver.
+    const plan = (await temporary.db.query(
       `EXPLAIN SELECT id FROM outbox_messages
          WHERE published_at IS NULL AND available_at <= NOW(3)
          ORDER BY available_at, id
          LIMIT 100`,
-    );
-    const row = (plan as unknown as Record<string, unknown>[])[0];
+    )) as Record<string, unknown>[];
+    const row = plan[0];
     expect(String(row?.['key'])).toBe('idx_outbox_unpublished');
     expect(String(row?.['Extra'] ?? '')).not.toContain('filesort');
   });
@@ -350,11 +360,13 @@ describe.skipIf(unavailable)('publicador do outbox', () => {
     await publisher.runOnce();
 
     expect(await commands.exists(keys.outboxLock(id))).toBe(0);
-    const [row] = await temporary.db
-      .select({ id: outboxMessages.id })
-      .from(outboxMessages)
-      .where(and(eq(outboxMessages.id, id), eq(outboxMessages.attempts, 0)))
-      .limit(1);
+    const row = await temporary.db.manager
+      .createQueryBuilder(outboxMessages, 'outbox')
+      .select('outbox.id')
+      .where('outbox.id = :id', { id })
+      .andWhere('outbox.attempts = :attempts', { attempts: 0 })
+      .limit(1)
+      .getOne();
     expect(row?.id).toBe(id);
   });
 });

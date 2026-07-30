@@ -18,7 +18,6 @@ import {
   outboxMessages,
   projectMembers,
 } from '@prometheon/database';
-import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { MessageRepository } from '../modules/messages/repository.js';
@@ -215,13 +214,12 @@ describe.skipIf(!probe.ok)('conversas e mensagens', () => {
   });
 
   it('sequence não repete nem deixa buraco com escritas concorrentes', async () => {
-    const before = await harness.app.db
-      .select({ lastSequence: conversations.lastSequence })
-      .from(conversations)
-      .where(eq(conversations.id, conversationId))
-      .limit(1);
+    const before = await harness.app.db.manager.findOne(conversations, {
+      select: { lastSequence: true },
+      where: { id: conversationId },
+    });
 
-    const start = before[0]?.lastSequence ?? 0;
+    const start = before?.lastSequence ?? 0;
     const total = 12;
 
     const responses = await Promise.all(
@@ -243,10 +241,10 @@ describe.skipIf(!probe.ok)('conversas e mensagens', () => {
     // Sem repetição e sem buraco: exatamente `start+1 ⬦ start+total`.
     expect(sequences).toEqual(expected);
 
-    const rows = await harness.app.db
-      .select({ sequence: messages.sequence })
-      .from(messages)
-      .where(eq(messages.conversationId, conversationId));
+    const rows = await harness.app.db.manager.find(messages, {
+      select: { sequence: true },
+      where: { conversationId },
+    });
 
     expect(new Set(rows.map((row) => row.sequence)).size).toBe(rows.length);
   });
@@ -260,22 +258,20 @@ describe.skipIf(!probe.ok)('conversas e mensagens', () => {
 
     const message = body<MessageBody>(response).data;
 
-    const events = await harness.app.db
-      .select({
-        eventType: outboxMessages.eventType,
-        aggregateId: outboxMessages.aggregateId,
-        aggregateSequence: outboxMessages.aggregateSequence,
-        payload: outboxMessages.payload,
-        publishedAt: outboxMessages.publishedAt,
-      })
-      .from(outboxMessages)
-      .where(
-        and(
-          eq(outboxMessages.eventType, 'message.created'),
-          eq(outboxMessages.aggregateId, conversationId),
-          eq(outboxMessages.aggregateSequence, message.sequence),
-        ),
-      );
+    const events = await harness.app.db.manager.find(outboxMessages, {
+      select: {
+        eventType: true,
+        aggregateId: true,
+        aggregateSequence: true,
+        payload: true,
+        publishedAt: true,
+      },
+      where: {
+        eventType: 'message.created',
+        aggregateId: conversationId,
+        aggregateSequence: message.sequence,
+      },
+    });
 
     expect(events).toHaveLength(1);
     expect(events[0]?.publishedAt).toBeNull();
@@ -291,19 +287,15 @@ describe.skipIf(!probe.ok)('conversas e mensagens', () => {
   it('transação que falha não deixa mensagem, sequência nem evento', async () => {
     const repository = new MessageRepository(harness.app.db);
 
-    const before = await harness.app.db
-      .select({
-        lastSequence: conversations.lastSequence,
-        messageCount: conversations.messageCount,
-      })
-      .from(conversations)
-      .where(eq(conversations.id, conversationId))
-      .limit(1);
+    const before = await harness.app.db.manager.findOne(conversations, {
+      select: { lastSequence: true, messageCount: true },
+      where: { id: conversationId },
+    });
 
-    const outboxBefore = await harness.app.db
-      .select({ id: outboxMessages.id })
-      .from(outboxMessages)
-      .where(eq(outboxMessages.aggregateId, conversationId));
+    const outboxBefore = await harness.app.db.manager.find(outboxMessages, {
+      select: { id: true },
+      where: { aggregateId: conversationId },
+    });
 
     await expect(
       repository.create({
@@ -325,23 +317,19 @@ describe.skipIf(!probe.ok)('conversas e mensagens', () => {
       }),
     ).rejects.toThrow('falha proposital');
 
-    const after = await harness.app.db
-      .select({
-        lastSequence: conversations.lastSequence,
-        messageCount: conversations.messageCount,
-      })
-      .from(conversations)
-      .where(eq(conversations.id, conversationId))
-      .limit(1);
+    const after = await harness.app.db.manager.findOne(conversations, {
+      select: { lastSequence: true, messageCount: true },
+      where: { id: conversationId },
+    });
 
     // A sequência voltou atrás junto com a mensagem: nada de número queimado.
-    expect(after[0]?.lastSequence).toBe(before[0]?.lastSequence);
-    expect(after[0]?.messageCount).toBe(before[0]?.messageCount);
+    expect(after?.lastSequence).toBe(before?.lastSequence);
+    expect(after?.messageCount).toBe(before?.messageCount);
 
-    const outboxAfter = await harness.app.db
-      .select({ id: outboxMessages.id })
-      .from(outboxMessages)
-      .where(eq(outboxMessages.aggregateId, conversationId));
+    const outboxAfter = await harness.app.db.manager.find(outboxMessages, {
+      select: { id: true },
+      where: { aggregateId: conversationId },
+    });
 
     expect(outboxAfter).toHaveLength(outboxBefore.length);
   });
@@ -407,7 +395,7 @@ describe.skipIf(!probe.ok)('conversas e mensagens', () => {
 
       // Entra no projeto: o que barra daqui em diante é a permissão, não a
       // participação. (A rota para adicionar membro de projeto ainda não existe.)
-      await harness.app.db.insert(projectMembers).values({
+      await harness.app.db.manager.insert(projectMembers, {
         id: newId(),
         organizationId,
         projectId,
@@ -473,10 +461,10 @@ describe.skipIf(!probe.ok)('conversas e mensagens', () => {
       pages += 1;
     } while (cursor !== null && pages < 30);
 
-    const rows = await harness.app.db
-      .select({ sequence: messages.sequence })
-      .from(messages)
-      .where(eq(messages.conversationId, conversationId));
+    const rows = await harness.app.db.manager.find(messages, {
+      select: { sequence: true },
+      where: { conversationId },
+    });
 
     expect(new Set(seen).size).toBe(seen.length);
     expect(seen.sort((left, right) => left - right)).toEqual(

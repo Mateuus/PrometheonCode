@@ -22,8 +22,6 @@
 // Nada de conteúdo sensível no log: variáveis de template podem carregar título
 // de tarefa e trecho de mensagem, e o `Docs/11` proíbe despejar isso por padrão.
 
-import { eq } from 'drizzle-orm';
-
 import { users } from '@prometheon/database';
 
 import { PermanentJobError } from '../../errors.js';
@@ -46,20 +44,21 @@ export const notificationsHandler: JobHandler<typeof notificationJobSchema> = {
     let recipientEmail = data.recipientAddress ?? null;
 
     if (data.recipientUserId != null) {
-      const [user] = await deps.db
-        .select({
-          id: users.id,
-          email: users.email,
-          status: users.status,
-          emailVerifiedAt: users.emailVerifiedAt,
-          locale: users.locale,
-          deletedAt: users.deletedAt,
-        })
-        .from(users)
-        .where(eq(users.id, data.recipientUserId))
-        .limit(1);
+      const user = await deps.db.manager
+        .createQueryBuilder(users, 'user')
+        .select([
+          'user.id',
+          'user.email',
+          'user.status',
+          'user.emailVerifiedAt',
+          'user.locale',
+          'user.deletedAt',
+        ])
+        .where('user.id = :userId', { userId: data.recipientUserId })
+        .limit(1)
+        .getOne();
 
-      if (user === undefined) {
+      if (user === null) {
         throw new PermanentJobError('Destinatário inexistente.', {
           code: 'NOTIFICATION_RECIPIENT_NOT_FOUND',
           details: { recipientUserId: data.recipientUserId },

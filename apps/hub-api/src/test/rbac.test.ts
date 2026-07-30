@@ -8,7 +8,7 @@
  */
 
 import { organizationMembers, roles } from '@prometheon/database';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { IsNull } from 'typeorm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -34,21 +34,19 @@ describe.skipIf(!probe.ok)('autorização por rota', () => {
 
   /** Troca o papel de um membro direto no banco, para montar o cenário. */
   async function setRole(userId: string, slug: string): Promise<void> {
-    const role = await harness.app.db
-      .select({ id: roles.id })
-      .from(roles)
-      .where(and(isNull(roles.organizationId), eq(roles.slug, slug)))
-      .limit(1);
+    const role = await harness.app.db.manager.find(roles, {
+      select: { id: true },
+      where: { organizationId: IsNull(), slug },
+      take: 1,
+    });
 
-    await harness.app.db
+    await harness.app.db.manager
+      .createQueryBuilder()
       .update(organizationMembers)
       .set({ roleId: role[0]?.id ?? '' })
-      .where(
-        and(
-          eq(organizationMembers.organizationId, organizationId),
-          eq(organizationMembers.userId, userId),
-        ),
-      );
+      .where('organization_id = :organizationId', { organizationId })
+      .andWhere('user_id = :userId', { userId })
+      .execute();
   }
 
   beforeAll(async () => {
@@ -258,16 +256,11 @@ describe.skipIf(!probe.ok)('autorização por rota', () => {
 
   describe('PATCH /v1/organizations/:orgId/members/:memberId — exige organization.manage', () => {
     async function memberIdOf(userId: string): Promise<string> {
-      const rows = await harness.app.db
-        .select({ id: organizationMembers.id, version: organizationMembers.version })
-        .from(organizationMembers)
-        .where(
-          and(
-            eq(organizationMembers.organizationId, organizationId),
-            eq(organizationMembers.userId, userId),
-          ),
-        )
-        .limit(1);
+      const rows = await harness.app.db.manager.find(organizationMembers, {
+        select: { id: true, version: true },
+        where: { organizationId, userId },
+        take: 1,
+      });
 
       return rows[0]?.id ?? '';
     }
@@ -392,11 +385,10 @@ describe.skipIf(!probe.ok)('autorização por rota', () => {
 
   it('a política da organização nega mesmo quem tem o papel', async () => {
     // Camada mais alta da precedência do `Docs/09`: nem o owner passa.
-    await harness.app.db.execute(
-      sql`update organizations set policy = ${JSON.stringify({
-        deny: ['audit.read'],
-      })} where id = ${organizationId}`,
-    );
+    await harness.app.db.query('update organizations set policy = ? where id = ?', [
+      JSON.stringify({ deny: ['audit.read'] }),
+      organizationId,
+    ]);
 
     const response = await harness.app.inject({
       method: 'GET',
@@ -409,9 +401,9 @@ describe.skipIf(!probe.ok)('autorização por rota', () => {
       'organization policy',
     );
 
-    await harness.app.db.execute(
-      sql`update organizations set policy = null where id = ${organizationId}`,
-    );
+    await harness.app.db.query('update organizations set policy = null where id = ?', [
+      organizationId,
+    ]);
   });
 });
 

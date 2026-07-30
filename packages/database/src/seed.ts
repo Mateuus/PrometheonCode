@@ -16,15 +16,12 @@
 //
 // Uso: `pnpm --filter @prometheon/database db:seed`
 
-import { and, eq, isNull, notInArray } from 'drizzle-orm';
-import process from 'node:process';
 import { resolve } from 'node:path';
+import process from 'node:process';
 
-import { createDatabase, type Database } from './client.js';
-import type { CreatePoolOptions } from './client.js';
-import { envValue } from './env.js';
-import { newId } from './id.js';
-import { SYSTEM_ROLES } from './permissions.js';
+import { IsNull, Not, In } from 'typeorm';
+
+import { createDatabase, type CreateDatabaseOptions, type Database } from './client.js';
 import {
   organizationMembers,
   organizations,
@@ -32,7 +29,10 @@ import {
   rolePermissions,
   roles,
   users,
-} from './schema/index.js';
+} from './entities/index.js';
+import { envValue } from './env.js';
+import { newId } from './id.js';
+import { SYSTEM_ROLES } from './permissions.js';
 
 /** Plano gratuito de referência. Valores monetários em centavos. */
 const FREE_PLAN = {
@@ -70,13 +70,12 @@ export interface SeedResult {
 
 /** Garante o plano gratuito. */
 async function seedFreePlan(db: Database, created: string[]): Promise<string> {
-  const existing = await db.select().from(plans).where(eq(plans.code, FREE_PLAN.code)).limit(1);
-  const current = existing[0];
+  const current = await db.manager.findOne(plans, { where: { code: FREE_PLAN.code } });
   if (current) {
     return current.id;
   }
   const id = newId();
-  await db.insert(plans).values({ id, ...FREE_PLAN });
+  await db.manager.insert(plans, { id, ...FREE_PLAN });
   created.push(`plano ${FREE_PLAN.code}`);
   return id;
 }
@@ -86,7 +85,7 @@ async function seedFreePlan(db: Database, created: string[]): Promise<string> {
  * permissões convergirem para a lista do `Docs/09`.
  */
 async function seedSystemRoles(db: Database, created: string[]): Promise<Record<string, string>> {
-  const existing = await db.select().from(roles).where(isNull(roles.organizationId));
+  const existing = await db.manager.find(roles, { where: { organizationId: IsNull() } });
   const bySlug = new Map(existing.map((role) => [role.slug, role]));
   const roleIds: Record<string, string> = {};
 
@@ -94,7 +93,7 @@ async function seedSystemRoles(db: Database, created: string[]): Promise<Record<
     let roleId = bySlug.get(definition.slug)?.id;
     if (!roleId) {
       roleId = newId();
-      await db.insert(roles).values({
+      await db.manager.insert(roles, {
         id: roleId,
         organizationId: null,
         slug: definition.slug,
@@ -111,24 +110,16 @@ async function seedSystemRoles(db: Database, created: string[]): Promise<Record<
     // Convergência das permissões: remove o que não está mais na definição e
     // insere o que falta. Nada é reescrito à toa.
     const wanted = [...definition.permissions];
-    await db
-      .delete(rolePermissions)
-      .where(
-        and(
-          eq(rolePermissions.roleId, roleId),
-          notInArray(rolePermissions.permission, wanted),
-        ),
-      );
-    const present = await db
-      .select({ permission: rolePermissions.permission })
-      .from(rolePermissions)
-      .where(eq(rolePermissions.roleId, roleId));
+    await db.manager.delete(rolePermissions, { roleId, permission: Not(In(wanted)) });
+    const present = await db.manager.find(rolePermissions, { where: { roleId } });
     const presentSet = new Set(present.map((row) => row.permission));
     const missing = wanted.filter((permission) => !presentSet.has(permission));
     if (missing.length > 0) {
-      await db
-        .insert(rolePermissions)
-        .values(missing.map((permission) => ({ roleId: roleId, permission })));
+      const at = new Date();
+      await db.manager.insert(
+        rolePermissions,
+        missing.map((permission) => ({ roleId, permission, createdAt: at })),
+      );
       created.push(`permissões de ${definition.slug} (${missing.length})`);
     }
   }
@@ -139,13 +130,12 @@ async function seedSystemRoles(db: Database, created: string[]): Promise<Record<
 /** Garante o usuário owner de exemplo. */
 async function seedOwnerUser(db: Database, created: string[]): Promise<string> {
   const email = envValue('SEED_OWNER_EMAIL') ?? DEFAULT_OWNER_EMAIL;
-  const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
-  const current = existing[0];
+  const current = await db.manager.findOne(users, { where: { email } });
   if (current) {
     return current.id;
   }
   const id = newId();
-  await db.insert(users).values({
+  await db.manager.insert(users, {
     id,
     email,
     displayName: 'Prometheon Owner',
@@ -164,16 +154,14 @@ async function seedExampleOrganization(
   input: { planId: string; ownerUserId: string; ownerRoleId: string },
   created: string[],
 ): Promise<string> {
-  const existing = await db
-    .select()
-    .from(organizations)
-    .where(eq(organizations.slug, EXAMPLE_ORGANIZATION.slug))
-    .limit(1);
+  const existing = await db.manager.findOne(organizations, {
+    where: { slug: EXAMPLE_ORGANIZATION.slug },
+  });
 
-  let organizationId = existing[0]?.id;
+  let organizationId = existing?.id;
   if (!organizationId) {
     organizationId = newId();
-    await db.insert(organizations).values({
+    await db.manager.insert(organizations, {
       id: organizationId,
       slug: EXAMPLE_ORGANIZATION.slug,
       name: EXAMPLE_ORGANIZATION.name,
@@ -185,19 +173,12 @@ async function seedExampleOrganization(
     created.push(`organização ${EXAMPLE_ORGANIZATION.slug}`);
   }
 
-  const membership = await db
-    .select()
-    .from(organizationMembers)
-    .where(
-      and(
-        eq(organizationMembers.organizationId, organizationId),
-        eq(organizationMembers.userId, input.ownerUserId),
-      ),
-    )
-    .limit(1);
+  const membership = await db.manager.findOne(organizationMembers, {
+    where: { organizationId, userId: input.ownerUserId },
+  });
 
-  if (!membership[0]) {
-    await db.insert(organizationMembers).values({
+  if (!membership) {
+    await db.manager.insert(organizationMembers, {
       id: newId(),
       organizationId,
       userId: input.ownerUserId,
@@ -232,22 +213,35 @@ export async function seedDatabase(db: Database): Promise<SeedResult> {
 }
 
 /** Abre a conexão, roda o seed e fecha. */
-export async function runSeed(options: CreatePoolOptions = {}): Promise<SeedResult> {
-  const { db, pool } = createDatabase({ ...options, connectionLimit: 1 });
+export async function runSeed(options: CreateDatabaseOptions = {}): Promise<SeedResult> {
+  const db = await createDatabase({ ...options, connectionLimit: 1 });
   try {
     return await seedDatabase(db);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // Erro típico de banco ainda não migrado.
-    if ((error as { code?: string }).code === 'ER_NO_SUCH_TABLE') {
+    if (isMissingTable(error)) {
       throw new Error(`Tabelas ausentes: rode as migrations antes do seed. (${message})`, {
         cause: error,
       });
     }
     throw new Error(`Falha no seed: ${message}`, { cause: error });
   } finally {
-    await pool.end();
+    await db.destroy();
   }
+}
+
+/** O TypeORM embrulha o erro do driver; o código original fica na causa. */
+function isMissingTable(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current !== undefined && current !== null; depth += 1) {
+    if ((current as { code?: string }).code === 'ER_NO_SUCH_TABLE') {
+      return true;
+    }
+    current = (current as { cause?: unknown; driverError?: unknown }).driverError
+      ?? (current as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 async function main(): Promise<void> {

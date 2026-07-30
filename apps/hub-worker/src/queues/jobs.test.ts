@@ -13,7 +13,6 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { eq, sql } from 'drizzle-orm';
 import type { Queue } from 'bullmq';
 
 import {
@@ -23,6 +22,12 @@ import {
   newId,
   outboxMessages,
   projects,
+  writable,
+  type AuditLog,
+  type DataExportJob,
+  type DeletionJob,
+  type OutboxMessage,
+  type Project,
   type SeedResult,
 } from '@prometheon/database';
 import { createLogger } from '@prometheon/logger';
@@ -76,9 +81,9 @@ describe.skipIf(unavailable)('filas do worker', () => {
     fixtures = await seedFixtures(temporary.db);
     disposable = disposableSettings('jobs', base);
 
-    runtime = createWorkerRuntime({
+    runtime = await createWorkerRuntime({
       settings: disposable.settings,
-      database: { db: temporary.db, pool: temporary.pool },
+      database: temporary.db,
       logger,
       onlyQueues: ['deletions', 'retention', 'exports', 'dead-letter'],
     });
@@ -90,9 +95,9 @@ describe.skipIf(unavailable)('filas do worker', () => {
       await runtime.shutdown('fim da suíte');
     }
     if (disposable !== undefined) {
-      const inspector = createWorkerRuntime({
+      const inspector = await createWorkerRuntime({
         settings: disposable.settings,
-        database: { db: temporary.db, pool: temporary.pool },
+        database: temporary.db,
         logger,
         onlyQueues: [],
       });
@@ -158,21 +163,25 @@ describe.skipIf(unavailable)('filas do worker', () => {
 
   async function createProject(slug: string): Promise<string> {
     const id = newId();
-    await temporary.db.insert(projects).values({
-      id,
-      organizationId: fixtures.organizationId,
-      slug,
-      name: slug,
-    });
+    await temporary.db.manager.insert(
+      projects,
+      writable<Project>({
+        id,
+        organizationId: fixtures.organizationId,
+        slug,
+        name: slug,
+      }),
+    );
     return id;
   }
 
   async function countProjects(): Promise<number> {
-    const [row] = await temporary.db
-      .select({ total: sql<number>`count(*)` })
-      .from(projects)
-      .where(eq(projects.organizationId, fixtures.organizationId));
-    return Number(row?.total ?? 0);
+    return temporary.db.manager
+      .createQueryBuilder(projects, 'project')
+      .where('project.organizationId = :organizationId', {
+        organizationId: fixtures.organizationId,
+      })
+      .getCount();
   }
 
   it('não duplica o efeito quando o mesmo jobId roda duas vezes', async () => {
@@ -180,15 +189,18 @@ describe.skipIf(unavailable)('filas do worker', () => {
     const survivor = await createProject('surviving-project');
     const deletionJobId = newId();
 
-    await temporary.db.insert(deletionJobs).values({
-      id: deletionJobId,
-      organizationId: fixtures.organizationId,
-      targetType: 'project',
-      targetId: doomed,
-      status: 'pending',
-      scheduledFor: new Date(Date.now() - 60_000),
-      reason: 'teste de idempotência',
-    });
+    await temporary.db.manager.insert(
+      deletionJobs,
+      writable<DeletionJob>({
+        id: deletionJobId,
+        organizationId: fixtures.organizationId,
+        targetType: 'project',
+        targetId: doomed,
+        status: 'pending',
+        scheduledFor: new Date(Date.now() - 60_000),
+        reason: 'teste de idempotência',
+      }),
+    );
 
     const queue = runtime.queues.deletions;
     const jobId = `deletion-${deletionJobId}`;
@@ -217,18 +229,20 @@ describe.skipIf(unavailable)('filas do worker', () => {
     expect(second.returnvalue).toMatchObject({ status: 'skipped' });
     expect(await countProjects()).toBe(1);
 
-    const [row] = await temporary.db
-      .select({ status: deletionJobs.status })
-      .from(deletionJobs)
-      .where(eq(deletionJobs.id, deletionJobId))
-      .limit(1);
+    const row = await temporary.db.manager
+      .createQueryBuilder(deletionJobs, 'job')
+      .select('job.status')
+      .where('job.id = :deletionJobId', { deletionJobId })
+      .limit(1)
+      .getOne();
     expect(row?.status).toBe('completed');
 
-    const [remaining] = await temporary.db
-      .select({ id: projects.id })
-      .from(projects)
-      .where(eq(projects.id, survivor))
-      .limit(1);
+    const remaining = await temporary.db.manager
+      .createQueryBuilder(projects, 'project')
+      .select('project.id')
+      .where('project.id = :id', { id: survivor })
+      .limit(1)
+      .getOne();
     expect(remaining?.id).toBe(survivor);
   });
 
@@ -263,16 +277,19 @@ describe.skipIf(unavailable)('filas do worker', () => {
     const target = await createProject('not-due-project');
     const deletionJobId = newId();
 
-    await temporary.db.insert(deletionJobs).values({
-      id: deletionJobId,
-      organizationId: fixtures.organizationId,
-      targetType: 'project',
-      targetId: target,
-      status: 'pending',
-      // Ainda não venceu: o processador classifica como transitório.
-      scheduledFor: new Date(Date.now() + 3 * DAY_MS),
-      reason: 'teste de retentativa',
-    });
+    await temporary.db.manager.insert(
+      deletionJobs,
+      writable<DeletionJob>({
+        id: deletionJobId,
+        organizationId: fixtures.organizationId,
+        targetType: 'project',
+        targetId: target,
+        status: 'pending',
+        // Ainda não venceu: o processador classifica como transitório.
+        scheduledFor: new Date(Date.now() + 3 * DAY_MS),
+        reason: 'teste de retentativa',
+      }),
+    );
 
     const queue = runtime.queues.deletions;
     const jobId = `deletion-not-due-${deletionJobId}`;
@@ -301,11 +318,12 @@ describe.skipIf(unavailable)('filas do worker', () => {
     expect(record.attemptsMade).toBe(2);
 
     // O alvo sobreviveu: exclusão que não venceu não apaga nada.
-    const [row] = await temporary.db
-      .select({ id: projects.id })
-      .from(projects)
-      .where(eq(projects.id, target))
-      .limit(1);
+    const row = await temporary.db.manager
+      .createQueryBuilder(projects, 'project')
+      .select('project.id')
+      .where('project.id = :id', { id: target })
+      .limit(1)
+      .getOne();
     expect(row?.id).toBe(target);
 
     // Exatamente um registro para este job: a primeira falha não gerou nenhum.
@@ -318,8 +336,8 @@ describe.skipIf(unavailable)('filas do worker', () => {
     const freshAuditId = newId();
     const oldOutboxId = newId();
 
-    await temporary.db.insert(auditLogs).values([
-      {
+    await temporary.db.manager.insert(auditLogs, [
+      writable<AuditLog>({
         id: oldAuditId,
         organizationId: fixtures.organizationId,
         actorType: 'system',
@@ -327,28 +345,31 @@ describe.skipIf(unavailable)('filas do worker', () => {
         resourceType: 'test',
         // 400 dias: muito além dos 30 do plano gratuito.
         createdAt: new Date(Date.now() - 400 * DAY_MS),
-      },
-      {
+      }),
+      writable<AuditLog>({
         id: freshAuditId,
         organizationId: fixtures.organizationId,
         actorType: 'system',
         action: 'test.fresh',
         resourceType: 'test',
         createdAt: new Date(),
-      },
+      }),
     ]);
 
-    await temporary.db.insert(outboxMessages).values({
-      id: oldOutboxId,
-      organizationId: fixtures.organizationId,
-      aggregateType: 'task',
-      aggregateId: newId(),
-      eventType: 'task.updated',
-      payload: {},
-      occurredAt: new Date(Date.now() - 400 * DAY_MS),
-      availableAt: new Date(Date.now() - 400 * DAY_MS),
-      publishedAt: new Date(Date.now() - 400 * DAY_MS),
-    });
+    await temporary.db.manager.insert(
+      outboxMessages,
+      writable<OutboxMessage>({
+        id: oldOutboxId,
+        organizationId: fixtures.organizationId,
+        aggregateType: 'task',
+        aggregateId: newId(),
+        eventType: 'task.updated',
+        payload: {},
+        occurredAt: new Date(Date.now() - 400 * DAY_MS),
+        availableAt: new Date(Date.now() - 400 * DAY_MS),
+        publishedAt: new Date(Date.now() - 400 * DAY_MS),
+      }),
+    );
 
     const queue = runtime.queues.retention;
 
@@ -365,11 +386,12 @@ describe.skipIf(unavailable)('filas do worker', () => {
     expect((dry.returnvalue as { details?: { totalDeleted?: number } }).details?.totalDeleted)
       .toBeGreaterThanOrEqual(2);
 
-    const [stillThere] = await temporary.db
-      .select({ id: auditLogs.id })
-      .from(auditLogs)
-      .where(eq(auditLogs.id, oldAuditId))
-      .limit(1);
+    const stillThere = await temporary.db.manager
+      .createQueryBuilder(auditLogs, 'log')
+      .select('log.id')
+      .where('log.id = :id', { id: oldAuditId })
+      .limit(1)
+      .getOne();
     expect(stillThere?.id).toBe(oldAuditId);
 
     // Agora de verdade.
@@ -378,33 +400,40 @@ describe.skipIf(unavailable)('filas do worker', () => {
     const run = await waitForFinish(queue, runId);
     expect(run.state).toBe('completed');
 
-    const survivors = await temporary.db
-      .select({ id: auditLogs.id })
-      .from(auditLogs)
-      .where(eq(auditLogs.organizationId, fixtures.organizationId));
+    const survivors = await temporary.db.manager
+      .createQueryBuilder(auditLogs, 'log')
+      .select('log.id')
+      .where('log.organizationId = :organizationId', {
+        organizationId: fixtures.organizationId,
+      })
+      .getMany();
     const survivorIds = survivors.map((row) => row.id);
     expect(survivorIds).toContain(freshAuditId);
     expect(survivorIds).not.toContain(oldAuditId);
 
-    const [purgedOutbox] = await temporary.db
-      .select({ id: outboxMessages.id })
-      .from(outboxMessages)
-      .where(eq(outboxMessages.id, oldOutboxId))
-      .limit(1);
-    expect(purgedOutbox).toBeUndefined();
+    const purgedOutbox = await temporary.db.manager
+      .createQueryBuilder(outboxMessages, 'outbox')
+      .select('outbox.id')
+      .where('outbox.id = :id', { id: oldOutboxId })
+      .limit(1)
+      .getOne();
+    expect(purgedOutbox).toBeNull();
   });
 
   it('materializa a exportação no disco e fecha o job', async () => {
     const exportJobId = newId();
-    await temporary.db.insert(dataExportJobs).values({
-      id: exportJobId,
-      organizationId: fixtures.organizationId,
-      requestedByUserId: fixtures.ownerUserId,
-      scope: 'organization',
-      scopeId: fixtures.organizationId,
-      format: 'json',
-      status: 'pending',
-    });
+    await temporary.db.manager.insert(
+      dataExportJobs,
+      writable<DataExportJob>({
+        id: exportJobId,
+        organizationId: fixtures.organizationId,
+        requestedByUserId: fixtures.ownerUserId,
+        scope: 'organization',
+        scopeId: fixtures.organizationId,
+        format: 'json',
+        status: 'pending',
+      }),
+    );
 
     const queue = runtime.queues.exports;
     const jobId = `export-${exportJobId}`;
@@ -422,17 +451,18 @@ describe.skipIf(unavailable)('filas do worker', () => {
     expect(result.state).toBe('completed');
     expect(result.returnvalue).toMatchObject({ status: 'done' });
 
-    const [row] = await temporary.db
-      .select({
-        status: dataExportJobs.status,
-        storageKey: dataExportJobs.storageKey,
-        sizeBytes: dataExportJobs.sizeBytes,
-        downloadExpiresAt: dataExportJobs.downloadExpiresAt,
-        completedAt: dataExportJobs.completedAt,
-      })
-      .from(dataExportJobs)
-      .where(eq(dataExportJobs.id, exportJobId))
-      .limit(1);
+    const row = await temporary.db.manager
+      .createQueryBuilder(dataExportJobs, 'job')
+      .select([
+        'job.status',
+        'job.storageKey',
+        'job.sizeBytes',
+        'job.downloadExpiresAt',
+        'job.completedAt',
+      ])
+      .where('job.id = :exportJobId', { exportJobId })
+      .limit(1)
+      .getOne();
 
     expect(row?.status).toBe('completed');
     expect(row?.storageKey).toBeTruthy();

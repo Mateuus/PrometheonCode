@@ -9,7 +9,7 @@
  * sistema para um token vazar sem ninguém notar.
  */
 
-import { auditLogs, newId, type Database } from '@prometheon/database';
+import { auditLogs, newId, writable, type AuditLog, type Database } from '@prometheon/database';
 import { child } from '@prometheon/logger';
 import type { FastifyRequest } from 'fastify';
 
@@ -32,23 +32,26 @@ export interface AuditEntry {
 
 export async function recordAudit(db: Database, entry: AuditEntry): Promise<void> {
   try {
-    await db.insert(auditLogs).values({
-      id: newId(),
-      organizationId: entry.organizationId,
-      actorType: entry.actorType,
-      actorId: entry.actorId,
-      actorLabel: entry.actorLabel ?? null,
-      action: entry.action,
-      resourceType: entry.resourceType,
-      resourceId: entry.resourceId ?? null,
-      projectId: entry.projectId ?? null,
-      result: entry.result ?? 'success',
-      reason: entry.reason ?? null,
-      requestId: entry.requestId ?? null,
-      ip: entry.ip ?? null,
-      userAgent: entry.userAgent ?? null,
-      metadata: entry.metadata ?? null,
-    });
+    await db.manager.insert(
+      auditLogs,
+      writable<AuditLog>({
+        id: newId(),
+        organizationId: entry.organizationId,
+        actorType: entry.actorType,
+        actorId: entry.actorId,
+        actorLabel: entry.actorLabel ?? null,
+        action: entry.action,
+        resourceType: entry.resourceType,
+        resourceId: entry.resourceId ?? null,
+        projectId: entry.projectId ?? null,
+        result: entry.result ?? 'success',
+        reason: entry.reason ?? null,
+        requestId: entry.requestId ?? null,
+        ip: entry.ip ?? null,
+        userAgent: entry.userAgent ?? null,
+        metadata: entry.metadata ?? null,
+      }),
+    );
   } catch (error) {
     // Falha ao auditar não pode derrubar a operação auditada — mas também não
     // pode passar em silêncio, porque é perda de rastro.

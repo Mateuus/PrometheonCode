@@ -20,11 +20,10 @@ const PACKAGES = [
   {
     dir: 'packages/database',
     name: '@prometheon/database',
-    deps: ['drizzle-orm', 'mysql2'],
+    deps: ['typeorm', 'mysql2'],
     scripts: {
-      'db:generate': 'drizzle-kit generate',
       'db:migrate': 'tsx src/migrate.ts',
-      'db:studio': 'drizzle-kit studio',
+      'db:seed': 'tsx src/seed.ts',
     },
   },
   { dir: 'packages/permissions', name: '@prometheon/permissions', deps: [] },

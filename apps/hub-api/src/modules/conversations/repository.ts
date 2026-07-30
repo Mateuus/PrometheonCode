@@ -11,32 +11,48 @@ import {
   conversationParticipants,
   conversations,
   newId,
+  runInTransaction,
   users,
   type Database,
 } from '@prometheon/database';
-import { and, desc, eq, inArray, isNull, like, sql, type SQL } from 'drizzle-orm';
 
 import { decodeCursor } from '../../shared/cursor.js';
-import { escapeLike, keysetCondition } from '../projects/repository.js';
+import { applyKeyset, escapeLike } from '../../shared/query.js';
 import type { ConversationRow, ParticipantRow } from './types.js';
 
-const conversationColumns = {
-  id: conversations.id,
-  organizationId: conversations.organizationId,
-  projectId: conversations.projectId,
-  title: conversations.title,
-  origin: conversations.origin,
-  status: conversations.status,
-  visibility: conversations.visibility,
-  workMode: conversations.workMode,
-  lastSequence: conversations.lastSequence,
-  messageCount: conversations.messageCount,
-  lastMessageAt: conversations.lastMessageAt,
-  createdAt: conversations.createdAt,
-  updatedAt: conversations.updatedAt,
-  createdBy: conversations.createdBy,
-  version: conversations.version,
-} as const;
+/** Colunas que o contrato de conversa expõe. Lista explícita: nada de `SELECT *`. */
+const CONVERSATION_COLUMNS = [
+  'id',
+  'organizationId',
+  'projectId',
+  'title',
+  'origin',
+  'status',
+  'visibility',
+  'workMode',
+  'lastSequence',
+  'messageCount',
+  'lastMessageAt',
+  'createdAt',
+  'updatedAt',
+  'createdBy',
+  'version',
+] as const;
+
+/** Colunas do participante, com o alias que o contrato espera. */
+const PARTICIPANT_COLUMNS: readonly (readonly [string, string])[] = [
+  ['participant.id', 'id'],
+  ['participant.conversationId', 'conversationId'],
+  ['participant.participantType', 'participantType'],
+  ['participant.participantId', 'participantId'],
+  ['participant.role', 'role'],
+  ['participant.joinedAt', 'joinedAt'],
+  ['participant.createdAt', 'createdAt'],
+  ['member.displayName', 'userName'],
+  ['member.email', 'userEmail'],
+  ['member.avatarUrl', 'userAvatarUrl'],
+  ['profile.id', 'agentProfileId'],
+];
 
 export interface ConversationListFilters {
   readonly status?: 'active' | 'archived' | 'locked' | undefined;
@@ -54,40 +70,44 @@ export class ConversationRepository {
     filters: ConversationListFilters;
   }): Promise<ConversationRow[]> {
     const after = input.cursor === undefined ? undefined : decodeCursor(input.cursor);
-    const conditions: (SQL | undefined)[] = [
-      eq(conversations.projectId, input.projectId),
-      isNull(conversations.deletedAt),
-      keysetCondition(conversations.createdAt, conversations.id, after),
-    ];
+    const query = this.db.manager
+      .createQueryBuilder(conversations, 'conversation')
+      .select(CONVERSATION_COLUMNS.map((column) => `conversation.${column}`))
+      .where('conversation.projectId = :projectId', { projectId: input.projectId })
+      .andWhere('conversation.deletedAt IS NULL');
+
+    applyKeyset(query, 'conversation', { createdAt: 'createdAt', id: 'id' }, after);
 
     if (input.filters.status !== undefined) {
-      conditions.push(eq(conversations.status, input.filters.status));
+      query.andWhere('conversation.status = :status', { status: input.filters.status });
     }
 
     if (input.filters.origin !== undefined) {
-      conditions.push(eq(conversations.origin, input.filters.origin));
+      query.andWhere('conversation.origin = :origin', { origin: input.filters.origin });
     }
 
     if (input.filters.search !== undefined && input.filters.search !== '') {
-      conditions.push(like(conversations.title, `%${escapeLike(input.filters.search)}%`));
+      query.andWhere('conversation.title LIKE :search', {
+        search: `%${escapeLike(input.filters.search)}%`,
+      });
     }
 
-    return this.db
-      .select(conversationColumns)
-      .from(conversations)
-      .where(and(...conditions))
-      .orderBy(desc(conversations.createdAt), desc(conversations.id))
-      .limit(input.limit + 1);
+    return query
+      .orderBy('conversation.createdAt', 'DESC')
+      .addOrderBy('conversation.id', 'DESC')
+      .limit(input.limit + 1)
+      .getMany();
   }
 
   async findById(conversationId: string): Promise<ConversationRow | undefined> {
-    const rows = await this.db
-      .select(conversationColumns)
-      .from(conversations)
-      .where(and(eq(conversations.id, conversationId), isNull(conversations.deletedAt)))
-      .limit(1);
+    const row = await this.db.manager
+      .createQueryBuilder(conversations, 'conversation')
+      .select(CONVERSATION_COLUMNS.map((column) => `conversation.${column}`))
+      .where('conversation.id = :conversationId', { conversationId })
+      .andWhere('conversation.deletedAt IS NULL')
+      .getOne();
 
-    return rows[0];
+    return row ?? undefined;
   }
 
   /**
@@ -95,50 +115,36 @@ export class ConversationRepository {
    *
    * `participant_id` é referência polimórfica (usuário ou perfil de agente),
    * então o nome sai de um `LEFT JOIN` com cada tabela e o tipo decide qual dos
-   * dois lados vale.
+   * dois lados vale. Como o resultado mistura colunas de três tabelas, a leitura
+   * é crua, com alias explícito por coluna.
    */
   async participantsOf(conversationIds: string[]): Promise<Map<string, ParticipantRow[]>> {
     if (conversationIds.length === 0) {
       return new Map();
     }
 
-    const rows = await this.db
-      .select({
-        id: conversationParticipants.id,
-        conversationId: conversationParticipants.conversationId,
-        participantType: conversationParticipants.participantType,
-        participantId: conversationParticipants.participantId,
-        role: conversationParticipants.role,
-        joinedAt: conversationParticipants.joinedAt,
-        createdAt: conversationParticipants.createdAt,
-        userName: users.displayName,
-        userEmail: users.email,
-        userAvatarUrl: users.avatarUrl,
-        agentProfileId: agentProfiles.id,
-      })
-      .from(conversationParticipants)
+    const query = this.db.manager
+      .createQueryBuilder(conversationParticipants, 'participant')
+      .select([])
       .leftJoin(
-        users,
-        and(
-          eq(users.id, conversationParticipants.participantId),
-          eq(conversationParticipants.participantType, 'user'),
-        ),
+        users.options.name,
+        'member',
+        "member.id = participant.participantId AND participant.participantType = 'user'",
       )
       .leftJoin(
-        agentProfiles,
-        and(
-          eq(agentProfiles.id, conversationParticipants.participantId),
-          eq(conversationParticipants.participantType, 'agent'),
-        ),
+        agentProfiles.options.name,
+        'profile',
+        "profile.id = participant.participantId AND participant.participantType = 'agent'",
       )
-      .where(
-        and(
-          inArray(conversationParticipants.conversationId, conversationIds),
-          isNull(conversationParticipants.leftAt),
-        ),
-      )
-      .orderBy(conversationParticipants.createdAt);
+      .where('participant.conversationId IN (:...conversationIds)', { conversationIds })
+      .andWhere('participant.leftAt IS NULL')
+      .orderBy('participant.createdAt', 'ASC');
 
+    for (const [column, alias] of PARTICIPANT_COLUMNS) {
+      query.addSelect(column, alias);
+    }
+
+    const rows = await query.getRawMany<ParticipantRow>();
     const grouped = new Map<string, ParticipantRow[]>();
 
     for (const row of rows) {
@@ -160,15 +166,12 @@ export class ConversationRepository {
       return [];
     }
 
-    const rows = await this.db
-      .select({ id: agentProfiles.id })
-      .from(agentProfiles)
-      .where(
-        and(
-          eq(agentProfiles.organizationId, organizationId),
-          inArray(agentProfiles.id, agentProfileIds),
-        ),
-      );
+    const rows = await this.db.manager
+      .createQueryBuilder(agentProfiles, 'profile')
+      .select('profile.id')
+      .where('profile.organizationId = :organizationId', { organizationId })
+      .andWhere('profile.id IN (:...agentProfileIds)', { agentProfileIds })
+      .getMany();
 
     return rows.map((row) => row.id);
   }
@@ -187,8 +190,8 @@ export class ConversationRepository {
     const conversationId = newId();
     const createdAt = new Date();
 
-    await this.db.transaction(async (tx) => {
-      await tx.insert(conversations).values({
+    await runInTransaction(this.db, async (tx) => {
+      await tx.insert(conversations, {
         id: conversationId,
         organizationId: input.organizationId,
         projectId: input.projectId,
@@ -202,14 +205,14 @@ export class ConversationRepository {
         updatedAt: createdAt,
       });
 
-      await tx.insert(conversationParticipants).values([
+      await tx.insert(conversationParticipants, [
         {
           id: newId(),
           organizationId: input.organizationId,
           conversationId,
-          participantType: 'user',
+          participantType: 'user' as const,
           participantId: input.createdBy,
-          role: 'owner',
+          role: 'owner' as const,
           joinedAt: createdAt,
         },
         ...input.agentProfileIds.map((agentProfileId) => ({
@@ -233,8 +236,10 @@ export class ConversationRepository {
     conversationId: string;
     userId: string;
   }): Promise<void> {
-    await this.db
-      .insert(conversationParticipants)
+    await this.db.manager
+      .createQueryBuilder()
+      .insert()
+      .into(conversationParticipants)
       .values({
         id: newId(),
         organizationId: input.organizationId,
@@ -243,10 +248,16 @@ export class ConversationRepository {
         participantId: input.userId,
         role: 'member',
         joinedAt: new Date(),
+        // `left_at` entra explicitamente como nulo para que o
+        // `ON DUPLICATE KEY UPDATE left_at = VALUES(left_at)` abaixo tenha o que
+        // reescrever: quem já saiu da conversa e volta a escrever nela volta a
+        // constar como participante.
+        leftAt: null,
       })
       // O unique natural `(conversation_id, participant_type, participant_id)`
       // resolve a corrida: duas escritas simultâneas do mesmo usuário não criam
       // duas linhas, e a segunda não precisa falhar.
-      .onDuplicateKeyUpdate({ set: { leftAt: sql`null` } });
+      .orUpdate(['left_at'])
+      .execute();
   }
 }

@@ -9,7 +9,6 @@
 import type { Database } from '@prometheon/database';
 import type { Permission, Role } from '@prometheon/permissions';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { Pool } from 'mysql2/promise';
 
 import type { AppConfig } from '../config/index.js';
 import type { MailService } from '../mail/types.js';
@@ -64,7 +63,6 @@ declare module 'fastify' {
   interface FastifyInstance {
     readonly appConfig: AppConfig;
     readonly db: Database;
-    readonly pool: Pool;
     readonly redis: RedisClient;
     readonly mailer: MailService;
     /** Exige uma credencial válida; popula `request.auth`. */

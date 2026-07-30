@@ -15,10 +15,14 @@
 //
 // Se a sequência passar do teto configurado, o processo sai assim mesmo — um
 // encerramento que nunca termina é tão ruim quanto um abrupto.
+//
+// A montagem é assíncrona por causa do banco: `createDatabase()` já inicializa
+// o `DataSource`, e é nesse instante que credencial errada ou banco inexistente
+// falha. Descobrir isso ao compor o runtime é melhor que descobrir no primeiro
+// job — ou, pior, no primeiro evento do outbox.
 
-import { createDatabase, type Database } from '@prometheon/database';
+import { closeDatabase, createDatabase, type Database } from '@prometheon/database';
 import { configureRootLogger, type Logger } from '@prometheon/logger';
-import type { Pool } from 'mysql2/promise';
 
 import { loadWorkerSettings, type WorkerSettings } from './config.js';
 import { HealthServer } from './health.js';
@@ -44,7 +48,7 @@ export interface CreateWorkerOptions {
   readonly settings?: WorkerSettings | undefined;
   readonly logger?: Logger | undefined;
   /** Banco já aberto; existe para o teste apontar para um banco descartável. */
-  readonly database?: { readonly db: Database; readonly pool: Pool } | undefined;
+  readonly database?: Database | undefined;
   /** Sobe só estas filas. Existe para o teste isolar uma. */
   readonly onlyQueues?: readonly QueueName[] | undefined;
   /** Substitui o processador de uma fila. Existe para o teste. */
@@ -67,7 +71,9 @@ export interface WorkerRuntime {
   shutdown(reason: string): Promise<void>;
 }
 
-export function createWorkerRuntime(options: CreateWorkerOptions = {}): WorkerRuntime {
+export async function createWorkerRuntime(
+  options: CreateWorkerOptions = {},
+): Promise<WorkerRuntime> {
   const settings = options.settings ?? loadWorkerSettings();
   const logger =
     options.logger ??
@@ -83,14 +89,14 @@ export function createWorkerRuntime(options: CreateWorkerOptions = {}): WorkerRu
 
   const database =
     options.database ??
-    createDatabase({
+    (await createDatabase({
       host: settings.app.database.host,
       port: settings.app.database.port,
       user: settings.app.database.user,
       password: settings.app.database.password,
       database: settings.app.database.name,
       connectionLimit: 10,
-    });
+    }));
   const ownsDatabase = options.database === undefined;
 
   // Conexão de comandos: locks, marcas de idempotência, publicação, health.
@@ -109,7 +115,7 @@ export function createWorkerRuntime(options: CreateWorkerOptions = {}): WorkerRu
   });
 
   const deps: JobDeps = {
-    db: database.db,
+    db: database,
     redis: commands,
     keys,
     metrics,
@@ -121,7 +127,7 @@ export function createWorkerRuntime(options: CreateWorkerOptions = {}): WorkerRu
   const abort = new AbortController();
 
   const publisher = new OutboxPublisher({
-    db: database.db,
+    db: database,
     locker: new RedisLocker(commands),
     keys,
     logger: logger.child({ module: 'outbox' }),
@@ -160,7 +166,7 @@ export function createWorkerRuntime(options: CreateWorkerOptions = {}): WorkerRu
 
   const health = new HealthServer({
     settings: settings.health,
-    db: database.db,
+    db: database,
     redis: commands,
     metrics,
     logger: logger.child({ module: 'health' }),
@@ -234,7 +240,7 @@ export function createWorkerRuntime(options: CreateWorkerOptions = {}): WorkerRu
           await closeQueues(queues);
           await closeRedis(commands);
           if (ownsDatabase) {
-            await database.pool.end();
+            await closeDatabase(database);
           }
         })();
 

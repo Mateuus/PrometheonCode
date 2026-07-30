@@ -15,7 +15,7 @@ import { createWorkerRuntime } from './worker.js';
 const SHUTDOWN_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGQUIT'] as const;
 
 async function main(): Promise<void> {
-  const runtime = createWorkerRuntime();
+  const runtime = await createWorkerRuntime();
 
   let exiting = false;
   const stop = (reason: string, code: number): void => {

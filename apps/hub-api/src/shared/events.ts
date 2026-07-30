@@ -6,11 +6,15 @@
  * recebem o executor da transação, nunca abrem conexão própria:
  *
  * ```ts
- * await db.transaction(async (tx) => {
- *   await tx.insert(messages).values(…);
+ * await runInTransaction(db, async (tx) => {
+ *   await tx.insert(messages, { … });
  *   await recordMessageCreated(tx, { … });
  * });
  * ```
+ *
+ * `TransactionExecutor` não é o `EntityManager` do TypeORM: é uma marca que só
+ * `runInTransaction()` sabe produzir. Passar o gerenciador global aqui não
+ * compila — que é como a regra deixa de depender de disciplina.
  *
  * Se a transação falhar, a mudança e o evento somem juntos. Se ela passar, o
  * worker publica — não existe estado gravado sem evento, que é o defeito que o
@@ -22,7 +26,7 @@
  * cliente busca o estado completo pelo REST.
  */
 
-import { enqueueOutboxMessage, type Database } from '@prometheon/database';
+import { enqueueOutboxMessage, type TransactionExecutor } from '@prometheon/database';
 import type {
   MessageAuthorType,
   MessageStatus,
@@ -30,8 +34,8 @@ import type {
   TaskStatus,
 } from '@prometheon/contracts';
 
-/** Executor com `insert`: o banco ou a transação aberta por quem chama. */
-export type OutboxExecutor = Pick<Database, 'insert'>;
+/** Executor de uma transação em curso. Ver o cabeçalho deste arquivo. */
+export type OutboxExecutor = TransactionExecutor;
 
 export interface EventActor {
   readonly type: 'user' | 'agent' | 'system' | 'device';

@@ -13,7 +13,6 @@
  */
 
 import type { Database } from '@prometheon/database';
-import type { Pool } from 'mysql2/promise';
 
 import type { MailService } from '../../mail/types.js';
 import type { RedisClient } from '../../plugins/redis.js';
@@ -63,7 +62,6 @@ function truncate(value: string): string {
 
 export interface HealthDeps {
   readonly db: Database;
-  readonly pool: Pool;
   readonly redis: RedisClient;
   readonly mailer: MailService;
 }
@@ -71,7 +69,7 @@ export interface HealthDeps {
 export async function checkReadiness(deps: HealthDeps): Promise<ReadinessReport> {
   const checks = await Promise.all([
     check('mysql', async () => {
-      await withTimeout(deps.pool.query('SELECT 1'), 'mysql');
+      await withTimeout(deps.db.query('SELECT 1'), 'mysql');
 
       return null;
     }),

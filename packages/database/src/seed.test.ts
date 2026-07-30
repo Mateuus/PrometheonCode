@@ -4,10 +4,9 @@
 // confere que a segunda execução não criou nem duplicou nada. Sem MySQL, a
 // suíte inteira é pulada com o motivo no console.
 
-import { count, eq, isNull } from 'drizzle-orm';
+import { IsNull } from 'typeorm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { SYSTEM_ROLES } from './permissions.js';
 import {
   organizationMembers,
   organizations,
@@ -15,7 +14,8 @@ import {
   rolePermissions,
   roles,
   users,
-} from './schema/index.js';
+} from './entities/index.js';
+import { SYSTEM_ROLES } from './permissions.js';
 import { seedDatabase } from './seed.js';
 import { createDisposableDatabase, probeDatabase, type DisposableDatabase } from './test-support.js';
 
@@ -58,41 +58,37 @@ describe.skipIf(!probe.reachable)('seedDatabase', () => {
   });
 
   it('deixa exatamente os seis papéis do sistema com as permissões do Docs/09', async () => {
-    const systemRoles = await temporary.db.select().from(roles).where(isNull(roles.organizationId));
+    const systemRoles = await temporary.db.manager.find(roles, {
+      where: { organizationId: IsNull() },
+    });
     expect(systemRoles).toHaveLength(SYSTEM_ROLES.length);
 
     for (const definition of SYSTEM_ROLES) {
       const role = systemRoles.find((candidate) => candidate.slug === definition.slug);
       expect(role, `papel ${definition.slug} ausente`).toBeDefined();
-      const granted = await temporary.db
-        .select({ permission: rolePermissions.permission })
-        .from(rolePermissions)
-        .where(eq(rolePermissions.roleId, role!.id));
+      const granted = await temporary.db.manager.find(rolePermissions, {
+        where: { roleId: role!.id },
+      });
       expect(granted.map((row) => row.permission).sort()).toEqual([...definition.permissions].sort());
     }
   });
 
   it('vincula o owner à organização de exemplo', async () => {
-    const [organization] = await temporary.db
-      .select()
-      .from(organizations)
-      .where(eq(organizations.slug, 'prometheon-demo'))
-      .limit(1);
+    const organization = await temporary.db.manager.findOne(organizations, {
+      where: { slug: 'prometheon-demo' },
+    });
     expect(organization).toBeDefined();
 
-    const members = await temporary.db
-      .select()
-      .from(organizationMembers)
-      .where(eq(organizationMembers.organizationId, organization!.id));
+    const members = await temporary.db.manager.find(organizationMembers, {
+      where: { organizationId: organization!.id },
+    });
     expect(members).toHaveLength(1);
     expect(members[0]?.userId).toBe(organization!.ownerUserId);
 
     // O seed nunca grava senha: quem define é o fluxo de registro da API.
-    const [owner] = await temporary.db
-      .select()
-      .from(users)
-      .where(eq(users.id, organization!.ownerUserId!))
-      .limit(1);
+    const owner = await temporary.db.manager.findOne(users, {
+      where: { id: organization!.ownerUserId! },
+    });
     expect(owner?.passwordHash ?? null).toBeNull();
   });
 });
@@ -110,8 +106,7 @@ async function snapshot(temporary: DisposableDatabase): Promise<Record<string, n
 
   const result: Record<string, number> = {};
   for (const [name, table] of Object.entries(tables)) {
-    const [row] = await temporary.db.select({ value: count() }).from(table);
-    result[name] = row?.value ?? 0;
+    result[name] = await temporary.db.manager.count(table);
   }
   return result;
 }

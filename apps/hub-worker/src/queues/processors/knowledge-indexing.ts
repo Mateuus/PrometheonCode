@@ -19,8 +19,6 @@
 // 3. a marcação de "indexado em" — o schema ainda não tem coluna para isso, e
 //    inventá-la aqui seria mudar `packages/database` por um efeito colateral.
 
-import { and, eq } from 'drizzle-orm';
-
 import { knowledgeItems } from '@prometheon/database';
 
 import { PermanentJobError } from '../../errors.js';
@@ -32,23 +30,22 @@ export const knowledgeIndexingHandler: JobHandler<typeof knowledgeIndexingJobSch
   schema: knowledgeIndexingJobSchema,
   idempotencyKey: (data) => `${data.knowledgeItemId}:${data.reason}`,
   async run({ data, deps, logger }) {
-    const [item] = await deps.db
-      .select({
-        id: knowledgeItems.id,
-        projectId: knowledgeItems.projectId,
-        status: knowledgeItems.status,
-        currentVersionId: knowledgeItems.currentVersionId,
-        path: knowledgeItems.path,
-        deletedAt: knowledgeItems.deletedAt,
+    const item = await deps.db.manager
+      .createQueryBuilder(knowledgeItems, 'item')
+      .select([
+        'item.id',
+        'item.projectId',
+        'item.status',
+        'item.currentVersionId',
+        'item.path',
+        'item.deletedAt',
+      ])
+      .where('item.id = :knowledgeItemId', { knowledgeItemId: data.knowledgeItemId })
+      .andWhere('item.organizationId = :organizationId', {
+        organizationId: data.organizationId,
       })
-      .from(knowledgeItems)
-      .where(
-        and(
-          eq(knowledgeItems.id, data.knowledgeItemId),
-          eq(knowledgeItems.organizationId, data.organizationId),
-        ),
-      )
-      .limit(1);
+      .limit(1)
+      .getOne();
 
     if (data.reason === 'deleted') {
       logger.info(
@@ -64,7 +61,7 @@ export const knowledgeIndexingHandler: JobHandler<typeof knowledgeIndexingJobSch
       };
     }
 
-    if (item === undefined) {
+    if (item === null) {
       throw new PermanentJobError('Item de conhecimento inexistente.', {
         code: 'KNOWLEDGE_ITEM_NOT_FOUND',
         details: { knowledgeItemId: data.knowledgeItemId },

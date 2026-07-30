@@ -18,10 +18,14 @@ import {
   securityEvents,
   users,
   type Database,
+  type DataExportJob as DataExportJobEntity,
+  type DeletionJob as DeletionJobEntity,
+  type SecurityEvent as SecurityEventEntity,
 } from '@prometheon/database';
-import { and, desc, eq, gte, isNull, lt, lte, or, type SQL } from 'drizzle-orm';
+import type { SelectQueryBuilder } from 'typeorm';
 
 import { decodeCursor } from '../../shared/cursor.js';
+import { applyKeyset } from '../../shared/query.js';
 
 export interface AuditRow {
   id: string;
@@ -54,7 +58,7 @@ export interface AuditFilter {
   readonly to?: string | undefined;
 }
 
-export type SecurityEventRow = typeof securityEvents.$inferSelect;
+export type SecurityEventRow = SecurityEventEntity;
 
 export interface SecurityEventFilter {
   readonly organizationId: string;
@@ -66,6 +70,26 @@ export interface SecurityEventFilter {
   readonly unresolved?: boolean | undefined;
 }
 
+/** Colunas da auditoria, com o alias que o contrato espera. */
+const AUDIT_COLUMNS: readonly (readonly [string, string])[] = [
+  ['log.id', 'id'],
+  ['log.organizationId', 'organizationId'],
+  ['log.actorType', 'actorType'],
+  ['log.actorId', 'actorId'],
+  ['log.action', 'action'],
+  ['log.resourceType', 'resourceType'],
+  ['log.resourceId', 'resourceId'],
+  ['log.projectId', 'projectId'],
+  ['log.ip', 'ip'],
+  ['log.userAgent', 'userAgent'],
+  ['log.requestId', 'requestId'],
+  ['log.metadata', 'metadata'],
+  ['log.createdAt', 'createdAt'],
+  ['actor.displayName', 'actorName'],
+  ['actor.email', 'actorEmail'],
+  ['actor.avatarUrl', 'actorAvatarUrl'],
+];
+
 /**
  * Colunas dos pedidos de exportação.
  *
@@ -73,41 +97,41 @@ export interface SecurityEventFilter {
  * devolvê-lo transformaria a listagem em um mapa do disco do servidor. O link
  * de download é assinado à parte, quando existir.
  */
-const exportColumns = {
-  id: dataExportJobs.id,
-  organizationId: dataExportJobs.organizationId,
-  requestedByUserId: dataExportJobs.requestedByUserId,
-  scope: dataExportJobs.scope,
-  scopeId: dataExportJobs.scopeId,
-  format: dataExportJobs.format,
-  status: dataExportJobs.status,
-  sizeBytes: dataExportJobs.sizeBytes,
-  downloadExpiresAt: dataExportJobs.downloadExpiresAt,
-  errorMessage: dataExportJobs.errorMessage,
-  completedAt: dataExportJobs.completedAt,
-  createdAt: dataExportJobs.createdAt,
-  requesterName: users.displayName,
-  requesterEmail: users.email,
-  requesterAvatarUrl: users.avatarUrl,
-} as const;
+const EXPORT_COLUMNS: readonly (readonly [string, string])[] = [
+  ['job.id', 'id'],
+  ['job.organizationId', 'organizationId'],
+  ['job.requestedByUserId', 'requestedByUserId'],
+  ['job.scope', 'scope'],
+  ['job.scopeId', 'scopeId'],
+  ['job.format', 'format'],
+  ['job.status', 'status'],
+  ['job.sizeBytes', 'sizeBytes'],
+  ['job.downloadExpiresAt', 'downloadExpiresAt'],
+  ['job.errorMessage', 'errorMessage'],
+  ['job.completedAt', 'completedAt'],
+  ['job.createdAt', 'createdAt'],
+  ['requester.displayName', 'requesterName'],
+  ['requester.email', 'requesterEmail'],
+  ['requester.avatarUrl', 'requesterAvatarUrl'],
+];
 
-const deletionColumns = {
-  id: deletionJobs.id,
-  organizationId: deletionJobs.organizationId,
-  requestedByUserId: deletionJobs.requestedByUserId,
-  targetType: deletionJobs.targetType,
-  targetId: deletionJobs.targetId,
-  status: deletionJobs.status,
-  scheduledFor: deletionJobs.scheduledFor,
-  reason: deletionJobs.reason,
-  errorMessage: deletionJobs.errorMessage,
-  completedAt: deletionJobs.completedAt,
-  cancelledAt: deletionJobs.cancelledAt,
-  createdAt: deletionJobs.createdAt,
-  requesterName: users.displayName,
-  requesterEmail: users.email,
-  requesterAvatarUrl: users.avatarUrl,
-} as const;
+const DELETION_COLUMNS: readonly (readonly [string, string])[] = [
+  ['job.id', 'id'],
+  ['job.organizationId', 'organizationId'],
+  ['job.requestedByUserId', 'requestedByUserId'],
+  ['job.targetType', 'targetType'],
+  ['job.targetId', 'targetId'],
+  ['job.status', 'status'],
+  ['job.scheduledFor', 'scheduledFor'],
+  ['job.reason', 'reason'],
+  ['job.errorMessage', 'errorMessage'],
+  ['job.completedAt', 'completedAt'],
+  ['job.cancelledAt', 'cancelledAt'],
+  ['job.createdAt', 'createdAt'],
+  ['requester.displayName', 'requesterName'],
+  ['requester.email', 'requesterEmail'],
+  ['requester.avatarUrl', 'requesterAvatarUrl'],
+];
 
 export interface ExportJobRow {
   id: string;
@@ -126,6 +150,15 @@ export interface ExportJobRow {
   requesterEmail: string | null;
   requesterAvatarUrl: string | null;
 }
+
+/**
+ * A linha de exportação como o driver a entrega.
+ *
+ * `size_bytes` é `bigint`, e a leitura é crua — colunas de duas tabelas. Consulta
+ * crua não passa pelo conversor declarado na coluna, que é quem garante número
+ * em vez de texto, então o tipo admite os dois até a normalização.
+ */
+type RawExportJobRow = Omit<ExportJobRow, 'sizeBytes'> & { sizeBytes: number | string | null };
 
 export interface DeletionJobRow {
   id: string;
@@ -154,78 +187,57 @@ export class AuditRepository {
     cursor: string | undefined,
   ): Promise<AuditRow[]> {
     const after = cursor === undefined ? undefined : decodeCursor(cursor);
-    const conditions: (SQL | undefined)[] = [
-      eq(auditLogs.organizationId, filter.organizationId),
-    ];
+    const query = this.db.manager
+      .createQueryBuilder(auditLogs, 'log')
+      .select([])
+      // `leftJoin`: o ator pode ter sido excluído, e a linha de auditoria
+      // precisa sobreviver a isso (`Docs/07`).
+      .leftJoin(users.options.name, 'actor', 'actor.id = log.actorId')
+      .where('log.organizationId = :organizationId', { organizationId: filter.organizationId });
 
     if (filter.actorType !== undefined) {
-      conditions.push(eq(auditLogs.actorType, filter.actorType));
+      query.andWhere('log.actorType = :actorType', { actorType: filter.actorType });
     }
 
     if (filter.actorUserId !== undefined) {
-      conditions.push(eq(auditLogs.actorId, filter.actorUserId));
+      query.andWhere('log.actorId = :actorUserId', { actorUserId: filter.actorUserId });
     }
 
     if (filter.resourceType !== undefined) {
-      conditions.push(eq(auditLogs.resourceType, filter.resourceType));
+      query.andWhere('log.resourceType = :resourceType', { resourceType: filter.resourceType });
     }
 
     if (filter.resourceId !== undefined) {
-      conditions.push(eq(auditLogs.resourceId, filter.resourceId));
+      query.andWhere('log.resourceId = :resourceId', { resourceId: filter.resourceId });
     }
 
     if (filter.projectId !== undefined) {
-      conditions.push(eq(auditLogs.projectId, filter.projectId));
+      query.andWhere('log.projectId = :projectId', { projectId: filter.projectId });
     }
 
     if (filter.action !== undefined) {
-      conditions.push(eq(auditLogs.action, filter.action));
+      query.andWhere('log.action = :action', { action: filter.action });
     }
 
     if (filter.from !== undefined) {
-      conditions.push(gte(auditLogs.createdAt, new Date(filter.from)));
+      query.andWhere('log.createdAt >= :from', { from: new Date(filter.from) });
     }
 
     if (filter.to !== undefined) {
-      conditions.push(lte(auditLogs.createdAt, new Date(filter.to)));
+      query.andWhere('log.createdAt <= :to', { to: new Date(filter.to) });
     }
 
-    if (after !== undefined) {
-      const at = new Date(after.at);
+    applyKeyset(query, 'log', { createdAt: 'createdAt', id: 'id' }, after);
 
-      conditions.push(
-        or(lt(auditLogs.createdAt, at), and(eq(auditLogs.createdAt, at), lt(auditLogs.id, after.id))),
-      );
+    for (const [column, alias] of AUDIT_COLUMNS) {
+      query.addSelect(column, alias);
     }
 
-    const rows = await this.db
-      .select({
-        id: auditLogs.id,
-        organizationId: auditLogs.organizationId,
-        actorType: auditLogs.actorType,
-        actorId: auditLogs.actorId,
-        action: auditLogs.action,
-        resourceType: auditLogs.resourceType,
-        resourceId: auditLogs.resourceId,
-        projectId: auditLogs.projectId,
-        ip: auditLogs.ip,
-        userAgent: auditLogs.userAgent,
-        requestId: auditLogs.requestId,
-        metadata: auditLogs.metadata,
-        createdAt: auditLogs.createdAt,
-        actorName: users.displayName,
-        actorEmail: users.email,
-        actorAvatarUrl: users.avatarUrl,
-      })
-      .from(auditLogs)
-      // `leftJoin`: o ator pode ter sido excluído, e a linha de auditoria
-      // precisa sobreviver a isso (`Docs/07`).
-      .leftJoin(users, eq(users.id, auditLogs.actorId))
-      .where(and(...conditions))
-      .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
-      .limit(limit + 1);
-
-    return rows;
+    return query
+      .orderBy('log.createdAt', 'DESC')
+      .addOrderBy('log.id', 'DESC')
+      .limit(limit + 1)
+      .getRawMany<AuditRow>();
   }
 
   // -------------------------------------------------------------------------
@@ -238,51 +250,43 @@ export class AuditRepository {
     cursor: string | undefined,
   ): Promise<SecurityEventRow[]> {
     const after = cursor === undefined ? undefined : decodeCursor(cursor);
-    const conditions: (SQL | undefined)[] = [
-      eq(securityEvents.organizationId, filter.organizationId),
-    ];
+    const query = this.db.manager
+      .createQueryBuilder(securityEvents, 'event')
+      .where('event.organizationId = :organizationId', {
+        organizationId: filter.organizationId,
+      });
 
     if (filter.type !== undefined) {
-      conditions.push(eq(securityEvents.type, filter.type));
+      query.andWhere('event.type = :type', { type: filter.type });
     }
 
     if (filter.severity !== undefined) {
-      conditions.push(eq(securityEvents.severity, filter.severity));
+      query.andWhere('event.severity = :severity', { severity: filter.severity });
     }
 
     if (filter.userId !== undefined) {
-      conditions.push(eq(securityEvents.userId, filter.userId));
+      query.andWhere('event.userId = :userId', { userId: filter.userId });
     }
 
     if (filter.from !== undefined) {
-      conditions.push(gte(securityEvents.createdAt, new Date(filter.from)));
+      query.andWhere('event.createdAt >= :from', { from: new Date(filter.from) });
     }
 
     if (filter.to !== undefined) {
-      conditions.push(lte(securityEvents.createdAt, new Date(filter.to)));
+      query.andWhere('event.createdAt <= :to', { to: new Date(filter.to) });
     }
 
     if (filter.unresolved === true) {
-      conditions.push(isNull(securityEvents.resolvedAt));
+      query.andWhere('event.resolvedAt IS NULL');
     }
 
-    if (after !== undefined) {
-      const at = new Date(after.at);
+    applyKeyset(query, 'event', { createdAt: 'createdAt', id: 'id' }, after);
 
-      conditions.push(
-        or(
-          lt(securityEvents.createdAt, at),
-          and(eq(securityEvents.createdAt, at), lt(securityEvents.id, after.id)),
-        ),
-      );
-    }
-
-    return this.db
-      .select()
-      .from(securityEvents)
-      .where(and(...conditions))
-      .orderBy(desc(securityEvents.createdAt), desc(securityEvents.id))
-      .limit(limit + 1);
+    return query
+      .orderBy('event.createdAt', 'DESC')
+      .addOrderBy('event.id', 'DESC')
+      .limit(limit + 1)
+      .getMany();
   }
 
   // -------------------------------------------------------------------------
@@ -298,7 +302,7 @@ export class AuditRepository {
   }): Promise<string> {
     const id = newId();
 
-    await this.db.insert(dataExportJobs).values({
+    await this.db.manager.insert(dataExportJobs, {
       id,
       organizationId: input.organizationId,
       requestedByUserId: input.requestedByUserId,
@@ -318,51 +322,38 @@ export class AuditRepository {
     cursor: string | undefined,
   ): Promise<ExportJobRow[]> {
     const after = cursor === undefined ? undefined : decodeCursor(cursor);
-    const conditions: (SQL | undefined)[] = [eq(dataExportJobs.organizationId, organizationId)];
+    const query = this.exportQuery().where('job.organizationId = :organizationId', {
+      organizationId,
+    });
 
     if (status !== undefined) {
-      conditions.push(
-        eq(dataExportJobs.status, status as typeof dataExportJobs.$inferSelect.status),
-      );
+      query.andWhere('job.status = :status', { status });
     }
 
-    if (after !== undefined) {
-      const at = new Date(after.at);
+    applyKeyset(query, 'job', { createdAt: 'createdAt', id: 'id' }, after);
 
-      conditions.push(
-        or(
-          lt(dataExportJobs.createdAt, at),
-          and(eq(dataExportJobs.createdAt, at), lt(dataExportJobs.id, after.id)),
-        ),
-      );
-    }
+    const rows = await query
+      .orderBy('job.createdAt', 'DESC')
+      .addOrderBy('job.id', 'DESC')
+      .limit(limit + 1)
+      .getRawMany<RawExportJobRow>();
 
-    return this.db
-      .select(exportColumns)
-      .from(dataExportJobs)
-      .leftJoin(users, eq(users.id, dataExportJobs.requestedByUserId))
-      .where(and(...conditions))
-      .orderBy(desc(dataExportJobs.createdAt), desc(dataExportJobs.id))
-      .limit(limit + 1);
+    return rows.map(normalizeExportRow);
   }
 
   async findExportJob(
     organizationId: string,
     exportJobId: string,
   ): Promise<ExportJobRow | undefined> {
-    const [row] = await this.db
-      .select(exportColumns)
-      .from(dataExportJobs)
-      .leftJoin(users, eq(users.id, dataExportJobs.requestedByUserId))
-      .where(
-        and(
-          eq(dataExportJobs.id, exportJobId),
-          eq(dataExportJobs.organizationId, organizationId),
-        ),
-      )
-      .limit(1);
+    const rows = await this.exportQuery()
+      .where('job.id = :exportJobId', { exportJobId })
+      .andWhere('job.organizationId = :organizationId', { organizationId })
+      .limit(1)
+      .getRawMany<RawExportJobRow>();
 
-    return row;
+    const row = rows[0];
+
+    return row === undefined ? undefined : normalizeExportRow(row);
   }
 
   // -------------------------------------------------------------------------
@@ -379,7 +370,7 @@ export class AuditRepository {
   }): Promise<string> {
     const id = newId();
 
-    await this.db.insert(deletionJobs).values({
+    await this.db.manager.insert(deletionJobs, {
       id,
       organizationId: input.organizationId,
       requestedByUserId: input.requestedByUserId,
@@ -400,45 +391,75 @@ export class AuditRepository {
     cursor: string | undefined,
   ): Promise<DeletionJobRow[]> {
     const after = cursor === undefined ? undefined : decodeCursor(cursor);
-    const conditions: (SQL | undefined)[] = [eq(deletionJobs.organizationId, organizationId)];
+    const query = this.deletionQuery().where('job.organizationId = :organizationId', {
+      organizationId,
+    });
 
     if (status !== undefined) {
-      conditions.push(eq(deletionJobs.status, status as typeof deletionJobs.$inferSelect.status));
+      query.andWhere('job.status = :status', { status });
     }
 
-    if (after !== undefined) {
-      const at = new Date(after.at);
+    applyKeyset(query, 'job', { createdAt: 'createdAt', id: 'id' }, after);
 
-      conditions.push(
-        or(
-          lt(deletionJobs.createdAt, at),
-          and(eq(deletionJobs.createdAt, at), lt(deletionJobs.id, after.id)),
-        ),
-      );
-    }
-
-    return this.db
-      .select(deletionColumns)
-      .from(deletionJobs)
-      .leftJoin(users, eq(users.id, deletionJobs.requestedByUserId))
-      .where(and(...conditions))
-      .orderBy(desc(deletionJobs.createdAt), desc(deletionJobs.id))
-      .limit(limit + 1);
+    return query
+      .orderBy('job.createdAt', 'DESC')
+      .addOrderBy('job.id', 'DESC')
+      .limit(limit + 1)
+      .getRawMany<DeletionJobRow>();
   }
 
   async findDeletionJob(
     organizationId: string,
     deletionJobId: string,
   ): Promise<DeletionJobRow | undefined> {
-    const [row] = await this.db
-      .select(deletionColumns)
-      .from(deletionJobs)
-      .leftJoin(users, eq(users.id, deletionJobs.requestedByUserId))
-      .where(
-        and(eq(deletionJobs.id, deletionJobId), eq(deletionJobs.organizationId, organizationId)),
-      )
-      .limit(1);
+    const rows = await this.deletionQuery()
+      .where('job.id = :deletionJobId', { deletionJobId })
+      .andWhere('job.organizationId = :organizationId', { organizationId })
+      .limit(1)
+      .getRawMany<DeletionJobRow>();
 
-    return row;
+    return rows[0];
   }
+
+  /** Base das leituras de exportação: pedido + quem pediu. */
+  private exportQuery(): SelectQueryBuilder<DataExportJobEntity> {
+    return withColumns(
+      this.db.manager
+        .createQueryBuilder(dataExportJobs, 'job')
+        .select([])
+        .leftJoin(users.options.name, 'requester', 'requester.id = job.requestedByUserId'),
+      EXPORT_COLUMNS,
+    );
+  }
+
+  /** Base das leituras de exclusão: pedido + quem pediu. */
+  private deletionQuery(): SelectQueryBuilder<DeletionJobEntity> {
+    return withColumns(
+      this.db.manager
+        .createQueryBuilder(deletionJobs, 'job')
+        .select([])
+        .leftJoin(users.options.name, 'requester', 'requester.id = job.requestedByUserId'),
+      DELETION_COLUMNS,
+    );
+  }
+}
+
+/** Acrescenta a lista de colunas com os alias que o contrato espera. */
+function withColumns<T extends object>(
+  query: SelectQueryBuilder<T>,
+  columns: readonly (readonly [string, string])[],
+): SelectQueryBuilder<T> {
+  for (const [column, alias] of columns) {
+    query.addSelect(column, alias);
+  }
+
+  return query;
+}
+
+/** Converte `size_bytes` para número, que é o que o contrato promete. */
+function normalizeExportRow(row: RawExportJobRow): ExportJobRow {
+  return {
+    ...row,
+    sizeBytes: row.sizeBytes === null ? null : Number(row.sizeBytes),
+  };
 }

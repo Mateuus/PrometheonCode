@@ -24,23 +24,16 @@
 // A exclusão é sempre em lotes com `LIMIT`: um `DELETE` de milhões de linhas
 // segura lock, enche o binlog e trava a replicação. Cada tabela tem teto por
 // execução; o que sobrar fica para a próxima volta.
-
-import { and, eq, isNotNull, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
+//
+// É por causa desse `LIMIT` que os alvos são SQL cru: o `DeleteQueryBuilder` do
+// TypeORM não tem `limit()`, e `manager.delete()` apaga tudo que casa com o
+// filtro de uma vez — exatamente o `DELETE` gigante que este arquivo evita.
+// Cada alvo declara a tabela física, a condição com placeholders `?` e os
+// parâmetros; nada aqui é interpolado a partir de entrada de usuário.
 
 import {
-  agentRunEvents,
-  auditLogs,
-  conversations,
-  deviceTokens,
-  knowledgeItems,
-  messages,
   organizations,
-  outboxMessages,
   plans,
-  refreshTokens,
-  securityEvents,
-  userSessions,
-  webhookDeliveries,
   type Database,
 } from '@prometheon/database';
 
@@ -68,9 +61,9 @@ export interface RetentionReport {
 
 interface RetentionTarget {
   readonly table: string;
-  /** Referência à tabela, interpolada com crase pelo Drizzle. */
-  readonly relation: unknown;
-  readonly where: SQL;
+  /** Condição do `WHERE`, com placeholders `?` na ordem de `params`. */
+  readonly where: string;
+  readonly params: readonly unknown[];
 }
 
 /** Política efetiva: a da organização vence a do plano. */
@@ -83,15 +76,23 @@ async function readOrganizationPolicies(
   db: Database,
   organizationId: string | undefined,
 ): Promise<OrganizationRetention[]> {
-  const rows = await db
-    .select({
-      id: organizations.id,
-      // O driver pode devolver `int` como número ou como string.
-      retentionDays: sql<number | string>`coalesce(${organizations.retentionDays}, ${plans.retentionDays})`,
-    })
-    .from(organizations)
-    .innerJoin(plans, eq(organizations.planId, plans.id))
-    .where(organizationId === undefined ? undefined : eq(organizations.id, organizationId));
+  const query = db.manager
+    .createQueryBuilder(organizations, 'organization')
+    .select('organization.id', 'id')
+    // Colunas de duas tabelas na mesma linha: leitura crua com aliases, não
+    // hidratação de entidade.
+    .addSelect(
+      'coalesce(organization.retentionDays, plan.retentionDays)',
+      'retentionDays',
+    )
+    .innerJoin(plans.options.name, 'plan', 'plan.id = organization.planId');
+
+  if (organizationId !== undefined) {
+    query.where('organization.id = :organizationId', { organizationId });
+  }
+
+  // O driver pode devolver `int` como número ou como string.
+  const rows = await query.getRawMany<{ id: string; retentionDays: number | string }>();
 
   return rows
     .map((row) => ({ id: row.id, retentionDays: Number(row.retentionDays) }))
@@ -103,77 +104,48 @@ function organizationTargets(organizationId: string, cutoff: Date): RetentionTar
   return [
     {
       table: 'audit_logs',
-      relation: auditLogs,
-      where: and(
-        eq(auditLogs.organizationId, organizationId),
-        lt(auditLogs.createdAt, cutoff),
-      )!,
+      where: 'organization_id = ? and created_at < ?',
+      params: [organizationId, cutoff],
     },
     {
       table: 'security_events',
-      relation: securityEvents,
       // Incidente ainda aberto e grave permanece, mesmo vencido.
-      where: and(
-        eq(securityEvents.organizationId, organizationId),
-        lt(securityEvents.createdAt, cutoff),
-        or(
-          isNotNull(securityEvents.resolvedAt),
-          sql`${securityEvents.severity} in ('low', 'medium')`,
-        ),
-      )!,
+      where:
+        'organization_id = ? and created_at < ? ' +
+        "and (resolved_at is not null or severity in ('low', 'medium'))",
+      params: [organizationId, cutoff],
     },
     {
       table: 'agent_run_events',
-      relation: agentRunEvents,
-      where: and(
-        eq(agentRunEvents.organizationId, organizationId),
-        lt(agentRunEvents.createdAt, cutoff),
-      )!,
+      where: 'organization_id = ? and created_at < ?',
+      params: [organizationId, cutoff],
     },
     {
       table: 'webhook_deliveries',
-      relation: webhookDeliveries,
-      where: and(
-        eq(webhookDeliveries.organizationId, organizationId),
-        lt(webhookDeliveries.createdAt, cutoff),
-        sql`${webhookDeliveries.status} in ('processed', 'skipped', 'failed')`,
-      )!,
+      where:
+        'organization_id = ? and created_at < ? ' +
+        "and status in ('processed', 'skipped', 'failed')",
+      params: [organizationId, cutoff],
     },
     {
       table: 'outbox_messages',
-      relation: outboxMessages,
-      where: and(
-        eq(outboxMessages.organizationId, organizationId),
-        isNotNull(outboxMessages.publishedAt),
-        lt(outboxMessages.publishedAt, cutoff),
-      )!,
+      where: 'organization_id = ? and published_at is not null and published_at < ?',
+      params: [organizationId, cutoff],
     },
     {
       table: 'messages',
-      relation: messages,
-      where: and(
-        eq(messages.organizationId, organizationId),
-        isNotNull(messages.deletedAt),
-        lt(messages.deletedAt, cutoff),
-      )!,
+      where: 'organization_id = ? and deleted_at is not null and deleted_at < ?',
+      params: [organizationId, cutoff],
     },
     {
       table: 'conversations',
-      relation: conversations,
-      where: and(
-        eq(conversations.organizationId, organizationId),
-        isNotNull(conversations.deletedAt),
-        lt(conversations.deletedAt, cutoff),
-      )!,
+      where: 'organization_id = ? and deleted_at is not null and deleted_at < ?',
+      params: [organizationId, cutoff],
     },
     {
       table: 'knowledge_items',
-      relation: knowledgeItems,
-      where: and(
-        eq(knowledgeItems.organizationId, organizationId),
-        isNotNull(knowledgeItems.deletedAt),
-        lt(knowledgeItems.deletedAt, cutoff),
-      )!,
+      where: 'organization_id = ? and deleted_at is not null and deleted_at < ?',
+      params: [organizationId, cutoff],
     },
   ];
 }
@@ -186,22 +158,19 @@ function globalTargets(cutoff: Date): RetentionTarget[] {
   return [
     {
       table: 'refresh_tokens',
-      relation: refreshTokens,
-      where: lt(refreshTokens.expiresAt, cutoff),
+      where: 'expires_at < ?',
+      params: [cutoff],
     },
     {
       table: 'user_sessions',
-      relation: userSessions,
-      where: lt(userSessions.expiresAt, cutoff),
+      where: 'expires_at < ?',
+      params: [cutoff],
     },
     {
       table: 'device_tokens',
-      relation: deviceTokens,
-      where: and(
-        lt(deviceTokens.expiresAt, cutoff),
-        // Credencial de dispositivo ainda em uso não vence junto com o código.
-        or(isNull(deviceTokens.consumedAt), isNotNull(deviceTokens.revokedAt)),
-      )!,
+      // Credencial de dispositivo ainda em uso não vence junto com o código.
+      where: 'expires_at < ? and (consumed_at is null or revoked_at is not null)',
+      params: [cutoff],
     },
   ];
 }
@@ -224,10 +193,13 @@ async function deleteInBatches(
       return { deleted, truncated: true };
     }
     const limit = Math.min(batchSize, remaining);
-    const result = await db.execute(
-      sql`delete from ${target.relation} where ${target.where} limit ${sql.raw(String(limit))}`,
+    // O `LIMIT` entra por interpolação porque o MySQL não aceita placeholder
+    // nele em statement preparado; o valor é um inteiro calculado aqui, nunca
+    // texto vindo de fora.
+    const header: DeleteResultHeader | undefined = await db.query(
+      `delete from \`${target.table}\` where ${target.where} limit ${String(limit)}`,
+      [...target.params],
     );
-    const header = (result as unknown as [DeleteResultHeader | undefined])[0];
     const affected = header?.affectedRows ?? 0;
     deleted += affected;
     if (affected < limit) {
@@ -238,11 +210,11 @@ async function deleteInBatches(
 
 /** Conta o que seria apagado, sem apagar. */
 async function countMatching(db: Database, target: RetentionTarget): Promise<number> {
-  const rows = await db.execute(
-    sql`select count(*) as total from ${target.relation} where ${target.where}`,
+  const rows: { total?: unknown }[] = await db.query(
+    `select count(*) as total from \`${target.table}\` where ${target.where}`,
+    [...target.params],
   );
-  const first = (rows as unknown as [{ total?: unknown }[] | undefined])[0]?.[0];
-  return Number(first?.total ?? 0);
+  return Number(rows[0]?.total ?? 0);
 }
 
 export interface RunRetentionInput {

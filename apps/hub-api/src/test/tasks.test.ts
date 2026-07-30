@@ -10,7 +10,6 @@
  */
 
 import { newId, outboxMessages, projectMembers, tasks } from '@prometheon/database';
-import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -68,7 +67,7 @@ describe.skipIf(!probe.ok)('tarefas', () => {
     });
 
     if (inProject) {
-      await harness.app.db.insert(projectMembers).values({
+      await harness.app.db.manager.insert(projectMembers, {
         id: newId(),
         organizationId,
         projectId,
@@ -103,21 +102,18 @@ describe.skipIf(!probe.ok)('tarefas', () => {
 
   /** Envelhece a reivindicação direto no banco, para não esperar o relógio. */
   async function expireClaim(taskId: string): Promise<void> {
-    await harness.app.db
+    await harness.app.db.manager
+      .createQueryBuilder()
       .update(tasks)
       .set({ claimExpiresAt: new Date(Date.now() - 60_000) })
-      .where(eq(tasks.id, taskId));
+      .where('id = :taskId', { taskId })
+      .execute();
   }
 
   async function eventsOf(taskId: string, eventType: string): Promise<number> {
-    const rows = await harness.app.db
-      .select({ total: sql<number>`count(*)` })
-      .from(outboxMessages)
-      .where(
-        and(eq(outboxMessages.aggregateId, taskId), eq(outboxMessages.eventType, eventType)),
-      );
-
-    return Number(rows[0]?.total ?? 0);
+    return harness.app.db.manager.count(outboxMessages, {
+      where: { aggregateId: taskId, eventType },
+    });
   }
 
   beforeAll(async () => {
@@ -192,13 +188,12 @@ describe.skipIf(!probe.ok)('tarefas', () => {
 
       expect(done.statusCode, done.payload).toBe(200);
 
-      const stored = await harness.app.db
-        .select({ status: tasks.status })
-        .from(tasks)
-        .where(eq(tasks.id, dependent.id))
-        .limit(1);
+      const stored = await harness.app.db.manager.findOne(tasks, {
+        select: { status: true },
+        where: { id: dependent.id },
+      });
 
-      expect(stored[0]?.status).toBe('ready');
+      expect(stored?.status).toBe('ready');
       // A liberação também vira evento: quem escuta o WebSocket vê o trabalho
       // aparecer na fila sem precisar recarregar a lista inteira.
       expect(await eventsOf(dependent.id, 'task.updated')).toBe(1);
@@ -220,13 +215,12 @@ describe.skipIf(!probe.ok)('tarefas', () => {
 
       expect(done.statusCode, done.payload).toBe(200);
 
-      const stored = await harness.app.db
-        .select({ status: tasks.status })
-        .from(tasks)
-        .where(eq(tasks.id, dependent.id))
-        .limit(1);
+      const stored = await harness.app.db.manager.findOne(tasks, {
+        select: { status: true },
+        where: { id: dependent.id },
+      });
 
-      expect(stored[0]?.status).toBe('blocked');
+      expect(stored?.status).toBe('blocked');
     });
 
     it('recusa dependência de fora do projeto', async () => {
@@ -262,10 +256,10 @@ describe.skipIf(!probe.ok)('tarefas', () => {
       }
 
       const ids = responses.map((response) => body<TaskBody>(response).data.id);
-      const rows = await harness.app.db
-        .select({ number: tasks.number })
-        .from(tasks)
-        .where(eq(tasks.projectId, projectId));
+      const rows = await harness.app.db.manager.find(tasks, {
+        select: { number: true },
+        where: { projectId },
+      });
 
       expect(new Set(rows.map((row) => row.number)).size).toBe(rows.length);
       expect(new Set(ids).size).toBe(ids.length);
@@ -361,14 +355,13 @@ describe.skipIf(!probe.ok)('tarefas', () => {
 
       const holder = body<TaskBody>(winners[0]!).data.claim?.userId;
 
-      const stored = await harness.app.db
-        .select({ claimedByUserId: tasks.claimedByUserId, status: tasks.status })
-        .from(tasks)
-        .where(eq(tasks.id, task.id))
-        .limit(1);
+      const stored = await harness.app.db.manager.findOne(tasks, {
+        select: { claimedByUserId: true, status: true },
+        where: { id: task.id },
+      });
 
-      expect(stored[0]?.status).toBe('claimed');
-      expect(stored[0]?.claimedByUserId).toBe(holder);
+      expect(stored?.status).toBe('claimed');
+      expect(stored?.claimedByUserId).toBe(holder);
       // Um vencedor, um evento.
       expect(await eventsOf(task.id, 'task.claimed')).toBe(1);
     });
@@ -402,13 +395,12 @@ describe.skipIf(!probe.ok)('tarefas', () => {
         expect(body<{ error: { code: string } }>(loser).error.code).toBe('TASK_ALREADY_CLAIMED');
       }
 
-      const stored = await harness.app.db
-        .select({ claimedByUserId: tasks.claimedByUserId })
-        .from(tasks)
-        .where(eq(tasks.id, task.id))
-        .limit(1);
+      const stored = await harness.app.db.manager.findOne(tasks, {
+        select: { claimedByUserId: true },
+        where: { id: task.id },
+      });
 
-      expect([...holders][0]).toBe(stored[0]?.claimedByUserId);
+      expect([...holders][0]).toBe(stored?.claimedByUserId);
     });
 
     it('nega quem já perdeu a disputa, enquanto a reivindicação valer', async () => {
@@ -456,14 +448,13 @@ describe.skipIf(!probe.ok)('tarefas', () => {
 
       expect(list.statusCode, list.payload).toBe(200);
 
-      const stored = await harness.app.db
-        .select({ status: tasks.status, claimedByUserId: tasks.claimedByUserId })
-        .from(tasks)
-        .where(eq(tasks.id, task.id))
-        .limit(1);
+      const stored = await harness.app.db.manager.findOne(tasks, {
+        select: { status: true, claimedByUserId: true },
+        where: { id: task.id },
+      });
 
-      expect(stored[0]?.status).toBe('ready');
-      expect(stored[0]?.claimedByUserId).toBeNull();
+      expect(stored?.status).toBe('ready');
+      expect(stored?.claimedByUserId).toBeNull();
     });
 
     it('recusa reivindicar tarefa encerrada', async () => {
@@ -617,10 +608,10 @@ describe.skipIf(!probe.ok)('tarefas', () => {
       pages += 1;
     } while (cursor !== null && pages < 40);
 
-    const rows = await harness.app.db
-      .select({ id: tasks.id })
-      .from(tasks)
-      .where(eq(tasks.projectId, projectId));
+    const rows = await harness.app.db.manager.find(tasks, {
+      select: { id: true },
+      where: { projectId },
+    });
 
     expect(new Set(seen).size).toBe(seen.length);
     expect(seen.sort()).toEqual(rows.map((row) => row.id).sort());

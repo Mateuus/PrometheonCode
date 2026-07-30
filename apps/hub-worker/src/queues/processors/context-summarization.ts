@@ -19,8 +19,6 @@
 // 4. a redaction do que vai para o modelo — o `Docs/11` proíbe despejar prompt
 //    completo, e o resumo não pode carregar segredo do repositório.
 
-import { and, desc, eq, isNull } from 'drizzle-orm';
-
 import { conversations, messages } from '@prometheon/database';
 
 import { PermanentJobError } from '../../errors.js';
@@ -33,24 +31,23 @@ export const contextSummarizationHandler: JobHandler<typeof contextSummarization
   idempotencyKey: (data) =>
     `${data.conversationId}:${data.layer}:${data.upToMessageId ?? 'head'}`,
   async run({ data, deps, logger }) {
-    const [conversation] = await deps.db
-      .select({
-        id: conversations.id,
-        projectId: conversations.projectId,
-        status: conversations.status,
-        lastSequence: conversations.lastSequence,
-        deletedAt: conversations.deletedAt,
+    const conversation = await deps.db.manager
+      .createQueryBuilder(conversations, 'conversation')
+      .select([
+        'conversation.id',
+        'conversation.projectId',
+        'conversation.status',
+        'conversation.lastSequence',
+        'conversation.deletedAt',
+      ])
+      .where('conversation.id = :conversationId', { conversationId: data.conversationId })
+      .andWhere('conversation.organizationId = :organizationId', {
+        organizationId: data.organizationId,
       })
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.id, data.conversationId),
-          eq(conversations.organizationId, data.organizationId),
-        ),
-      )
-      .limit(1);
+      .limit(1)
+      .getOne();
 
-    if (conversation === undefined) {
+    if (conversation === null) {
       throw new PermanentJobError('Conversa inexistente para resumo.', {
         code: 'SUMMARY_CONVERSATION_NOT_FOUND',
         details: { conversationId: data.conversationId },
@@ -67,18 +64,25 @@ export const contextSummarizationHandler: JobHandler<typeof contextSummarization
 
     // Ponto de corte do resumo: o pedido manda, e na falta dele vale a última
     // mensagem completa da conversa.
-    const [boundary] = await deps.db
-      .select({ id: messages.id, sequence: messages.sequence })
-      .from(messages)
-      .where(
-        data.upToMessageId != null
-          ? eq(messages.id, data.upToMessageId)
-          : and(eq(messages.conversationId, conversation.id), isNull(messages.deletedAt)),
-      )
-      .orderBy(desc(messages.sequence))
+    const boundaryQuery = deps.db.manager
+      .createQueryBuilder(messages, 'message')
+      .select(['message.id', 'message.sequence'])
+      .orderBy('message.sequence', 'DESC')
       .limit(1);
 
-    if (boundary === undefined) {
+    if (data.upToMessageId != null) {
+      boundaryQuery.where('message.id = :messageId', { messageId: data.upToMessageId });
+    } else {
+      boundaryQuery
+        .where('message.conversationId = :conversationId', {
+          conversationId: conversation.id,
+        })
+        .andWhere('message.deletedAt IS NULL');
+    }
+
+    const boundary = await boundaryQuery.getOne();
+
+    if (boundary === null) {
       // Conversa sem mensagem alguma: não há o que resumir, e insistir não muda.
       return {
         status: 'skipped',
