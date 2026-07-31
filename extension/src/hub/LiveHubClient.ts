@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
-import type { HubConnectionStatus } from '../core/types';
+import { normalizeCustomRole } from '../agents/AgentRoleStore';
+import type { CustomAgentRole, HubConnectionStatus } from '../core/types';
 import type { Logger } from '../logger';
 import type { SecretStore } from '../storage/SecretStore';
-import { serializeError } from '../utils/errors';
+import { HubNotConfiguredError, serializeError } from '../utils/errors';
 import { sanitize } from '../utils/sanitize';
 import { parseHubUrl } from './HubClient';
 import {
@@ -11,7 +12,16 @@ import {
   type DeviceCredential,
   type HubHttp,
 } from './deviceFlow';
-import type { HubClient, HubConnectionConfig } from './types';
+import { openRealtime } from './realtime';
+import type {
+  HubClient,
+  HubConnectionConfig,
+  HubConversation,
+  HubMessage,
+  HubProject,
+  HubRealtimeEvent,
+  HubSubscription,
+} from './types';
 
 /** Tempo máximo de cada chamada; um Hub lento não pode travar a extensão. */
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -97,6 +107,18 @@ export class LiveHubClient implements HubClient {
     await this.secrets.delete('hub.token');
   }
 
+  /**
+   * Sai do Hub nesta máquina.
+   *
+   * Além de esquecer a credencial, volta ao estado `local-only` — sem isso o
+   * painel continuaria dizendo "Connected" com uma conexão que já não tem
+   * credencial nenhuma por trás.
+   */
+  async signOut(): Promise<void> {
+    await this.forgetCredential();
+    this.setStatus({ state: 'local-only' });
+  }
+
   // ---------- Internos ----------
 
   private setStatus(status: HubConnectionStatus): void {
@@ -143,6 +165,182 @@ export class LiveHubClient implements HubClient {
         return { status: response.status, body: response.body };
       },
     };
+  }
+
+  async listProjects(): Promise<readonly HubProject[]> {
+    const organizationId = await this.organizationId();
+    const page = await this.read(`/v1/organizations/${organizationId}/projects?limit=100`);
+
+    return page.map(readProject).filter((project): project is HubProject => project !== null);
+  }
+
+  async listConversations(projectId: string): Promise<readonly HubConversation[]> {
+    const page = await this.read(`/v1/projects/${projectId}/conversations?limit=100`);
+
+    return page
+      .map(readConversation)
+      .filter((conversation): conversation is HubConversation => conversation !== null);
+  }
+
+  async getMessages(conversationId: string): Promise<readonly HubMessage[]> {
+    // `direction=asc` porque a conversa é lida de cima para baixo; o padrão da
+    // API é `desc`, que serve à lista de sessões, não ao corpo de uma delas.
+    const page = await this.read(
+      `/v1/conversations/${conversationId}/messages?limit=200&direction=asc`,
+    );
+
+    return page.map(readMessage).filter((message): message is HubMessage => message !== null);
+  }
+
+  async createConversation(projectId: string, title: string): Promise<HubConversation> {
+    const created = await this.write(`/v1/projects/${projectId}/conversations`, {
+      title,
+      origin: 'local_import',
+    });
+    const conversation = readConversation(created);
+
+    if (conversation === null) {
+      throw new Error('The Hub did not return the conversation it created.');
+    }
+    return conversation;
+  }
+
+  async postMessage(conversationId: string, content: string): Promise<HubMessage> {
+    const created = await this.write(`/v1/conversations/${conversationId}/messages`, {
+      authorType: 'user',
+      parts: [{ type: 'text', content }],
+    });
+    const message = readMessage(created);
+
+    if (message === null) {
+      throw new Error('The Hub did not return the message it stored.');
+    }
+    return message;
+  }
+
+  async listAgentRoles(): Promise<readonly CustomAgentRole[]> {
+    const organizationId = await this.organizationId();
+    const page = await this.read(`/v1/organizations/${organizationId}/agent-roles?limit=100`);
+
+    return readRoles(page);
+  }
+
+  /**
+   * Substitui a lista inteira da organização.
+   *
+   * O Hub responde com o que passou a valer, e é esse retorno que fica em
+   * memória: se outra pessoa gravou no meio do caminho, a lista local passa a
+   * refletir o servidor em vez de insistir no que este cliente enviou.
+   */
+  async saveAgentRoles(roles: readonly CustomAgentRole[]): Promise<readonly CustomAgentRole[]> {
+    const organizationId = await this.organizationId();
+    const saved = await this.write(`/v1/organizations/${organizationId}/agent-roles`, {
+      roles: roles.map((role) => ({
+        id: role.id,
+        label: role.label,
+        description: role.description,
+        basedOn: role.basedOn,
+        skills: [...role.skills],
+        ...(role.systemPrompt === undefined ? {} : { systemPrompt: role.systemPrompt }),
+      })),
+    });
+    const items = isRecord(saved) ? saved['items'] : undefined;
+
+    return readRoles(Array.isArray(items) ? items : []);
+  }
+
+  /**
+   * Abre o canal de tempo real.
+   *
+   * O token é de uso único e vale uma conexão só, então ele é pedido aqui e não
+   * guardado. A URL vem do próprio Hub — montar `ws://` ou `wss://` no cliente
+   * daria um jeito a mais de errar num detalhe que o servidor já sabe.
+   */
+  async subscribe(onEvent: (event: HubRealtimeEvent) => void): Promise<HubSubscription> {
+    const response = await this.request('GET', '/v1/realtime/token');
+
+    if (response.status >= 400) {
+      throw new HubNotConfiguredError('The Hub refused a realtime token for this device.');
+    }
+
+    const data = isRecord(response.body) ? response.body['data'] : undefined;
+    const token = isRecord(data) ? data['token'] : undefined;
+    const url = isRecord(data) ? data['url'] : undefined;
+
+    if (typeof token !== 'string' || typeof url !== 'string') {
+      throw new Error('Unexpected realtime token response.');
+    }
+
+    return openRealtime(`${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`, {
+      onEvent,
+      onError: (message) => {
+        this.logger.info(`Canal de tempo real: ${sanitize(message)}`);
+      },
+    });
+  }
+
+  /** POST que devolve o `data` do envelope, com os erros já traduzidos. */
+  private async write(path: string, body: unknown): Promise<unknown> {
+    const response = await this.request('POST', path, body);
+
+    if (response.status === 401 || response.status === 403) {
+      throw new HubNotConfiguredError('This device is not authorized in the Hub.');
+    }
+    if (response.status >= 400) {
+      throw new Error(`Hub responded ${String(response.status)} for ${path}.`);
+    }
+    return isRecord(response.body) ? response.body['data'] : undefined;
+  }
+
+  /**
+   * Organização desta credencial.
+   *
+   * O device flow costuma devolvê-la; quando não devolve, a primeira da lista
+   * é a escolha certa — a credencial só enxerga as organizações a que tem
+   * acesso, e uma extensão sem organização escolhida não teria o que listar.
+   */
+  private async organizationId(): Promise<string> {
+    const known = this.credential?.organizationId;
+
+    if (known !== undefined && known !== '') {
+      return known;
+    }
+
+    const first = this.read('/v1/organizations?limit=1');
+    const organization = (await first)[0];
+    const id = isRecord(organization) ? organization['id'] : undefined;
+
+    if (typeof id !== 'string' || id === '') {
+      throw new HubNotConfiguredError('This account has no organization in the Hub yet.');
+    }
+    return id;
+  }
+
+  /**
+   * GET de uma página, já desembrulhada.
+   *
+   * O Hub responde sempre `{ data, meta }` e as listas vêm em
+   * `data.items` (`Docs/06`). Um corpo fora desse formato é tratado como
+   * falha e não como lista vazia: silenciar aqui esconderia uma quebra de
+   * contrato atrás de um histórico que parece só estar vazio.
+   */
+  private async read(path: string): Promise<readonly unknown[]> {
+    const response = await this.request('GET', path);
+
+    if (response.status === 401 || response.status === 403) {
+      throw new HubNotConfiguredError('This device is not authorized in the Hub.');
+    }
+    if (response.status >= 400) {
+      throw new Error(`Hub responded ${String(response.status)} for ${path}.`);
+    }
+
+    const data = isRecord(response.body) ? response.body['data'] : undefined;
+    const items = isRecord(data) ? data['items'] : undefined;
+
+    if (!Array.isArray(items)) {
+      throw new Error(`Unexpected response shape from ${path}.`);
+    }
+    return items;
   }
 
   private async request(
@@ -288,4 +486,132 @@ export class LiveHubClient implements HubClient {
       });
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Leitura das respostas
+// ---------------------------------------------------------------------------
+
+/**
+ * A resposta do Hub chega como `unknown` e é validada aqui.
+ *
+ * É a mesma regra da fronteira com a webview: o que não casa com o contrato é
+ * descartado inteiro, e não completado com valores inventados. Uma conversa sem
+ * `id` não vira uma conversa com id vazio — ela some da lista, e o resto
+ * continua utilizável.
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function text(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/** Data ISO do Hub em milissegundos. Data ilegível vira `null`. */
+function instant(value: unknown): number | null {
+  if (typeof value !== 'string' || value === '') {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+export function readProject(value: unknown): HubProject | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = text(value['id']);
+  const name = text(value['name']);
+
+  return id === null || name === null ? null : { id, name, slug: text(value['slug']) ?? '' };
+}
+
+export function readConversation(value: unknown): HubConversation | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = text(value['id']);
+
+  if (id === null) {
+    return null;
+  }
+  const createdAt = instant(value['createdAt']) ?? Date.now();
+  const count = value['messageCount'];
+
+  return {
+    id,
+    // Conversa sem título é normal enquanto ninguém escreveu nela.
+    title: text(value['title']) ?? 'Untitled',
+    messageCount: typeof count === 'number' && Number.isFinite(count) ? count : 0,
+    createdAt,
+    // `lastMessageAt` é nulo antes da primeira mensagem; aí a criação ordena.
+    updatedAt: instant(value['lastMessageAt']) ?? instant(value['updatedAt']) ?? createdAt,
+  };
+}
+
+/**
+ * Papéis vindos do Hub. A validação é a mesma dos que vêm de disco: o escopo
+ * `hub` só diz de onde chegaram, não que sejam confiáveis por isso.
+ */
+export function readRoles(items: readonly unknown[]): readonly CustomAgentRole[] {
+  return items
+    .map((item) => normalizeCustomRole(item, 'hub'))
+    .filter((role): role is CustomAgentRole => role !== null);
+}
+
+const MESSAGE_AUTHORS = ['user', 'agent', 'system'] as const;
+const MESSAGE_STATUSES = [
+  'pending',
+  'streaming',
+  'complete',
+  'failed',
+  'cancelled',
+  'redacted',
+] as const;
+
+export function readMessage(value: unknown): HubMessage | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = text(value['id']);
+  const authorType = MESSAGE_AUTHORS.find((candidate) => candidate === value['authorType']);
+
+  if (id === null || authorType === undefined) {
+    return null;
+  }
+
+  const status =
+    MESSAGE_STATUSES.find((candidate) => candidate === value['status']) ?? 'complete';
+  const author = value['authorUser'];
+
+  return {
+    id,
+    authorType,
+    authorName: isRecord(author) ? text(author['name']) : null,
+    content: joinParts(value['parts']),
+    status,
+    createdAt: instant(value['createdAt']) ?? Date.now(),
+  };
+}
+
+/**
+ * Junta as partes textuais numa mensagem só.
+ *
+ * Só `text` entra. `reasoning_summary` é raciocínio, `tool_call` e `tool_result`
+ * pertencem à timeline de passos — despejar tudo no corpo transformaria a
+ * resposta num log. As partes que a fase 1 não exibe continuam no Hub,
+ * esperando a timeline que a fase 2 traz.
+ */
+function joinParts(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return '';
+  }
+
+  return value
+    .filter(isRecord)
+    .filter((part) => part['type'] === 'text')
+    .map((part) => text(part['content']) ?? '')
+    .filter((part) => part !== '')
+    .join('\n\n');
 }
