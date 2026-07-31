@@ -29,7 +29,7 @@
     "check-manifest": "node scripts/check-manifest.mjs",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "test": "npm --prefix extension test",
-    "verify": "npm run check-types && npm run lint && npm run check-manifest && npm test",
+    "verify": "npm run check-types && npm run lint && npm run check-manifest && npm run lint:skills && npm test",
     "vsix": "npm --prefix extension run vsix",
     "hub:dev": "pnpm --filter \"./apps/**\" dev",
     "hub:build": "pnpm --filter \"./apps/**\" --filter \"./packages/**\" build",
@@ -46,7 +46,8 @@
     "hub:clean-test-data": "node scripts/hub-clean-test-data.mjs",
     "hub:check-device-flow": "node scripts/hub-device-flow-check.mjs",
     "hub:smoke:domain": "node scripts/hub-smoke-domain.mjs",
-    "hub:smoke:realtime": "node scripts/hub-smoke-realtime.mjs"
+    "hub:smoke:realtime": "node scripts/hub-smoke-realtime.mjs",
+    "lint:skills": "node scripts/lint-skills.mjs"
   },
   "packageManager": "pnpm@11.18.0",
   "devDependencies": {
