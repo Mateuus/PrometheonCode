@@ -234,35 +234,6 @@ export const envSchema = z.object({
    */
   GITHUB_OAUTH_SCOPES: z.string().trim().default('read:user user:email'),
 
-  // -- Transcrição de voz ---------------------------------------------------
-
-  /**
-   * Ditado por voz no chat. Desligado por padrão porque depende de um serviço
-   * externo com modelo de fala carregado — sem ele o botão de microfone não
-   * aparece, e o Hub sobe igual.
-   */
-  TRANSCRIPTION_ENABLED: booleanEnv().default(false),
-  /**
-   * Serviço de transcrição (a API do Applio). Endereço HTTP: o Hub deriva dele
-   * o `ws(s)://` do fluxo ao vivo e o usa direto para consultar a saúde.
-   *
-   * Em produção ele aponta para a rede interna do Compose e **não** deve ser
-   * exposto: quem fala com ele é a API, nunca o navegador.
-   */
-  TRANSCRIPTION_URL: httpUrlEnv().optional(),
-  /**
-   * Chave da API do Applio (`API_KEY` do lado de lá). Opcional porque o serviço
-   * aceita subir sem autenticação, o que só é aceitável numa rede fechada.
-   */
-  TRANSCRIPTION_API_KEY: z.string().trim().min(1).optional(),
-  /**
-   * Idioma padrão do ditado. `auto` deixa o modelo detectar, ao custo de erros
-   * em falas curtas — os primeiros segundos de "ok, então" servem para muitas
-   * línguas, e um "hello" solto vira inglês no meio de uma conversa em
-   * português.
-   */
-  TRANSCRIPTION_LANGUAGE: z.string().trim().min(2).max(8).default('pt'),
-
   // -- Operação -------------------------------------------------------------
 
   /**

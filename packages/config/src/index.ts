@@ -19,7 +19,6 @@ export {
   type RedisConfig,
   type SecretsConfig,
   type SmtpConfig,
-  type TranscriptionConfig,
 } from './config.js';
 
 export {
