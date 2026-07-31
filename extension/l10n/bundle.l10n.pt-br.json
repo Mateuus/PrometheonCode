@@ -162,6 +162,8 @@
   "Estimated from the last call. Compacting starts a shorter conversation.": "Estimado pela última chamada. Compactar começa uma conversa mais curta.",
   "Every agent is told the graph exists, where it is, and which commands read it. Without this they fall back to reading files one by one.": "Todo agente passa a saber que o grafo existe, onde ele está e quais comandos o leem. Sem isso, eles voltam a ler arquivo por arquivo.",
   "Every agent runs through one account. Prometheon never falls back to another one when the bound account is unavailable.": "Todo agente executa por uma conta. O Prometheon nunca cai em outra quando a conta vinculada está indisponível.",
+  "Every commit that touches code waits for this command to finish. Time it before rolling this out to the team — a rebuild of a couple of minutes gets the hook disabled.": "Todo commit que toca código espera este comando terminar. Meça o tempo antes de levar isso para a equipe — um rebuild de alguns minutos faz o hook ser desativado.",
+  "Every run that changes code waits for this command to finish.": "Todo run que altera código espera este comando terminar.",
   "Explores the codebase and gathers context.": "Explora o código e reúne contexto.",
   "External folder": "Pasta externa",
   "Filter actions…": "Filtrar ações…",

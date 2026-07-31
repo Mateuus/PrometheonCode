@@ -503,6 +503,9 @@ export const WEBVIEW_STRINGS = {
     'Rebuild on commit needs the Git hooks installed on this machine. They are not installed yet.',
   'graph.needsCommand': 'Set the rebuild command before choosing an automatic trigger.',
   'graph.rebuildNow': 'Rebuild now',
+  'graph.costCommit':
+    'Every commit that touches code waits for this command to finish. Time it before rolling this out to the team — a rebuild of a couple of minutes gets the hook disabled.',
+  'graph.costRun': 'Every run that changes code waits for this command to finish.',
   'graph.ageNow': 'just now',
   'graph.ageMinutes': '{0} min ago',
   'graph.ageHour': '1 hour ago',

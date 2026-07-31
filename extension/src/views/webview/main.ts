@@ -3457,6 +3457,21 @@ function renderGraphSection(): readonly Node[] {
     blocks.push(warningNote(s('Set the rebuild command before choosing an automatic trigger.')));
   }
 
+  // Um gatilho automático põe o rebuild no caminho de quem está trabalhando. Se
+  // ele demora, o time desliga o hook e o grafo volta a envelhecer em silêncio —
+  // pior do que nunca ter automatizado. Medir antes é mais barato.
+  if (graph.rebuildOn !== 'manual' && graph.rebuildCommand !== '') {
+    blocks.push(
+      emptyNote(
+        graph.rebuildOn === 'commit'
+          ? s(
+              'Every commit that touches code waits for this command to finish. Time it before rolling this out to the team — a rebuild of a couple of minutes gets the hook disabled.',
+            )
+          : s('Every run that changes code waits for this command to finish.'),
+      ),
+    );
+  }
+
   blocks.push(
     actionRow(
       actionButton(s('Rebuild now'), 'ghost', () => post({ type: 'graph.rebuild' })),
