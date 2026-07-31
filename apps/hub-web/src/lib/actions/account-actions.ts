@@ -141,35 +141,62 @@ export async function changePasswordAction(
 
 // ------------------------------------------------------------------- sessões
 
-export async function revokeSessionAction(formData: FormData): Promise<void> {
+/**
+ * Derruba uma sessão da conta.
+ *
+ * Devolve `FormState` porque a falha aqui é invisível de outro jeito: a linha
+ * continua na lista, e quem clicou não tem como saber se a sessão sobreviveu ou
+ * se o pedido nem saiu. Foi exatamente o que aconteceu enquanto o refresh
+ * estava quebrado — o token vencia, `accessToken()` devolvia nada, e o clique
+ * morria no servidor do Hub Web sem nunca virar uma chamada à API.
+ */
+export async function revokeSessionAction(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
   const sessionId = field(formData, 'sessionId');
   if (sessionId === '') {
-    return;
+    return formError('auth.error.generic');
   }
 
   const result = await revokeAccountSession(sessionId);
 
+  if (!result.ok) {
+    return translateFailure(result);
+  }
+
   // A pessoa derrubou a própria sessão: o cookie do Hub Web guarda um refresh
   // que a API acabou de invalidar. Mantê-lo só produziria um erro na próxima
   // navegação, em vez de a tela de login que ela está esperando.
-  if (result.ok && result.data.current) {
+  if (result.data.current) {
     await clearSession();
     redirect('/login');
   }
 
   revalidatePath('/settings/sessions');
+
+  return formSuccess('sessions.revoked');
 }
 
 // -------------------------------------------------------------- dispositivos
 
-export async function revokeDeviceAction(formData: FormData): Promise<void> {
+export async function revokeDeviceAction(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
   const deviceId = field(formData, 'deviceId');
   if (deviceId === '') {
-    return;
+    return formError('auth.error.generic');
   }
 
-  await revokeAccountDevice(deviceId);
+  const result = await revokeAccountDevice(deviceId);
+
+  if (!result.ok) {
+    return translateFailure(result);
+  }
 
   // Nada de `clearSession()` aqui: o dispositivo da lista nunca é esta aba.
   revalidatePath('/settings/sessions');
+
+  return formSuccess('devices.revoked');
 }

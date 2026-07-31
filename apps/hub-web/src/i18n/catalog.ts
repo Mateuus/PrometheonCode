@@ -484,6 +484,7 @@ export const CATALOG = {
   'sessions.lastUsedAt': 'Last used',
   'sessions.empty': 'No session is open.',
   'sessions.revoke': 'Sign out',
+  'sessions.revoked': 'Session signed out.',
   'sessions.revokeCurrent': 'Sign out here',
   'sessions.privacyNote':
     'The Hub shows the network an access came from, never the exact address, and a short client label instead of the full browser signature.',
@@ -496,6 +497,7 @@ export const CATALOG = {
   'devices.expiresAt': 'Credential expires',
   'devices.never': 'Never used',
   'devices.revoke': 'Disconnect',
+  'devices.revoked': 'Device disconnected.',
 
   // ------------------------------------------- configurações da organização
   'organizationSettings.title': 'Organization settings',
