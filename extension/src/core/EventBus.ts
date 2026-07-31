@@ -20,6 +20,8 @@ export interface PrometheonEventMap {
   'hub.status': HubConnectionStatus;
   'attachments.added': readonly ImageAttachment[];
   'speech.transcript': string;
+  /** Texto que o composer deve receber no ponto do cursor. */
+  'composer.insert': { readonly text: string };
   'activity.changed': ActivityStatus;
   /** O idioma mudou; a webview precisa do HTML refeito. */
   'language.changed': LanguageChoice;

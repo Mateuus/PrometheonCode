@@ -13,6 +13,10 @@ export class WorkspaceService implements vscode.Disposable {
   readonly onDidChange = this.changeEmitter.event;
   private readonly disposables: vscode.Disposable[] = [];
 
+  /** Dispara quando um `SKILL.md` ou o `roles.yaml` do projeto muda. */
+  private readonly contentEmitter = new vscode.EventEmitter<void>();
+  readonly onDidChangeContent = this.contentEmitter.event;
+
   constructor(
     private readonly settings: SettingsStore,
     private readonly local: LocalStateStore,
@@ -27,6 +31,20 @@ export class WorkspaceService implements vscode.Disposable {
       watcher.onDidChange(notify),
       watcher.onDidDelete(notify),
       vscode.workspace.onDidChangeWorkspaceFolders(notify),
+    );
+
+    // Skills e papéis são arquivos que a pessoa edita no próprio editor. Sem
+    // observá-los, salvar um `SKILL.md` só teria efeito depois de reiniciar a
+    // extensão — e a skill pareceria não existir.
+    const content = vscode.workspace.createFileSystemWatcher(
+      `**/${PROMETHEON_DIR}/{skills/**/SKILL.md,agents/roles.yaml}`,
+    );
+    const notifyContent = (): void => this.contentEmitter.fire();
+    this.disposables.push(
+      content,
+      content.onDidCreate(notifyContent),
+      content.onDidChange(notifyContent),
+      content.onDidDelete(notifyContent),
     );
   }
 
@@ -94,5 +112,6 @@ export class WorkspaceService implements vscode.Disposable {
       disposable.dispose();
     }
     this.changeEmitter.dispose();
+    this.contentEmitter.dispose();
   }
 }

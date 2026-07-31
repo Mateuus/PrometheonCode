@@ -124,6 +124,33 @@ export class LocalStateStore {
     return this.global.update(KEYS.usage, value);
   }
 
+  /**
+   * Projeto do Hub escolhido para o Web Chat.
+   *
+   * Fica no estado do workspace: cada pasta aberta costuma corresponder a um
+   * projeto diferente no Hub, e uma escolha global obrigaria a trocar de projeto
+   * toda vez que se troca de repositório.
+   */
+  getWebProjectId(): string | null {
+    return this.workspace.get<string>(KEYS.webProject) ?? null;
+  }
+
+  setWebProjectId(value: string | null): Thenable<void> {
+    return this.workspace.update(KEYS.webProject, value ?? undefined);
+  }
+
+  /**
+   * Compactar sozinho ao encher a janela. Global: a preferência é de quem usa,
+   * e não do projeto aberto.
+   */
+  getAutoCompact(): boolean {
+    return this.global.get<boolean>(KEYS.autoCompact) ?? true;
+  }
+
+  setAutoCompact(value: boolean): Thenable<void> {
+    return this.global.update(KEYS.autoCompact, value);
+  }
+
   getExternalWorkspaceFolder(): string | null {
     return this.workspace.get<string>(KEYS.externalWorkspace) ?? null;
   }
@@ -143,6 +170,8 @@ const KEYS = {
   workspaceSkipped: 'prometheon.workspace.skipped',
   externalWorkspace: 'prometheon.workspace.externalFolder',
   usage: 'prometheon.usage.entries',
+  autoCompact: 'prometheon.context.autoCompact',
+  webProject: 'prometheon.web.projectId',
 } as const;
 
 function pick<T extends string>(value: string | undefined, allowed: readonly T[], fallback: T): T {

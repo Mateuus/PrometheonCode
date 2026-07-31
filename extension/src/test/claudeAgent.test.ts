@@ -19,6 +19,67 @@ import type { AgentEvent } from '../agents/AgentAdapter';
 suite('Claude Code — tradução do stream', () => {
   const eventsOf = (line: string): readonly AgentEvent[] => translateLine(line).events;
 
+  // Estes três reproduzem a saída real do CLI ao receber `/compact` com
+  // `--resume`, verificada contra a versão instalada nesta máquina.
+  test('a compactação em andamento vira um passo na timeline', () => {
+    const events = eventsOf(
+      JSON.stringify({ type: 'system', subtype: 'status', status: 'compacting' }),
+    );
+
+    assert.deepEqual(events, [
+      {
+        type: 'tool.requested',
+        toolId: 'prometheon-compact',
+        tool: 'Compact',
+        title: 'Summarizing the conversation',
+      },
+    ]);
+  });
+
+  test('a compactação que falha fecha o passo com o motivo do CLI', () => {
+    const events = eventsOf(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'status',
+        status: null,
+        compact_result: 'failed',
+        compact_error: 'Not enough messages to compact.',
+      }),
+    );
+
+    assert.deepEqual(events, [
+      {
+        type: 'tool.completed',
+        toolId: 'prometheon-compact',
+        detail: 'Not enough messages to compact.',
+        failed: true,
+      },
+    ]);
+  });
+
+  test('o init anuncia o modelo em uso, e o resto dele é descartado', () => {
+    // `system/init` lista dezenas de ferramentas e servidores MCP a cada run.
+    // Só o modelo interessa: é dele que sai o tamanho real do contexto.
+    const events = eventsOf(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'init',
+        model: 'claude-opus-5[1m]',
+        tools: ['Read', 'Write'],
+        mcp_servers: [{ name: 'algum', status: 'connected' }],
+      }),
+    );
+
+    assert.deepEqual(events, [{ type: 'model', model: 'claude-opus-5[1m]' }]);
+  });
+
+  test('init sem modelo não vira evento pela metade', () => {
+    assert.deepEqual(
+      eventsOf(JSON.stringify({ type: 'system', subtype: 'init', tools: ['Read'] })),
+      [],
+    );
+  });
+
   test('texto do assistente vira delta', () => {
     const events = eventsOf(
       JSON.stringify({

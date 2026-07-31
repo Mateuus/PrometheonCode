@@ -13,10 +13,13 @@ import type { PrometheonViewState } from '../core/state';
 import {
   AGENT_AUTONOMY_MODES,
   AGENT_ROLES,
+  AGENT_ROLE_SCOPES,
   AUTONOMY_LEVELS,
   CHAT_TYPES,
   CONTEXT_STRATEGIES,
   MAX_CONCURRENT_SESSIONS,
+  MAX_ROLE_DESCRIPTION_LENGTH,
+  MAX_ROLE_LABEL_LENGTH,
   MAX_MCP_ARGS,
   MAX_MCP_ARG_LENGTH,
   MAX_MCP_COMMAND_LENGTH,
@@ -36,9 +39,16 @@ import {
   type ActivityStatus,
   type AgentAutonomyMode,
   type AgentRole,
+  type AgentRoleScope,
+  COMMIT_LANGUAGES,
+  COMMIT_STYLES,
+  GRAPH_REBUILD_TRIGGERS,
   type Autonomy,
   type ChatType,
+  type CommitLanguage,
+  type CommitStyle,
   type ContextStrategy,
+  type GraphRebuildTrigger,
   type HubConnectionStatus,
   type McpKeyValue,
   type McpServerDraft,
@@ -52,13 +62,24 @@ import { PROVIDER_IDS } from '../providers/types';
 export type WorkspaceSetupChoice = 'current' | 'external' | 'skip';
 
 /** Seções do modal de configuração, na ordem em que aparecem na navegação. */
-export type SettingsSection = 'general' | 'accounts' | 'agents' | 'workspace' | 'mcp';
+export type SettingsSection =
+  | 'general'
+  | 'accounts'
+  | 'agents'
+  | 'skills'
+  | 'workspace'
+  | 'graph'
+  | 'git'
+  | 'mcp';
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'general',
   'accounts',
   'agents',
+  'skills',
   'workspace',
+  'graph',
+  'git',
   'mcp',
 ];
 
@@ -67,14 +88,26 @@ export interface AgentProfileDraft {
   readonly name: string;
   readonly providerProfileId: string;
   readonly role: AgentRole;
+  readonly customRoleId?: string;
   readonly model?: string;
   readonly systemPrompt?: string;
   readonly autonomyMode: AgentAutonomyMode;
   readonly allowedTools: readonly string[];
   readonly deniedTools: readonly string[];
+  readonly skills: readonly string[];
   readonly maxConcurrentSessions: number;
   readonly contextStrategy: ContextStrategy;
   readonly enabled: boolean;
+}
+
+/** Papel nomeado como a webview o envia: sem `id`, atribuído pela extensão. */
+export interface CustomRoleDraft {
+  readonly label: string;
+  readonly description: string;
+  readonly basedOn: AgentRole;
+  readonly skills: readonly string[];
+  readonly systemPrompt?: string;
+  readonly scope: AgentRoleScope;
 }
 
 /** Anexo como a webview o envia: sem `id`, que é atribuído pela extensão. */
@@ -93,7 +126,17 @@ export type WebviewToExtensionMessage =
   | { readonly type: 'chat.newLocal' }
   | { readonly type: 'chat.clearLocal' }
   | { readonly type: 'chat.openSession'; readonly payload: { readonly conversationId: string } }
+  | { readonly type: 'chat.deleteSession'; readonly payload: { readonly conversationId: string } }
   | { readonly type: 'chat.attachImages' }
+  /** Abre a saída integral de um passo numa aba somente leitura do editor. */
+  | {
+      readonly type: 'chat.openStepOutput';
+      readonly payload: { readonly stepId: string; readonly label: string };
+    }
+  /** Escolhe um arquivo do projeto e o cita no composer. */
+  | { readonly type: 'context.addFile' }
+  | { readonly type: 'context.compact' }
+  | { readonly type: 'context.setAutoCompact'; readonly payload: { readonly enabled: boolean } }
   /** Resposta do usuário à pergunta aberta do agente. */
   | {
       readonly type: 'question.answer';
@@ -110,12 +153,16 @@ export type WebviewToExtensionMessage =
   | { readonly type: 'accounts.refresh' }
   | {
       readonly type: 'accounts.create';
+      /** Sem modelo: uma conta é um login isolado, e quem escolhe modelo é o agente. */
       readonly payload: {
         readonly name: string;
         readonly providerId: string;
-        /** Vazio deixa a escolha do modelo com o CLI. */
-        readonly model: string;
       };
+    }
+  /** Corrige o rótulo da conta; o diretório e o login seguem os mesmos. */
+  | {
+      readonly type: 'accounts.rename';
+      readonly payload: { readonly profileId: string; readonly name: string };
     }
   | { readonly type: 'accounts.login'; readonly payload: { readonly profileId: string } }
   | { readonly type: 'accounts.logout'; readonly payload: { readonly profileId: string } }
@@ -133,6 +180,15 @@ export type WebviewToExtensionMessage =
       readonly type: 'agentProfiles.setEnabled';
       readonly payload: { readonly id: string; readonly enabled: boolean };
     }
+  | { readonly type: 'agentRoles.create'; readonly payload: { readonly role: CustomRoleDraft } }
+  | {
+      readonly type: 'agentRoles.update';
+      readonly payload: { readonly id: string; readonly role: CustomRoleDraft };
+    }
+  | { readonly type: 'agentRoles.remove'; readonly payload: { readonly id: string } }
+  | { readonly type: 'skills.refresh' }
+  /** Abre um `SKILL.md` no editor. A webview manda o nome; o Core resolve o caminho. */
+  | { readonly type: 'skills.open'; readonly payload: { readonly name: string } }
   | { readonly type: 'mcp.refresh' }
   /** Escolher e mesclar outro `.mcp.json` — a leitura acontece na extensão. */
   | { readonly type: 'mcp.import' }
@@ -143,9 +199,13 @@ export type WebviewToExtensionMessage =
       readonly payload: { readonly name: string; readonly enabled: boolean };
     }
   | { readonly type: 'chat.selectType'; readonly payload: { readonly chatType: ChatType } }
+  /** Projeto do Hub onde as conversas do Web Chat moram. */
+  | { readonly type: 'chat.selectProject'; readonly payload: { readonly projectId: string } }
   | { readonly type: 'settings.setWorkMode'; readonly payload: { readonly mode: WorkMode } }
   | { readonly type: 'settings.setAutonomy'; readonly payload: { readonly autonomy: Autonomy } }
   | { readonly type: 'settings.selectMainAgent'; readonly payload: { readonly agentId: string } }
+  /** Troca o modelo da conta que o agente principal usa. */
+  | { readonly type: 'settings.setModel'; readonly payload: { readonly model: string } }
   | {
       readonly type: 'settings.setLanguage';
       readonly payload: { readonly language: LanguageChoice };
@@ -157,7 +217,35 @@ export type WebviewToExtensionMessage =
       readonly payload: { readonly choice: WorkspaceSetupChoice };
     }
   | { readonly type: 'agents.stop'; readonly payload: { readonly sessionId: string } }
-  | { readonly type: 'hub.connect.request' };
+  /** Grava um ou mais campos do grafo; só o que veio no patch é tocado. */
+  | { readonly type: 'graph.update'; readonly payload: { readonly patch: GraphPatch } }
+  /** Dispara o comando de rebuild num terminal do editor. */
+  | { readonly type: 'graph.rebuild' }
+  | { readonly type: 'git.update'; readonly payload: { readonly patch: GitPatch } }
+  /** Escreve os hooks e aponta `core.hooksPath` para eles nesta máquina. */
+  | { readonly type: 'git.installHooks' }
+  | { readonly type: 'git.uninstallHooks' }
+  | { readonly type: 'hub.connect.request' }
+  /** Sai do Hub: a credencial do dispositivo é esquecida nesta máquina. */
+  | { readonly type: 'hub.signOut' };
+
+/** Campos do grafo que a webview pode gravar, todos opcionais. */
+export interface GraphPatch {
+  readonly enabled?: boolean;
+  readonly outputDir?: string;
+  readonly rebuildCommand?: string;
+  readonly rebuildOn?: GraphRebuildTrigger;
+  readonly gate?: string;
+  readonly blockOnHygieneFailure?: boolean;
+}
+
+/** Campos da política de commit que a webview pode gravar. */
+export interface GitPatch {
+  readonly coAuthoredBy?: boolean;
+  readonly commitStyle?: CommitStyle;
+  readonly commitLanguage?: CommitLanguage;
+  readonly scopes?: readonly string[];
+}
 
 export type ExtensionToWebviewMessage =
   | { readonly type: 'state.snapshot'; readonly payload: PrometheonViewState }
@@ -171,6 +259,8 @@ export type ExtensionToWebviewMessage =
     }
   /** Texto ditado, para o cliente inserir no rascunho onde está o cursor. */
   | { readonly type: 'speech.transcript'; readonly payload: { readonly text: string } }
+  /** Texto para o composer receber no ponto do cursor (citação de arquivo). */
+  | { readonly type: 'composer.insert'; readonly payload: { readonly text: string } }
   /** Abre o modal de pergunta do agente; o run espera do outro lado. */
   | { readonly type: 'question.ask'; readonly payload: AgentQuestionRequest }
   | { readonly type: 'question.close'; readonly payload: { readonly requestId: string } }
@@ -370,8 +460,10 @@ function parseAgentProfileDraft(raw: unknown): AgentProfileDraft | null {
     1,
     MAX_CONCURRENT_SESSIONS,
   );
+  const skills = parseToolList(raw['skills']);
   const model = optionalText(raw['model'], MAX_MODEL_LENGTH);
   const systemPrompt = optionalText(raw['systemPrompt'], MAX_SYSTEM_PROMPT_LENGTH);
+  const customRoleId = optionalText(raw['customRoleId'], 96);
 
   if (
     name === null ||
@@ -381,9 +473,11 @@ function parseAgentProfileDraft(raw: unknown): AgentProfileDraft | null {
     contextStrategy === null ||
     allowedTools === null ||
     deniedTools === null ||
+    skills === null ||
     maxConcurrentSessions === null ||
     model === null ||
     systemPrompt === null ||
+    customRoleId === null ||
     typeof raw['enabled'] !== 'boolean'
   ) {
     return null;
@@ -393,14 +487,52 @@ function parseAgentProfileDraft(raw: unknown): AgentProfileDraft | null {
     name,
     providerProfileId,
     role,
+    ...(customRoleId === undefined ? {} : { customRoleId }),
     ...(model === undefined ? {} : { model }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
     autonomyMode,
     allowedTools,
     deniedTools,
+    skills,
     maxConcurrentSessions,
     contextStrategy,
     enabled: raw['enabled'],
+  };
+}
+
+/**
+ * Papel nomeado vindo da webview. O escopo é validado aqui porque decide onde o
+ * arquivo será gravado; o resto das regras é do `AgentRoleService`.
+ */
+function parseCustomRoleDraft(raw: unknown): CustomRoleDraft | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const label = nonEmptyString(raw['label'], MAX_ROLE_LABEL_LENGTH);
+  const description = nonEmptyString(raw['description'], MAX_ROLE_DESCRIPTION_LENGTH);
+  const basedOn = oneOf<AgentRole>(raw['basedOn'], AGENT_ROLES);
+  const scope = oneOf<AgentRoleScope>(raw['scope'], AGENT_ROLE_SCOPES);
+  const skills = parseToolList(raw['skills']);
+  const systemPrompt = optionalText(raw['systemPrompt'], MAX_SYSTEM_PROMPT_LENGTH);
+
+  if (
+    label === null ||
+    description === null ||
+    basedOn === null ||
+    scope === null ||
+    skills === null ||
+    systemPrompt === null
+  ) {
+    return null;
+  }
+
+  return {
+    label,
+    description,
+    basedOn,
+    skills,
+    ...(systemPrompt === undefined ? {} : { systemPrompt }),
+    scope,
   };
 }
 
@@ -542,6 +674,124 @@ function isHttpUrl(value: string): boolean {
   }
 }
 
+/** Um comando de shell inteiro cabe folgado; mais que isto é abuso. */
+export const MAX_COMMAND_LENGTH = 1_000;
+export const MAX_PATH_LENGTH = 260;
+export const MAX_SCOPES = 32;
+export const MAX_SCOPE_LENGTH = 40;
+
+/**
+ * Patch do grafo.
+ *
+ * Campo ausente significa "não mexa"; campo presente com tipo errado derruba a
+ * mensagem inteira. O comando de rebuild vai parar num shell, então o que passa
+ * daqui precisa ser exatamente o que o usuário digitou — nada de "corrigir" um
+ * valor estranho e executar a correção.
+ */
+function parseGraphPatch(raw: unknown): GraphPatch | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const patch: {
+    enabled?: boolean;
+    outputDir?: string;
+    rebuildCommand?: string;
+    rebuildOn?: GraphRebuildTrigger;
+    gate?: string;
+    blockOnHygieneFailure?: boolean;
+  } = {};
+
+  for (const [key, limit] of [
+    ['outputDir', MAX_PATH_LENGTH],
+    ['rebuildCommand', MAX_COMMAND_LENGTH],
+    ['gate', MAX_COMMAND_LENGTH],
+  ] as const) {
+    const value = raw[key];
+    if (value === undefined) {
+      continue;
+    }
+    if (typeof value !== 'string' || value.length > limit) {
+      return null;
+    }
+    patch[key] = value.trim();
+  }
+
+  for (const key of ['enabled', 'blockOnHygieneFailure'] as const) {
+    const value = raw[key];
+    if (value === undefined) {
+      continue;
+    }
+    if (typeof value !== 'boolean') {
+      return null;
+    }
+    patch[key] = value;
+  }
+
+  if (raw['rebuildOn'] !== undefined) {
+    const trigger = GRAPH_REBUILD_TRIGGERS.find((entry) => entry === raw['rebuildOn']);
+    if (trigger === undefined) {
+      return null;
+    }
+    patch.rebuildOn = trigger;
+  }
+
+  return Object.keys(patch).length === 0 ? null : patch;
+}
+
+function parseGitPatch(raw: unknown): GitPatch | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const patch: {
+    coAuthoredBy?: boolean;
+    commitStyle?: CommitStyle;
+    commitLanguage?: CommitLanguage;
+    scopes?: readonly string[];
+  } = {};
+
+  if (raw['coAuthoredBy'] !== undefined) {
+    if (typeof raw['coAuthoredBy'] !== 'boolean') {
+      return null;
+    }
+    patch.coAuthoredBy = raw['coAuthoredBy'];
+  }
+
+  if (raw['commitStyle'] !== undefined) {
+    const style = COMMIT_STYLES.find((entry) => entry === raw['commitStyle']);
+    if (style === undefined) {
+      return null;
+    }
+    patch.commitStyle = style;
+  }
+
+  if (raw['commitLanguage'] !== undefined) {
+    const language = COMMIT_LANGUAGES.find((entry) => entry === raw['commitLanguage']);
+    if (language === undefined) {
+      return null;
+    }
+    patch.commitLanguage = language;
+  }
+
+  if (raw['scopes'] !== undefined) {
+    if (!Array.isArray(raw['scopes']) || raw['scopes'].length > MAX_SCOPES) {
+      return null;
+    }
+    const scopes: string[] = [];
+    for (const entry of raw['scopes']) {
+      if (typeof entry !== 'string' || entry.length > MAX_SCOPE_LENGTH) {
+        return null;
+      }
+      const scope = entry.trim();
+      if (scope !== '' && !scopes.includes(scope)) {
+        scopes.push(scope);
+      }
+    }
+    patch.scopes = scopes;
+  }
+
+  return Object.keys(patch).length === 0 ? null : patch;
+}
+
 /**
  * Valida em runtime tudo o que vem da webview. TypeScript não protege esta
  * fronteira: a mensagem chega como `unknown` e qualquer campo inesperado deve
@@ -562,11 +812,28 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
     case 'speech.stop':
     case 'speech.cancel':
     case 'accounts.refresh':
+    case 'skills.refresh':
     case 'mcp.refresh':
     case 'mcp.import':
     case 'settings.openEditor':
+    case 'context.addFile':
+    case 'context.compact':
+    case 'graph.rebuild':
+    case 'git.installHooks':
+    case 'git.uninstallHooks':
+    case 'hub.signOut':
     case 'hub.connect.request':
       return { type: raw['type'] };
+
+    case 'graph.update': {
+      const patch = payload === undefined ? null : parseGraphPatch(payload['patch']);
+      return patch === null ? null : { type: 'graph.update', payload: { patch } };
+    }
+
+    case 'git.update': {
+      const patch = payload === undefined ? null : parseGitPatch(payload['patch']);
+      return patch === null ? null : { type: 'git.update', payload: { patch } };
+    }
 
     case 'chat.send': {
       if (payload === undefined || typeof payload['content'] !== 'string') {
@@ -587,6 +854,14 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
       return { type: 'chat.send', payload: { content, attachments } };
     }
 
+    case 'chat.openStepOutput': {
+      const stepId = payload === undefined ? null : nonEmptyString(payload['stepId'], 128);
+      const label = payload === undefined ? null : nonEmptyString(payload['label'], 120);
+      return stepId === null || label === null
+        ? null
+        : { type: 'chat.openStepOutput', payload: { stepId, label } };
+    }
+
     case 'accounts.login':
     case 'accounts.logout':
     case 'accounts.remove': {
@@ -594,17 +869,23 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
       return profileId === null ? null : { type: raw['type'], payload: { profileId } };
     }
 
+    case 'accounts.rename': {
+      const profileId = payload === undefined ? null : nonEmptyString(payload['profileId'], 128);
+      // Renomear para nada seria apagar a única forma de reconhecer a conta na
+      // lista: um nome vazio recusa a mensagem inteira.
+      const name = payload === undefined ? null : nonEmptyString(payload['name'], MAX_PROFILE_NAME_LENGTH);
+      return profileId === null || name === null
+        ? null
+        : { type: 'accounts.rename', payload: { profileId, name } };
+    }
+
     case 'accounts.create': {
       // O provedor é restrito à lista conhecida: a webview não inventa CLI.
       const name = payload === undefined ? null : nonEmptyString(payload['name'], MAX_PROFILE_NAME_LENGTH);
       const providerId = payload === undefined ? null : oneOf(payload['providerId'], PROVIDER_IDS);
-      // O modelo **não** é restrito a uma lista: o provedor lança modelos sem
-      // avisar, e recusar um identificador novo faria o Prometheon ser o motivo
-      // de você não conseguir usar o mais recente.
-      const model = payload === undefined ? '' : (nonEmptyString(payload['model'], 64) ?? '');
       return name === null || providerId === null
         ? null
-        : { type: 'accounts.create', payload: { name, providerId, model } };
+        : { type: 'accounts.create', payload: { name, providerId } };
     }
 
     case 'agentProfiles.create': {
@@ -633,6 +914,31 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
         : { type: 'agentProfiles.setEnabled', payload: { id, enabled } };
     }
 
+    case 'agentRoles.create': {
+      const role = payload === undefined ? null : parseCustomRoleDraft(payload['role']);
+      return role === null ? null : { type: 'agentRoles.create', payload: { role } };
+    }
+
+    case 'agentRoles.update': {
+      const id = payload === undefined ? null : nonEmptyString(payload['id'], 96);
+      const role = payload === undefined ? null : parseCustomRoleDraft(payload['role']);
+      return id === null || role === null
+        ? null
+        : { type: 'agentRoles.update', payload: { id, role } };
+    }
+
+    case 'agentRoles.remove': {
+      const id = payload === undefined ? null : nonEmptyString(payload['id'], 96);
+      return id === null ? null : { type: 'agentRoles.remove', payload: { id } };
+    }
+
+    case 'skills.open': {
+      // Só o nome atravessa a fronteira. Um caminho vindo da webview viraria
+      // leitura arbitrária de disco; aqui o Core resolve pelo catálogo.
+      const name = payload === undefined ? null : nonEmptyString(payload['name'], 64);
+      return name === null ? null : { type: 'skills.open', payload: { name } };
+    }
+
     case 'mcp.save': {
       const server = payload === undefined ? null : parseMcpServer(payload['server']);
       return server === null ? null : { type: 'mcp.save', payload: { server } };
@@ -658,6 +964,28 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
         : { type: 'chat.openSession', payload: { conversationId } };
     }
 
+    case 'chat.deleteSession': {
+      const conversationId =
+        payload === undefined ? null : nonEmptyString(payload['conversationId'], 128);
+      return conversationId === null
+        ? null
+        : { type: 'chat.deleteSession', payload: { conversationId } };
+    }
+
+    case 'context.setAutoCompact': {
+      const enabled = payload?.['enabled'];
+      return typeof enabled !== 'boolean'
+        ? null
+        : { type: 'context.setAutoCompact', payload: { enabled } };
+    }
+
+    case 'settings.setModel': {
+      // Igual ao de criar conta: o identificador não é restrito a uma lista, só
+      // ao tamanho. Ficar de fora da tabela não pode impedir o uso do modelo.
+      const model = payload === undefined ? '' : (nonEmptyString(payload['model'], 64) ?? '');
+      return { type: 'settings.setModel', payload: { model } };
+    }
+
     case 'chat.cancel': {
       const runId = payload === undefined ? null : nonEmptyString(payload['runId']);
       return runId === null ? null : { type: 'chat.cancel', payload: { runId } };
@@ -679,6 +1007,11 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
     case 'chat.selectType': {
       const chatType = payload === undefined ? null : oneOf(payload['chatType'], CHAT_TYPES);
       return chatType === null ? null : { type: 'chat.selectType', payload: { chatType } };
+    }
+
+    case 'chat.selectProject': {
+      const projectId = payload === undefined ? null : nonEmptyString(payload['projectId'], 64);
+      return projectId === null ? null : { type: 'chat.selectProject', payload: { projectId } };
     }
 
     case 'settings.setWorkMode': {

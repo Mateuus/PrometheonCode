@@ -1,7 +1,12 @@
 import * as assert from 'node:assert/strict';
 import { normalizeAgentProfile } from '../agents/AgentProfileStore';
 import { resolveAgentProfiles } from '../agents/AgentProfileService';
-import type { AccountSummary, AgentProfile } from '../core/types';
+import {
+  contextWindowFor,
+  modelWithoutWindow,
+  type AccountSummary,
+  type AgentProfile,
+} from '../core/types';
 import { buildEntry, looksLikeSecret, normalizeMcpEntry } from '../workspace/McpConfigStore';
 import { getApi, isPrometheonError } from './helpers';
 
@@ -15,6 +20,7 @@ function stored(overrides: Record<string, unknown> = {}): Record<string, unknown
     autonomyMode: 'manual',
     allowedTools: ['Read'],
     deniedTools: [],
+    skills: [],
     maxConcurrentSessions: 1,
     contextStrategy: 'project',
     enabled: true,
@@ -29,6 +35,7 @@ function account(overrides: Partial<AccountSummary> = {}): AccountSummary {
     providerId: 'claude-code',
     providerName: 'Claude Code',
     configDirectory: '/tmp/empresa1',
+    model: '',
     cliInstalled: true,
     authenticated: true,
     usage: {
@@ -57,6 +64,7 @@ suite('Agent Profiles — arquivo em disco', () => {
       autonomyMode: 'manual',
       allowedTools: ['Read'],
       deniedTools: [],
+      skills: [],
       maxConcurrentSessions: 1,
       contextStrategy: 'project',
       enabled: true,
@@ -104,6 +112,7 @@ suite('Agent Profiles — binding com a conta', () => {
       autonomyMode: 'manual' as const,
       allowedTools: [],
       deniedTools: [],
+      skills: [],
       maxConcurrentSessions: 1,
       contextStrategy: 'project' as const,
       enabled: true,
@@ -144,6 +153,7 @@ suite('Agent Profiles — binding com a conta', () => {
         autonomyMode: 'manual',
         allowedTools: ['Read', 'Read'],
         deniedTools: ['Bash'],
+        skills: [],
         maxConcurrentSessions: 2,
         contextStrategy: 'project',
         enabled: true,
@@ -194,6 +204,7 @@ suite('Agent Profiles — binding com a conta', () => {
           autonomyMode: 'auto',
           allowedTools: [],
           deniedTools: [],
+          skills: [],
           maxConcurrentSessions: 0,
           contextStrategy: 'isolated',
           enabled: true,
@@ -375,5 +386,35 @@ suite('Servidores MCP — .mcp.json', () => {
     } else {
       assert.match(status.file ?? '', /\.mcp\.json$/);
     }
+  });
+});
+
+suite('Janela de contexto', () => {
+  test('a marca do CLI vence a tabela', () => {
+    // O CLI escreve a janela no nome do modelo. Ela manda: a mesma versão roda
+    // com janelas diferentes conforme plano e flags da conta, e é o CLI quem
+    // sabe qual delas está valendo agora.
+    assert.equal(contextWindowFor('claude-opus-5[1m]'), 1_000_000);
+    assert.equal(contextWindowFor('claude-opus-5[200k]'), 200_000);
+    assert.equal(contextWindowFor('modelo-que-nao-conhecemos[500k]'), 500_000);
+  });
+
+  test('sem marca, a tabela responde', () => {
+    assert.equal(contextWindowFor('claude-opus-5'), 1_000_000);
+    assert.equal(contextWindowFor('claude-sonnet-5'), 1_000_000);
+    assert.equal(contextWindowFor('claude-haiku-4-5-20251001'), 200_000);
+  });
+
+  test('modelo desconhecido ou ausente cai no padrão em vez de sumir', () => {
+    // Zero aqui apagaria o indicador; uma barra aproximada continua útil, e o
+    // primeiro run corrige o número com o que o CLI reportar.
+    assert.equal(contextWindowFor('modelo-do-futuro'), 200_000);
+    assert.equal(contextWindowFor(''), 200_000);
+    assert.equal(contextWindowFor(undefined), 200_000);
+  });
+
+  test('o rótulo perde a marca de janela, que já aparece no número', () => {
+    assert.equal(modelWithoutWindow('claude-opus-5[1m]'), 'claude-opus-5');
+    assert.equal(modelWithoutWindow('claude-opus-5'), 'claude-opus-5');
   });
 });

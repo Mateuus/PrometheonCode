@@ -40,6 +40,9 @@ const ICONS = {
   send: `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12.8V3.6"/><path d="M4.2 7.4 8 3.6l3.8 3.8"/></svg>`,
   account: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="5.6" r="2.8"/><path d="M2.8 13.6a5.2 5.2 0 0 1 10.4 0"/></svg>`,
   mic: `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="1.8" width="4" height="7.4" rx="2"/><path d="M3.6 7.4a4.4 4.4 0 0 0 8.8 0"/><path d="M8 11.8v2.4"/></svg>`,
+  /** `[/]` — a barra entre colchetes, como o atalho que abre o painel. */
+  slash: `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.4 2.8H3.2v10.4h2.2"/><path d="M10.6 2.8h2.2v10.4h-2.2"/><path d="M9.2 4.6 6.8 11.4"/></svg>`,
+  trash: `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.9 4.4h10.2"/><path d="M6.4 4.4V3.1a.9.9 0 0 1 .9-.9h1.4a.9.9 0 0 1 .9.9v1.3"/><path d="M4.3 4.4l.6 8.2a1 1 0 0 0 1 .9h4.2a1 1 0 0 0 1-.9l.6-8.2"/></svg>`,
   /** Asterisco do indicador de trabalho. Três traços pelo centro, a 60°. */
   spark: `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 2.4v11.2"/><path d="M3.2 5.2l9.6 5.6"/><path d="M3.2 10.8l9.6-5.6"/></svg>`,
 } as const;
@@ -71,6 +74,13 @@ const MENU_ICONS: Readonly<Record<string, string>> = {
   cloud: `<path d="M4.7 12.1a2.9 2.9 0 0 1-.3-5.8 3.7 3.7 0 0 1 7.1-.7 2.9 2.9 0 0 1 .2 5.7 2.9 2.9 0 0 1-.4 0Z"/>`,
   globe: `<circle cx="8" cy="8" r="5.9"/><path d="M2.1 8h11.8"/><path d="M8 2.1c1.6 1.7 2.4 3.7 2.4 5.9S9.6 12.2 8 13.9C6.4 12.2 5.6 10.2 5.6 8S6.4 3.8 8 2.1Z"/>`,
   chevron: `<path d="M4.6 6.4 8 9.8l3.4-3.4"/>`,
+  /** Faísca do seletor de modelo: um brilho grande e outro pequeno. */
+  sparkle: `<path d="M6.6 2.2 7.7 5.3 10.8 6.4 7.7 7.5 6.6 10.6 5.5 7.5 2.4 6.4 5.5 5.3Z"/><path d="M11.4 9.2l.6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6Z"/>`,
+  upload: `<path d="M8 10.6V2.8"/><path d="M5.2 5.6 8 2.8l2.8 2.8"/><path d="M2.8 10.2v2a1 1 0 0 0 1 1h8.4a1 1 0 0 0 1-1v-2"/>`,
+  /** Grafo de conhecimento: três nós ligados. */
+  graph: `<circle cx="8" cy="3.4" r="1.7"/><circle cx="3.6" cy="11.6" r="1.7"/><circle cx="12.4" cy="11.6" r="1.7"/><path d="M6.9 4.9 4.6 10.1M9.1 4.9l2.3 5.2M5.3 11.6h5.4"/>`,
+  /** Git: um ramo saindo do tronco. */
+  git: `<circle cx="4.6" cy="3.8" r="1.6"/><circle cx="4.6" cy="12.2" r="1.6"/><circle cx="11.4" cy="6.6" r="1.6"/><path d="M4.6 5.4v5.2"/><path d="M9.8 7.6a5 5 0 0 1-5.2 3"/>`,
   // Marcador dos blocos de ferramenta; gira ao expandir.
   chevronRight: `<path d="M6.2 3.8 10.6 8l-4.4 4.2"/>`,
 };
@@ -132,10 +142,9 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
       <span class="session-title" id="session-title">${t('Untitled')}</span>
       <span class="grow"></span>
       <span class="hub-badge" id="hub-badge" title="Prometheon Hub status"></span>
-      <button class="icon-button" type="button" id="open-settings-modal" title="${label('Accounts and usage')}" aria-label="${label('Accounts and usage')}" aria-haspopup="dialog" aria-expanded="false">${ICONS.account}</button>
       <button class="icon-button" type="button" id="toggle-sessions" title="${label('Sessions')}" aria-label="${label('Sessions')}" aria-haspopup="dialog" aria-expanded="false">${ICONS.history}</button>
       <button class="icon-button" type="button" id="new-session" title="${label('New chat')}" aria-label="${label('New chat')}">${ICONS.plus}</button>
-      <button class="icon-button" type="button" id="open-settings" title="${label('Open settings')}" aria-label="${label('Open settings')}">${ICONS.gear}</button>
+      <button class="icon-button" type="button" id="open-settings-modal" title="${label('Settings')}" aria-label="${label('Settings')}" aria-haspopup="dialog" aria-expanded="false">${ICONS.gear}</button>
     </header>
 
     <div class="popover" id="sessions-popover" role="dialog" aria-label="${label('Sessions')}" hidden>
@@ -169,6 +178,8 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
       <div class="panel-actions">
         <button class="primary" type="button" id="connect-hub">${t('Connect to Prometheon Hub')}</button>
       </div>
+      <!-- Escolha do projeto: montada pelo cliente quando o Hub responde. -->
+      <div class="web-project" id="web-project" hidden></div>
     </section>
 
     <div class="working" id="working" role="status" hidden>
@@ -178,7 +189,18 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
       <span class="working-tokens" id="working-tokens"></span>
     </div>
 
+    <!--
+      Barra de visão: fica escondida enquanto a conversa é do agente principal e
+      só aparece quando alguém abre o console de um agente. Sem isso, a troca de
+      visão seria um estado invisível — o chat mudaria de conteúdo sem dizer
+      para onde a pessoa foi nem como voltar.
+    -->
+    <nav class="agent-views" id="agent-views" hidden></nav>
+
     <main class="messages" id="messages" aria-live="polite" aria-busy="false"></main>
+
+    <!-- Console do agente aberto: a timeline de passos dele, sem a conversa. -->
+    <main class="agent-console" id="agent-console" hidden></main>
 
     <div class="empty-state" id="empty-state" hidden>
       <p>${t('No messages yet. Ask something to see the mesh respond.')}</p>
@@ -207,7 +229,40 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
           aria-label="${label('Message')}"
         ></textarea>
         <div class="composer-bar">
-          <button class="icon-button" type="button" id="attach-image" title="${label('Attach image')}" aria-label="${label('Attach image')}">${ICONS.attach}</button>
+          <div class="menu-anchor">
+            <button class="icon-button" type="button" id="attach-button" title="${label('Add to the message')}" aria-label="${label('Add to the message')}" aria-haspopup="menu" aria-expanded="false">${ICONS.attach}</button>
+            <div class="menu menu-up" id="attach-menu" role="menu" aria-label="${label('Add to the message')}" hidden>
+              <div class="menu-title">${t('Add to the message')}</div>
+              <div class="menu-items" data-slot="items"></div>
+            </div>
+          </div>
+
+          <div class="menu-anchor">
+            <button class="icon-button" type="button" id="command-button" title="${label('Actions')}" aria-label="${label('Actions')}" aria-haspopup="dialog" aria-expanded="false">${ICONS.slash}</button>
+            <!-- Painel de ações: filtro no topo e grupos montados pelo cliente. -->
+            <div class="command-panel" id="command-panel" role="dialog" aria-label="${label('Actions')}" hidden>
+              <div class="search command-search">
+                ${ICONS.search}
+                <input id="command-search" type="text" placeholder="${label('Filter actions…')}" aria-label="${label('Filter actions…')}" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="command-groups" id="command-groups"></div>
+              <p class="command-empty" id="command-empty" hidden>${t('No action matches this search.')}</p>
+            </div>
+          </div>
+
+          <div class="menu-anchor">
+            <!-- Anel de contexto: o traço se fecha conforme a janela enche. -->
+            <button class="icon-button context-button" type="button" id="context-button" aria-haspopup="dialog" aria-expanded="false">
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+                <circle class="context-track" cx="8" cy="8" r="5.6" stroke="currentColor" stroke-width="1.6" />
+                <circle class="context-fill" id="context-fill" cx="8" cy="8" r="5.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" transform="rotate(-90 8 8)" />
+              </svg>
+            </button>
+            <div class="menu context-popover" id="context-popover" role="dialog" aria-label="${label('Context window')}" hidden>
+              <div class="menu-title">${t('Context window')}</div>
+              <div class="context-body" id="context-body"></div>
+            </div>
+          </div>
 
           <div class="menu-anchor">
             <button class="pill" type="button" id="work-mode-button" aria-haspopup="menu" aria-expanded="false">

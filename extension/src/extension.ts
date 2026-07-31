@@ -1,10 +1,19 @@
 import * as vscode from 'vscode';
 import { AgentProfileService } from './agents/AgentProfileService';
 import { AgentProfileStore } from './agents/AgentProfileStore';
+import { AgentRoleService } from './agents/AgentRoleService';
+import { AgentRoleStore } from './agents/AgentRoleStore';
+import { SkillRegistry } from './skills/SkillRegistry';
+import { ModelCatalog } from './providers/ModelCatalog';
 import { AgentRegistry } from './agents/AgentRegistry';
 import { ClaudeCodeAgentAdapter } from './agents/ClaudeCodeAgentAdapter';
 import { MockAgentAdapter } from './agents/MockAgentAdapter';
 import { LocalChatService } from './chat/LocalChatService';
+import {
+  ToolOutputContentProvider,
+  ToolOutputStore,
+  TOOL_OUTPUT_SCHEME,
+} from './chat/ToolOutputStore';
 import { WebChatService } from './chat/WebChatService';
 import { registerCommands } from './commands';
 import { CHAT_VIEW_ID, CHAT_VIEW_SECONDARY_ID } from './constants';
@@ -24,6 +33,8 @@ import { LocalStateStore } from './storage/LocalStateStore';
 import { SecretStore } from './storage/SecretStore';
 import { SettingsStore } from './storage/SettingsStore';
 import { McpConfigStore } from './workspace/McpConfigStore';
+import { GraphService } from './workspace/GraphService';
+import { GitPolicyService } from './workspace/GitPolicyService';
 import { WorkspaceInitializer } from './workspace/WorkspaceInitializer';
 import { WorkspaceService } from './workspace/WorkspaceService';
 import { PrometheonViewProvider } from './views/PrometheonViewProvider';
@@ -39,6 +50,9 @@ export interface PrometheonApi {
   readonly speech: SpeechService;
   readonly profiles: ProviderProfileService;
   readonly agentProfiles: AgentProfileService;
+  readonly agentRoles: AgentRoleService;
+  readonly skills: SkillRegistry;
+  readonly modelCatalog: ModelCatalog;
   readonly mcp: McpConfigStore;
   readonly usage: UsageTracker;
   readonly localState: LocalStateStore;
@@ -80,7 +94,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
   // Agent Profiles vivem em `~/.prometheon/agent-profiles.json` e sempre
   // apontam para uma dessas contas; MCP é configuração do projeto.
   const agentProfiles = new AgentProfileService(new AgentProfileStore(logger), profiles, logger);
+  const skills = new SkillRegistry(workspace, logger);
+  const modelCatalog = new ModelCatalog(context.extensionUri, logger);
   const mcp = new McpConfigStore(workspace, logger);
+  // Grafo e política de commit são do projeto, não desta máquina: os dois leem
+  // o `prometheon.yaml` e escrevem artefatos que vão para o Git.
+  const graph = new GraphService(workspace, logger);
+  const gitPolicy = new GitPolicyService(workspace, logger);
 
   const registry = new AgentRegistry();
 
@@ -116,8 +136,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
     .trim();
   const hub =
     configuredHubUrl === '' ? new DisabledHubClient() : new LiveHubClient(secrets, logger, extensionVersion);
-  const localChat = new LocalChatService(localState, registry, logger);
+  // A saída integral das ferramentas fica no armazenamento da extensão para
+  // este workspace: fora do projeto do usuário, fora do Git, e apagada sozinha
+  // depois de uma semana.
+  const toolOutputs = new ToolOutputStore(context.storageUri, logger);
+  void toolOutputs.prune();
+
+  const localChat = new LocalChatService(localState, registry, logger, toolOutputs);
   const webChat = new WebChatService(hub);
+  // Depende do Hub, então nasce depois dele: o escopo de equipe é o próprio
+  // Hub, e sem conexão o serviço oferece apenas projeto e máquina.
+  const agentRoles = new AgentRoleService(new AgentRoleStore(workspace, logger), hub, logger);
 
   const core = new PrometheonCore({
     extensionVersion,
@@ -131,7 +160,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
     speech,
     profiles,
     agentProfiles,
+    agentRoles,
+    skills,
+    modelCatalog,
     mcp,
+    graph,
+    gitPolicy,
+    toolOutputs,
     usage,
     local: localState,
     settings,
@@ -143,6 +178,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
   const statusBar = new BypassStatusBar();
 
   context.subscriptions.push(logger, bus, workspace, core, provider, statusBar);
+
+  // Esquema próprio para a saída das ferramentas. O provider só lê, então o
+  // editor abre a aba somente leitura sem depender de ninguém passar um flag.
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(
+      TOOL_OUTPUT_SCHEME,
+      new ToolOutputContentProvider(toolOutputs),
+    ),
+  );
 
   // Ponte única entre o barramento interno e a interface.
   context.subscriptions.push(
@@ -166,6 +210,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
     bus.on('question.close', (requestId) =>
       provider.post({ type: 'question.close', payload: { requestId } }),
     ),
+    bus.on('composer.insert', (payload) => provider.post({ type: 'composer.insert', payload })),
     bus.on('speech.transcript', (text) =>
       provider.post({ type: 'speech.transcript', payload: { text } }),
     ),
@@ -195,6 +240,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
     speech,
     profiles,
     agentProfiles,
+    agentRoles,
+    skills,
+    modelCatalog,
     mcp,
     usage,
     localState,
