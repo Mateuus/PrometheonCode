@@ -451,5 +451,7 @@
   "This browser cannot capture audio for dictation.": "Este navegador no puede capturar audio para el dictado.",
   "Could not start dictation. Try again.": "No se pudo iniciar el dictado. Inténtalo de nuevo.",
   "The dictation connection dropped.": "Se cortó la conexión del dictado.",
-  "The transcription service is unavailable right now.": "El servicio de transcripción no está disponible ahora."
+  "The transcription service is unavailable right now.": "El servicio de transcripción no está disponible ahora.",
+  "Session signed out.": "Sesión cerrada.",
+  "Device disconnected.": "Dispositivo desconectado."
 }
