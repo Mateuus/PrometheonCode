@@ -18,45 +18,53 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # O título do PR vira a mensagem do squash merge — precisa ser
-      # um Conventional Commit válido.
-      - uses: amannn/action-semantic-pull-request@v5
+      # O título do PR vira a mensagem do merge — precisa ser um Conventional
+      # Commit válido. O título vem do payload do evento: validar sem chamar a
+      # API mantém o job independente de permissão de token, como os demais
+      # jobs deste arquivo.
+      - name: Validar o título como Conventional Commit
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          types: |
-            feat
-            fix
-            docs
-            refactor
-            perf
-            test
-            build
-            ci
-            chore
-            revert
-          scopes: |
-            extension
-            server
-            webview
-            agents
-            chat
-            permissions
-            workspace
-            hub
-            docs
-            deps
-            deps-dev
-            ci
-            release
-          requireScope: false
-          subjectPattern: ^(?![A-Z])(?!.*\.$).{1,72}$
-          subjectPatternError: |
-            O assunto "{subject}" do título não está no formato esperado.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          types='feat|fix|docs|refactor|perf|test|build|ci|chore|revert'
+          scopes='extension|server|webview|agents|chat|permissions|workspace'
+          scopes="$scopes|hub|hub-api|hub-web|hub-worker|infra|cli"
+          scopes="$scopes|repo|scripts|docs|deps|deps-dev|ci|release"
 
-            Regras: começa em minúscula, no imperativo, sem ponto final, até 72 caracteres.
-            Exemplo: feat(chat): persiste conversa local no workspaceState
-          wip: true
+          explicar() {
+            echo "::error::$1"
+            echo "::error::Formato: <tipo>(<escopo opcional>): <assunto>"
+            echo "::error::Tipos: ${types//|/, }"
+            echo "::error::Escopos: ${scopes//|/, }"
+            echo "::error::Assunto: começa em minúscula, no imperativo, sem ponto final, até 72 caracteres."
+            echo "::error::Exemplo: feat(chat): persiste conversa local no workspaceState"
+            exit 1
+          }
+
+          # PR ainda em rascunho declara-se no título e fica de fora.
+          if printf '%s' "$PR_TITLE" | grep -qiE '^(\[wip\]|wip:|wip )'; then
+            echo "Título marcado como WIP — validação dispensada."
+            exit 0
+          fi
+
+          if ! printf '%s' "$PR_TITLE" | grep -qE "^($types)(\(($scopes)\))?!?: .+"; then
+            explicar "O título \"$PR_TITLE\" não é um Conventional Commit válido."
+          fi
+
+          subject="${PR_TITLE#*: }"
+          if [ "${#subject}" -gt 72 ]; then
+            explicar "O assunto tem ${#subject} caracteres (máximo: 72)."
+          fi
+          # grep, e não `case`, para o intervalo A-Z não depender da collation
+          # do locale do runner.
+          if printf '%s' "$subject" | grep -qE '^[A-Z]'; then
+            explicar "O assunto \"$subject\" começa em maiúscula."
+          fi
+          if printf '%s' "$subject" | grep -qE '\.$'; then
+            explicar "O assunto \"$subject\" termina com ponto."
+          fi
+
+          echo "Título válido: $PR_TITLE"
 
   body:
     name: PR Body
