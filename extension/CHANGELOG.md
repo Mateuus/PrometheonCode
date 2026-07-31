@@ -110,6 +110,24 @@ O projeto segue [SemVer](https://semver.org/lang/pt-BR/).
   preservação do `.gitignore`, validação das mensagens da webview, recusa de
   Agent Profile sem conta vinculada, leitura de `agent-profiles.json` e
   `.mcp.json` malformados e precedência de permissões.
+- **Skills do projeto**: a extensão lê o catálogo de `.prometheon/skills/` com o
+  frontmatter validado, monta o índice por escopo e nível de risco e mostra o
+  resultado no painel. Skill malformada vira um problema reportado, nunca uma
+  correção silenciosa.
+- **Papéis nomeados** para os Agent Profiles, com precedência projeto → Hub →
+  máquina. Papel malformado é descartado inteiro; agente cujo papel sumiu é
+  avisado, e não reapontado para outro.
+- **Catálogo de modelos** lido de `media/models.json` — acrescentar ou corrigir
+  um modelo deixou de exigir mudança de código.
+- **Web Chat pelo Hub**: sessões, mensagens e histórico pela API do Hub, com os
+  eventos chegando em tempo real por WebSocket em vez de polling.
+- **Grafo do projeto**, configurável e reconstruído sob demanda. O custo do
+  rebuild é anunciado antes de disparar, porque a reconstrução é cara.
+- **Política de commit** do projeto, aplicada ao que o agente pode commitar.
+- **Console do agente** no painel: a saída integral de cada passo fica guardada
+  junto da sessão que a produziu. A conversa continua guardando a versão
+  truncada, mas a contagem de linhas é da saída inteira e o original permanece
+  recuperável.
 
 ### Notas
 
