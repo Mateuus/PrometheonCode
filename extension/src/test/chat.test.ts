@@ -427,6 +427,61 @@ suite('Chat', () => {
     assert.equal(step?.truncated, true);
   });
 
+  test('a contagem de linhas é da saída inteira, não do pedaço guardado', async () => {
+    // 900 linhas passam do teto de caracteres. Se a contagem fosse feita depois
+    // do corte, o rótulo mentiria o tamanho justamente quando ele importa.
+    const long = Array.from({ length: 900 }, (_value, index) => `line ${index}`).join('\n');
+    const { chat, conversationId } = await scriptedChat([
+      { type: 'tool.requested', toolId: 't1', tool: 'Bash', title: 'npm test' },
+      { type: 'tool.completed', toolId: 't1', output: long },
+      { type: 'completed', text: 'ok' },
+    ]);
+
+    for await (const _event of chat.sendMessage({
+      conversationId,
+      content: 'roda',
+      workMode: 'edit',
+      autonomy: 'auto',
+      mainAgentId: 'scripted',
+    })) {
+      // consome o stream até o fim
+    }
+
+    const step = (await chat.getMessages(conversationId))[1]?.steps?.[0];
+    assert.equal(step?.outputLines, 900);
+    assert.equal(step?.truncated, true);
+    // Sem `ToolOutputStore` (é o caso nos testes) não há cópia integral, e a
+    // interface não pode oferecer um botão que abriria uma aba vazia.
+    assert.equal(step?.fullOutput, undefined);
+  });
+
+  test('cada passo diz de qual sessão de agente veio', async () => {
+    const { chat, conversationId } = await scriptedChat([
+      { type: 'tool.requested', toolId: 't1', tool: 'Read', title: 'a.ts' },
+      { type: 'tool.completed', toolId: 't1', output: 'ok' },
+      { type: 'completed', text: 'pronto' },
+    ]);
+
+    const sessions = new Set<string>();
+    for await (const event of chat.sendMessage({
+      conversationId,
+      content: 'lê',
+      workMode: 'edit',
+      autonomy: 'auto',
+      mainAgentId: 'scripted',
+    })) {
+      if (event.type === 'agent.status') {
+        sessions.add(event.agent.sessionId);
+      }
+    }
+
+    const step = (await chat.getMessages(conversationId))[1]?.steps?.[0];
+    assert.ok(step?.sessionId !== undefined, 'o passo precisa carregar a sessão');
+    // É a mesma sessão anunciada em `agent.status`: sem isso, o console por
+    // agente não teria como ligar o passo ao agente que aparece na lista.
+    assert.ok(sessions.has(step?.sessionId ?? ''));
+  });
+
   test('um passo em andamento é fechado quando o run falha', async () => {
     const { chat, conversationId } = await scriptedChat([
       { type: 'tool.requested', toolId: 't1', tool: 'Bash', title: 'npm run build' },
@@ -626,5 +681,60 @@ suite('Chat', () => {
 
     const summaries = await api.localChat.listConversations();
     assert.ok(summaries.some((summary) => summary.id === conversation.id));
+  });
+
+  test('excluir a sessão tira a conversa do histórico junto com as mensagens', async () => {
+    const api = await getApi();
+    const conversation = await api.localChat.createConversation({ chatType: 'local' });
+
+    for await (const event of api.localChat.sendMessage({
+      conversationId: conversation.id,
+      content: 'algo',
+      workMode: 'plan',
+      autonomy: 'manual',
+      mainAgentId: 'mock',
+    })) {
+      autoAnswer(api.localChat, event);
+    }
+
+    await api.localChat.deleteConversation(conversation.id);
+
+    const summaries = await api.localChat.listConversations();
+    assert.ok(
+      !summaries.some((summary) => summary.id === conversation.id),
+      'a sessão excluída continuou no histórico',
+    );
+    await assert.rejects(() => api.localChat.getMessages(conversation.id));
+  });
+
+  test('excluir uma sessão que não existe não lança', async () => {
+    const api = await getApi();
+    await api.localChat.deleteConversation('conv_que_nunca_existiu');
+  });
+
+  test('o uso reporta o turno mais pesado, e não a soma, como contexto', async () => {
+    const api = await getApi();
+    const conversation = await api.localChat.createConversation({ chatType: 'local' });
+    let lastUsage = 0;
+    let lastContext = 0;
+
+    for await (const event of api.localChat.sendMessage({
+      conversationId: conversation.id,
+      content: 'conta os tokens',
+      workMode: 'edit',
+      autonomy: 'auto',
+      mainAgentId: 'mock',
+    })) {
+      autoAnswer(api.localChat, event);
+      if (event.type === 'run.usage') {
+        lastUsage = event.usage.input;
+        lastContext = event.contextTokens ?? 0;
+      }
+    }
+
+    // A soma cresce a cada turno; o contexto é o maior turno isolado. Com mais
+    // de um turno, confundir os dois faria a barra encher cedo demais.
+    assert.ok(lastContext > 0, 'esperava alguma estimativa de contexto');
+    assert.ok(lastContext <= lastUsage, 'o contexto não pode passar da soma do run');
   });
 });
