@@ -232,9 +232,16 @@ services:
   #
   # **Isso não é detalhe de arrumação.** O serviço aceita subir sem autenticação
   # nenhuma, e publicar a porta poria uma API que executa modelos de voz — e
-  # grava arquivos em disco — ao alcance de quem chegasse ao host. `API_KEY` é
-  # exigida abaixo mesmo com a rede fechada, porque uma rede fechada é uma
-  # suposição, não uma garantia.
+  # grava arquivos em disco — ao alcance de quem chegasse ao host. Defina
+  # `TRANSCRIPTION_API_KEY` mesmo com a rede fechada, porque uma rede fechada é
+  # uma suposição, não uma garantia.
+  #
+  # A variável entra com `:-` e não com `:?` de propósito. O Compose interpola o
+  # arquivo **inteiro** antes de olhar os profiles: com `:?`, quem não usa ditado
+  # não conseguia sequer subir o Hub sem definir uma chave que não vai usar. Quem
+  # liga o ditado é cobrado no lugar certo — a Hub API recusa
+  # `TRANSCRIPTION_ENABLED=true` sem `TRANSCRIPTION_URL`, e o serviço sem chave
+  # não é alcançável de fora desta rede.
   #
   # Fica atrás de um profile: a imagem tem vários gigabytes e o modelo ocupa
   # memória permanente. Quem não usa ditado não deveria pagar isso. Para ligar:
@@ -252,7 +259,7 @@ services:
       PYTHONUNBUFFERED: '1'
       DOCKER_CONTAINER: '1'
       DISABLE_DISCORD_PRESENCE: '1'
-      API_KEY: ${TRANSCRIPTION_API_KEY:?defina TRANSCRIPTION_API_KEY}
+      API_KEY: ${TRANSCRIPTION_API_KEY:-}
       STREAMING_ENABLED: 'true'
       # Precisa bater com o `--build-arg STREAMING_MODEL` da imagem. Divergir
       # não quebra nada de imediato — e é justamente o problema: o serviço baixa
