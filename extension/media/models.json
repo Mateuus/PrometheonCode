@@ -1,0 +1,53 @@
+{
+  "$comment": [
+    "Modelos que a interface oferece por provedor.",
+    "",
+    "É uma conveniência, não uma trava: o campo Model do Agent Profile continua",
+    "aceitando texto livre, porque o provedor lança modelo sem avisar e o",
+    "Prometheon não deve ser o motivo de você não conseguir usar o mais novo.",
+    "",
+    "Para acrescentar um modelo sem esperar por uma versão da extensão, crie",
+    "~/.prometheon/models.json com o mesmo formato. O que estiver lá é mesclado",
+    "por cima deste arquivo, provedor a provedor: um id repetido tem os rótulos",
+    "substituídos e um id novo entra no fim da lista.",
+    "",
+    "`id` é o que vai para a linha de comando do CLI, exatamente como está aqui.",
+    "`label` e `hint` são só para a tela."
+  ],
+  "version": 1,
+  "providers": {
+    "claude-code": [
+      { "id": "claude-opus-5", "label": "Opus 5", "hint": "1M · coding e agentes" },
+      { "id": "claude-fable-5", "label": "Fable 5", "hint": "1M · o mais capaz" },
+      { "id": "claude-sonnet-5", "label": "Sonnet 5", "hint": "1M · equilíbrio" },
+      { "id": "claude-opus-4-8", "label": "Opus 4.8", "hint": "1M · geração anterior" },
+      { "id": "claude-opus-4-7", "label": "Opus 4.7", "hint": "1M · geração anterior" },
+      { "id": "claude-opus-4-6", "label": "Opus 4.6", "hint": "1M · geração anterior" },
+      { "id": "claude-sonnet-4-6", "label": "Sonnet 4.6", "hint": "1M · geração anterior" },
+      { "id": "claude-haiku-4-5", "label": "Haiku 4.5", "hint": "200K · o mais rápido" }
+    ],
+    "codex-cli": [
+      { "id": "gpt-5.6-sol", "label": "Sol", "hint": "Flagship · coding complexo e agentes" },
+      { "id": "gpt-5.6-terra", "label": "Terra", "hint": "Equilibrado · tarefas do dia a dia" },
+      { "id": "gpt-5.6-luna", "label": "Luna", "hint": "Rápido · econômico e alto volume" },
+      { "id": "gpt-5.6", "label": "GPT-5.6", "hint": "Atual · agente de propósito geral" },
+      { "id": "gpt-5.5", "label": "GPT-5.5", "hint": "Anterior · coding e raciocínio avançado" },
+      { "id": "gpt-5.4", "label": "GPT-5.4", "hint": "Legado · coding, ferramentas e agentes" },
+      { "id": "gpt-5.4-mini", "label": "GPT-5.4 Mini", "hint": "Legado · rápido e econômico" }
+    ],
+    "gemini-cli": [
+      { "id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "hint": "O mais capaz" },
+      { "id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "hint": "Rápido e barato" }
+    ],
+    "kimi-cli": [
+      { "id": "kimi-k3", "label": "Kimi K3", "hint": "1M · flagship, coding e agentes" },
+      { "id": "kimi-k2.7-code", "label": "Kimi K2.7 Code", "hint": "256K · programação e agentes" },
+      {
+        "id": "kimi-k2.7-code-highspeed",
+        "label": "Kimi K2.7 Code High-Speed",
+        "hint": "256K · coding rápido, até 260 tok/s"
+      },
+      { "id": "kimi-k2.6", "label": "Kimi K2.6", "hint": "256K · geral, multimodal e agentes" }
+    ]
+  }
+}
