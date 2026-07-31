@@ -54,6 +54,16 @@ export class PrometheonViewProvider implements vscode.WebviewViewProvider, vscod
     this.post({ type: 'state.snapshot', payload: this.core.snapshot });
   }
 
+  /**
+   * Refaz o HTML das views abertas. O texto da interface viaja junto dele, então
+   * trocar o idioma exige reconstruir — não há como traduzir o que já foi.
+   */
+  refresh(): void {
+    for (const view of this.views) {
+      view.webview.html = renderWebviewHtml(view.webview, this.extensionUri);
+    }
+  }
+
   post(message: ExtensionToWebviewMessage): void {
     for (const view of this.views) {
       void view.webview.postMessage(message);

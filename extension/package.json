@@ -1,7 +1,7 @@
 {
   "name": "prometheon-code",
-  "displayName": "Prometheon Code",
-  "description": "Coordinate multiple AI coding agents from one workspace.",
+  "displayName": "%extension.displayName%",
+  "description": "%extension.description%",
   "version": "0.0.1",
   "publisher": "prometheon",
   "license": "MIT",
@@ -41,14 +41,14 @@
         {
           "id": "prometheon",
           "title": "Prometheon",
-          "icon": "media/prometheon-view.svg"
+          "icon": "media/prometheon-view-mono.svg"
         }
       ],
       "secondarySidebar": [
         {
           "id": "prometheon-secondary",
           "title": "Prometheon",
-          "icon": "media/prometheon-view.svg"
+          "icon": "media/prometheon-view-mono.svg"
         }
       ]
     },
@@ -58,7 +58,7 @@
           "type": "webview",
           "id": "prometheon.chatView",
           "name": "Prometheon",
-          "icon": "media/prometheon-view.svg"
+          "icon": "media/prometheon-view-mono.svg"
         }
       ],
       "prometheon-secondary": [
@@ -66,61 +66,77 @@
           "type": "webview",
           "id": "prometheon.chatViewSecondary",
           "name": "Prometheon",
-          "icon": "media/prometheon-view.svg"
+          "icon": "media/prometheon-view-mono.svg"
         }
       ]
     },
     "commands": [
       {
         "command": "prometheon.openChat",
-        "title": "Open Chat",
+        "title": "%command.openChat%",
         "category": "Prometheon"
       },
       {
         "command": "prometheon.newLocalChat",
-        "title": "New Local Chat",
+        "title": "%command.newLocalChat%",
         "category": "Prometheon",
         "icon": "$(add)"
       },
       {
         "command": "prometheon.configureWorkspace",
-        "title": "Configure Workspace",
+        "title": "%command.configureWorkspace%",
         "category": "Prometheon"
       },
       {
         "command": "prometheon.initializeWorkspace",
-        "title": "Initialize Workspace",
+        "title": "%command.initializeWorkspace%",
         "category": "Prometheon"
       },
       {
         "command": "prometheon.selectMainAgent",
-        "title": "Select Main Agent",
+        "title": "%command.selectMainAgent%",
         "category": "Prometheon"
       },
       {
         "command": "prometheon.selectWorkMode",
-        "title": "Select Work Mode",
+        "title": "%command.selectWorkMode%",
         "category": "Prometheon"
       },
       {
         "command": "prometheon.selectAutonomy",
-        "title": "Select Autonomy",
+        "title": "%command.selectAutonomy%",
         "category": "Prometheon"
       },
       {
         "command": "prometheon.disableBypassPermissions",
-        "title": "Disable Bypass Permissions",
+        "title": "%command.disableBypassPermissions%",
+        "category": "Prometheon"
+      },
+      {
+        "command": "prometheon.openConfiguration",
+        "title": "%command.openConfiguration%",
+        "category": "Prometheon",
+        "icon": "$(account)"
+      },
+      {
+        "command": "prometheon.addAccount",
+        "title": "%command.addAccount%",
         "category": "Prometheon"
       },
       {
         "command": "prometheon.openSettings",
-        "title": "Open Settings",
+        "title": "%command.openSettings%",
         "category": "Prometheon",
         "icon": "$(gear)"
       },
       {
         "command": "prometheon.showDiagnostics",
-        "title": "Show Diagnostics",
+        "title": "%command.showDiagnostics%",
+        "category": "Prometheon"
+      },
+      {
+        "command": "prometheon.resetLocalState",
+        "title": "%command.resetLocalState%",
         "category": "Prometheon"
       }
     ],
@@ -165,6 +181,11 @@
           "command": "prometheon.showDiagnostics",
           "when": "view == prometheon.chatView || view == prometheon.chatViewSecondary",
           "group": "3_help@1"
+        },
+        {
+          "command": "prometheon.openConfiguration",
+          "when": "view == prometheon.chatView || view == prometheon.chatViewSecondary",
+          "group": "1_orchestration@5"
         }
       ],
       "commandPalette": [
@@ -177,11 +198,29 @@
     "configuration": {
       "title": "Prometheon",
       "properties": {
+        "prometheon.language": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "en",
+            "pt-br",
+            "es"
+          ],
+          "enumDescriptions": [
+            "%configuration.language.auto%",
+            "%configuration.language.en%",
+            "%configuration.language.ptbr%",
+            "%configuration.language.es%"
+          ],
+          "default": "auto",
+          "description": "%configuration.language%",
+          "order": 1
+        },
         "prometheon.hub.url": {
           "type": "string",
           "default": "",
-          "markdownDescription": "URL base do Prometheon Hub. HTTPS é obrigatório fora de `localhost`. Deixe vazio para trabalhar somente no modo local. Tokens **não** ficam aqui: eles vão para o cofre de segredos do VS Code.",
-          "order": 1
+          "markdownDescription": "%configuration.hub.url%",
+          "order": 2
         },
         "prometheon.chat.defaultType": {
           "type": "string",
@@ -190,18 +229,18 @@
             "web"
           ],
           "enumDescriptions": [
-            "Local Chat: funciona sem conta e sem servidor.",
-            "Web Chat: exige um Prometheon Hub configurado."
+            "%configuration.chat.defaultType.local%",
+            "%configuration.chat.defaultType.web%"
           ],
           "default": "local",
-          "description": "Tipo de chat aberto por padrão.",
-          "order": 2
+          "description": "%configuration.chat.defaultType%",
+          "order": 3
         },
         "prometheon.workspace.promptOnOpen": {
           "type": "boolean",
           "default": true,
-          "description": "Mostrar a tela de configuração quando a pasta aberta não tiver .prometheon/prometheon.yaml.",
-          "order": 3
+          "description": "%configuration.workspace.promptOnOpen%",
+          "order": 4
         }
       }
     }
@@ -232,5 +271,6 @@
     "eslint": "^9.39.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.4"
-  }
+  },
+  "l10n": "./l10n"
 }

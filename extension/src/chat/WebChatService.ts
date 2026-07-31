@@ -16,15 +16,15 @@ import type {
  * nenhuma conexão é simulada.
  */
 export class WebChatService implements ChatService {
-  constructor(private readonly hub: HubClient) {}
-
-  private get configured(): boolean {
-    return this.hub.getStatus().state === 'connected' && this.hub.isAuthenticated();
-  }
+  // O cliente do Hub é recebido para quando o transporte remoto existir; hoje
+  // nenhuma operação chega a usá-lo, porque todas param antes de sair da máquina.
+  constructor(_hub: HubClient) {}
 
   listConversations(): Promise<ConversationSummary[]> {
     // Listar é inofensivo: sem Hub, simplesmente não há conversas remotas.
-    return this.configured ? Promise.reject(new HubNotConfiguredError()) : Promise.resolve([]);
+    // Com Hub configurado ainda não há transporte implementado, então a lista
+    // também vem vazia — nunca simulamos sessões remotas.
+    return Promise.resolve([]);
   }
 
   createConversation(_input: CreateConversationInput): Promise<Conversation> {

@@ -1,5 +1,7 @@
 import * as assert from 'node:assert/strict';
 import * as vscode from 'vscode';
+import type { LocalChatService } from '../chat/LocalChatService';
+import type { ChatEvent } from '../chat/types';
 import { EXTENSION_ID } from '../constants';
 import type { PrometheonApi } from '../extension';
 
@@ -8,6 +10,22 @@ export async function getApi(): Promise<PrometheonApi> {
   const extension = vscode.extensions.getExtension<PrometheonApi>(EXTENSION_ID);
   assert.ok(extension, `extensão ${EXTENSION_ID} não encontrada`);
   return extension.activate();
+}
+
+/**
+ * Responde às perguntas do agente escolhendo sempre a primeira opção. O run
+ * fica parado até alguém responder, e um teste que só quer a resposta final não
+ * precisa simular a interface inteira.
+ */
+export function autoAnswer(chat: LocalChatService, event: ChatEvent): void {
+  if (event.type !== 'question.asked') {
+    return;
+  }
+  const answers = event.request.questions.map((question) => {
+    const first = question.options[0];
+    return { header: question.header, selected: first === undefined ? [] : [first.label] };
+  });
+  void chat.answerQuestion(event.request.requestId, { type: 'answered', answers });
 }
 
 export function workspaceFolder(): vscode.WorkspaceFolder {

@@ -1,5 +1,6 @@
 import type * as vscode from 'vscode';
 import type { Conversation } from '../chat/types';
+import type { UsageEntry } from '../providers/UsageTracker';
 import {
   AUTONOMY_LEVELS,
   CHAT_TYPES,
@@ -28,6 +29,24 @@ export class LocalStateStore {
 
   private get workspace(): vscode.Memento {
     return this.context.workspaceState;
+  }
+
+  /**
+   * Apaga tudo que esta extensão gravou, nos dois escopos.
+   *
+   * Cada chave é removida pelo nome, e não por uma varredura: `globalState` e
+   * `workspaceState` são compartilhados com as outras extensões, e limpar em
+   * bloco levaria junto o que não é nosso.
+   *
+   * As duas listas são percorridas mesmo quando a chave só existe num dos
+   * escopos — remover o que não está lá não custa nada, e depender de lembrar
+   * qual chave mora onde é como uma delas sobreviveria ao reset.
+   */
+  async clearAll(): Promise<void> {
+    for (const key of LOCAL_STATE_KEYS) {
+      await this.global.update(key, undefined);
+      await this.workspace.update(key, undefined);
+    }
   }
 
   getChatType(): ChatType {
@@ -93,6 +112,18 @@ export class LocalStateStore {
     return this.workspace.update(KEYS.workspaceSkipped, value);
   }
 
+  /**
+   * Contagem de tokens por perfil e dia. Fica no estado global porque as contas
+   * são da máquina, não do projeto aberto.
+   */
+  getUsageEntries(): UsageEntry[] {
+    return this.global.get<UsageEntry[]>(KEYS.usage) ?? [];
+  }
+
+  setUsageEntries(value: readonly UsageEntry[]): Thenable<void> {
+    return this.global.update(KEYS.usage, value);
+  }
+
   getExternalWorkspaceFolder(): string | null {
     return this.workspace.get<string>(KEYS.externalWorkspace) ?? null;
   }
@@ -111,8 +142,20 @@ const KEYS = {
   activeConversation: 'prometheon.local.activeConversation',
   workspaceSkipped: 'prometheon.workspace.skipped',
   externalWorkspace: 'prometheon.workspace.externalFolder',
+  usage: 'prometheon.usage.entries',
 } as const;
 
 function pick<T extends string>(value: string | undefined, allowed: readonly T[], fallback: T): T {
   return allowed.find((candidate) => candidate === value) ?? fallback;
 }
+
+/**
+ * Todas as chaves gravadas por esta extensão.
+ *
+ * Exportada para o reset conseguir apagar exatamente o que o Prometheon
+ * escreveu — nem mais, nem menos. O `globalState` e o `workspaceState` do VS
+ * Code são compartilhados, e varrer tudo levaria junto o que é de outra
+ * extensão. Chave nova precisa entrar aqui, senão sobrevive a um reset e
+ * ressuscita como configuração fantasma na instalação seguinte.
+ */
+export const LOCAL_STATE_KEYS = Object.values(KEYS);

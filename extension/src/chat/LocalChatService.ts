@@ -1,9 +1,17 @@
 import type { AgentRegistry } from '../agents/AgentRegistry';
+import {
+  questionTitle,
+  summarizeAnswers,
+  type AgentQuestionOutcome,
+} from '../agents/questions';
 import type { Logger } from '../logger';
 import type { LocalStateStore } from '../storage/LocalStateStore';
 import { PrometheonError, serializeError } from '../utils/errors';
 import { newId } from '../utils/ids';
+import type { TokenUsage } from '../providers/UsageTracker';
+import { truncateStepOutput } from './types';
 import type {
+  AgentStep,
   ChatEvent,
   ChatMessage,
   ChatService,
@@ -23,7 +31,12 @@ interface RunState {
   readonly sessionId: string;
   readonly agentId: string;
   readonly messageId: string;
+  /** Pergunta aberta neste run, esperando resposta do usuário. */
+  pendingQuestionId: string | null;
 }
+
+/** Nome de uma sessão que ainda não recebeu a primeira mensagem. */
+export const UNTITLED = 'Untitled';
 
 /**
  * Chat que funciona sem conta e sem servidor. O histórico fica em
@@ -48,7 +61,7 @@ export class LocalChatService implements ChatService {
     const now = Date.now();
     const conversation: Conversation = {
       id: newId('conv'),
-      title: input.title ?? 'Local chat',
+      title: input.title ?? UNTITLED,
       chatType: input.chatType,
       createdAt: now,
       updatedAt: now,
@@ -74,7 +87,21 @@ export class LocalChatService implements ChatService {
     if (conversation === undefined) {
       throw new ConversationNotFoundError(conversationId);
     }
-    await this.replace({ ...conversation, messages: [], messageCount: 0, updatedAt: Date.now() });
+    await this.replace({
+      ...conversation,
+      messages: [],
+      messageCount: 0,
+      title: UNTITLED,
+      updatedAt: Date.now(),
+    });
+  }
+
+  async rename(conversationId: string, title: string): Promise<void> {
+    const conversation = this.find(conversationId);
+    if (conversation === undefined) {
+      return;
+    }
+    await this.replace({ ...conversation, title });
   }
 
   async *sendMessage(input: SendMessageInput): AsyncIterable<ChatEvent> {
@@ -84,18 +111,24 @@ export class LocalChatService implements ChatService {
     }
 
     const runId = newId('run');
+    const attachments = input.attachments ?? [];
     const userMessage = await this.append(conversation.id, {
       id: newId('msg'),
       conversationId: conversation.id,
       author: 'user',
       content: input.content,
+      ...(attachments.length === 0 ? {} : { attachments }),
       status: 'sent',
       timestamp: Date.now(),
     });
+    // A sessão continua "Untitled" até a primeira mensagem dar um nome a ela.
+    if (conversation.title === UNTITLED) {
+      await this.rename(conversation.id, sessionTitle(input.content, attachments.length));
+    }
     yield { type: 'run.started', runId, message: userMessage };
 
     const adapter = this.registry.require(input.mainAgentId);
-    const task = firstLine(input.content);
+    const task = sessionTitle(input.content, attachments.length);
     const session = await adapter.start({
       workMode: input.workMode,
       autonomy: input.autonomy,
@@ -113,11 +146,13 @@ export class LocalChatService implements ChatService {
       status: 'streaming',
       timestamp: Date.now(),
     });
-    this.runs.set(runId, {
+    const run: RunState = {
       sessionId: session.id,
       agentId: adapter.id,
       messageId: agentMessage.id,
-    });
+      pendingQuestionId: null,
+    };
+    this.runs.set(runId, run);
     yield { type: 'message.created', runId, message: agentMessage };
     yield {
       type: 'agent.status',
@@ -133,9 +168,45 @@ export class LocalChatService implements ChatService {
     };
 
     let content = '';
+    /** Tokens somados enquanto o run acontece, para a interface ter o que contar. */
+    let liveUsage: TokenUsage = { input: 0, output: 0 };
+    /** Passos do agente nesta resposta, na ordem, prontos para persistir. */
+    const steps: AgentStep[] = [];
+
+    // Persistimos a cada passo, e não só no fim: recarregar a conversa no meio
+    // de um run precisa devolver o que o agente já fez.
+    const upsertStep = async (step: AgentStep): Promise<void> => {
+      const at = steps.findIndex((item) => item.id === step.id);
+      if (at === -1) {
+        steps.push(step);
+      } else {
+        steps[at] = step;
+      }
+      await this.patchMessage(conversation.id, agentMessage.id, { steps: [...steps] });
+    };
+
+    /**
+     * Fecha os passos que ficaram em andamento quando o run acabou antes da
+     * ferramenta responder. Sem isto, a bolinha ficaria pulsando para sempre.
+     */
+    const settlePending = (): AgentStep[] => {
+      const now = Date.now();
+      const closed: AgentStep[] = [];
+      steps.forEach((step, index) => {
+        if (step.status !== 'running') {
+          return;
+        }
+        const settled: AgentStep = { ...step, status: 'failed', durationMs: now - step.startedAt };
+        steps[index] = settled;
+        closed.push(settled);
+      });
+      return closed;
+    };
+
     try {
       for await (const event of adapter.send(session.id, {
         content: input.content,
+        ...(attachments.length === 0 ? {} : { attachments }),
         workMode: input.workMode,
         autonomy: input.autonomy,
       })) {
@@ -160,27 +231,152 @@ export class LocalChatService implements ChatService {
             yield { type: 'message.delta', runId, messageId: agentMessage.id, delta: event.text };
             break;
 
+          case 'tool.requested': {
+            const step: AgentStep = {
+              id: event.toolId,
+              kind: 'tool',
+              tool: event.tool,
+              title: event.title,
+              ...(event.detail === undefined ? {} : { detail: event.detail }),
+              status: 'running',
+              startedAt: Date.now(),
+            };
+            await upsertStep(step);
+            yield { type: 'step.started', runId, messageId: agentMessage.id, step };
+            break;
+          }
+
+          case 'tool.completed': {
+            const started = steps.find((item) => item.id === event.toolId);
+            const startedAt = started?.startedAt ?? Date.now();
+            const detail = event.detail ?? started?.detail;
+            const output = event.output === undefined ? null : truncateStepOutput(event.output);
+            const step: AgentStep = {
+              id: event.toolId,
+              kind: 'tool',
+              tool: started?.tool ?? 'Tool',
+              title: started?.title ?? '',
+              ...(detail === undefined ? {} : { detail }),
+              ...(output === null
+                ? {}
+                : {
+                    output: output.output,
+                    ...(output.truncated ? { truncated: true } : {}),
+                  }),
+              status: event.failed === true ? 'failed' : 'done',
+              startedAt,
+              durationMs: Date.now() - startedAt,
+            };
+            await upsertStep(step);
+            yield { type: 'step.completed', runId, messageId: agentMessage.id, step };
+            break;
+          }
+
+          case 'usage':
+            liveUsage = {
+              input: liveUsage.input + Math.max(0, event.delta.input),
+              output: liveUsage.output + Math.max(0, event.delta.output),
+            };
+            yield { type: 'run.usage', runId, usage: liveUsage };
+            break;
+
+          case 'question.asked': {
+            // O passo nasce em andamento e só fecha quando a resposta chega:
+            // é ele que registra a pergunta no histórico da conversa.
+            run.pendingQuestionId = event.request.requestId;
+            const step: AgentStep = {
+              id: event.request.requestId,
+              kind: 'question',
+              tool: 'Question',
+              title: questionTitle(event.request),
+              status: 'running',
+              startedAt: Date.now(),
+            };
+            await upsertStep(step);
+            yield { type: 'step.started', runId, messageId: agentMessage.id, step };
+            yield {
+              type: 'question.asked',
+              runId,
+              messageId: agentMessage.id,
+              request: event.request,
+            };
+            break;
+          }
+
+          case 'question.answered': {
+            if (run.pendingQuestionId === event.requestId) {
+              run.pendingQuestionId = null;
+            }
+            const asked = steps.find((item) => item.id === event.requestId);
+            const startedAt = asked?.startedAt ?? Date.now();
+            const step: AgentStep = {
+              id: event.requestId,
+              kind: 'question',
+              tool: 'Question',
+              title: asked?.title ?? '',
+              detail: summarizeAnswers(event.outcome),
+              status: event.outcome.type === 'cancelled' ? 'failed' : 'done',
+              startedAt,
+              durationMs: Date.now() - startedAt,
+            };
+            await upsertStep(step);
+            yield { type: 'step.completed', runId, messageId: agentMessage.id, step };
+            yield { type: 'question.closed', runId, requestId: event.requestId };
+            break;
+          }
+
+          case 'thought': {
+            // Raciocínio chega já concluído: só o par tempo/ordem interessa.
+            const step: AgentStep = {
+              id: newId('step'),
+              kind: 'thought',
+              tool: 'Thought',
+              title: '',
+              status: 'done',
+              startedAt: Date.now() - event.durationMs,
+              durationMs: event.durationMs,
+            };
+            await upsertStep(step);
+            yield { type: 'step.completed', runId, messageId: agentMessage.id, step };
+            break;
+          }
+
           case 'completed':
             content = event.text;
             await this.patchMessage(conversation.id, agentMessage.id, {
               content,
               status: 'sent',
+              ...(event.usage === undefined ? {} : { usage: event.usage }),
             });
-            yield { type: 'message.completed', runId, messageId: agentMessage.id, content };
+            yield {
+              type: 'message.completed',
+              runId,
+              messageId: agentMessage.id,
+              content,
+              ...(event.usage === undefined ? {} : { usage: event.usage }),
+            };
             break;
 
           case 'cancelled':
+            for (const step of settlePending()) {
+              yield { type: 'step.completed', runId, messageId: agentMessage.id, step };
+            }
             await this.patchMessage(conversation.id, agentMessage.id, {
               content,
               status: 'sent',
+              steps: [...steps],
             });
             yield { type: 'run.cancelled', runId, messageId: agentMessage.id };
             break;
 
           case 'failed':
+            for (const step of settlePending()) {
+              yield { type: 'step.completed', runId, messageId: agentMessage.id, step };
+            }
             await this.patchMessage(conversation.id, agentMessage.id, {
               content,
               status: 'failed',
+              steps: [...steps],
             });
             yield { type: 'run.failed', runId, error: event.error };
             break;
@@ -188,7 +384,14 @@ export class LocalChatService implements ChatService {
       }
     } catch (error) {
       this.logger.error(`Run ${runId} falhou: ${String(error)}`);
-      await this.patchMessage(conversation.id, agentMessage.id, { content, status: 'failed' });
+      for (const step of settlePending()) {
+        yield { type: 'step.completed', runId, messageId: agentMessage.id, step };
+      }
+      await this.patchMessage(conversation.id, agentMessage.id, {
+        content,
+        status: 'failed',
+        steps: [...steps],
+      });
       yield { type: 'run.failed', runId, error: serializeError(error) };
     } finally {
       this.runs.delete(runId);
@@ -201,7 +404,37 @@ export class LocalChatService implements ChatService {
     if (run === undefined) {
       return;
     }
+    // Uma pergunta aberta some junto do run: o agente não pode ficar esperando
+    // uma resposta que a interface já não mostra.
+    if (run.pendingQuestionId !== null) {
+      await this.answerQuestion(run.pendingQuestionId, { type: 'cancelled' });
+    }
     await this.registry.require(run.agentId).interrupt(run.sessionId);
+  }
+
+  /**
+   * Entrega ao agente a resposta de uma pergunta aberta. Um `requestId` que não
+   * pertence a nenhum run em andamento é descartado — o run pode ter terminado
+   * entre o clique do usuário e a chegada da mensagem.
+   */
+  async answerQuestion(requestId: string, outcome: AgentQuestionOutcome): Promise<void> {
+    const run = [...this.runs.values()].find((item) => item.pendingQuestionId === requestId);
+    if (run === undefined) {
+      this.logger.info(`Resposta descartada: pergunta ${requestId} não está aberta.`);
+      return;
+    }
+    const adapter = this.registry.require(run.agentId);
+    if (adapter.answer === undefined) {
+      this.logger.warn(`Agente ${adapter.id} perguntou mas não sabe receber a resposta.`);
+      return;
+    }
+    run.pendingQuestionId = null;
+    await adapter.answer(run.sessionId, requestId, outcome);
+  }
+
+  /** Pergunta aberta de um run, quando há uma. */
+  pendingQuestionOf(runId: string): string | null {
+    return this.runs.get(runId)?.pendingQuestionId ?? null;
   }
 
   private find(conversationId: string): Conversation | undefined {
@@ -249,4 +482,13 @@ export class LocalChatService implements ChatService {
 function firstLine(text: string): string {
   const line = text.trim().split('\n', 1)[0] ?? '';
   return line.length > 60 ? `${line.slice(0, 57)}...` : line;
+}
+
+/** Nome da sessão derivado da primeira mensagem; imagens sozinhas também nomeiam. */
+function sessionTitle(content: string, attachmentCount: number): string {
+  const line = firstLine(content);
+  if (line !== '') {
+    return line;
+  }
+  return attachmentCount === 1 ? '1 image' : `${attachmentCount} images`;
 }

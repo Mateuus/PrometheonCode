@@ -45,8 +45,24 @@ Nada é comitado nem enviado sem pedido explícito do desenvolvedor.
 
 ## Idioma
 
-Código, identificadores e a interface do produto em **inglês**. Comentários,
-documentação, mensagens de commit e conversas em **português (pt-BR)**.
+Código, identificadores e as strings-fonte da interface em **inglês**.
+Comentários, documentação, mensagens de commit e conversas em
+**português (pt-BR)**.
+
+A interface é **localizada** em `en`, `pt-br` e `es`:
+
+- Texto do manifest (`package.json`) usa `%chave%`, definida em
+  `package.nls.json` (inglês, base) e traduzida em `package.nls.pt-br.json` e
+  `package.nls.es.json`. As três precisam ter exatamente as mesmas chaves.
+- Texto do código da extensão usa `t()` de `src/i18n`, que envolve
+  `vscode.l10n`. A chave é a própria frase em inglês; as traduções ficam em
+  `l10n/bundle.l10n.<locale>.json`.
+- Texto da webview vem de `src/i18n/catalog.ts`. A webview não alcança
+  `vscode.l10n`, então o dicionário é resolvido na extensão e entregue junto do
+  HTML — nada de string solta no cliente.
+
+Toda frase nova na interface exige entrada nos bundles dos idiomas suportados;
+os testes de `src/test/i18n.test.ts` reprovam se faltar alguma.
 
 ## Estrutura
 

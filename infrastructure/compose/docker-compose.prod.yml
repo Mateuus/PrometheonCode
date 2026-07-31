@@ -1,0 +1,287 @@
+# Prometheon Hub — produção.
+#
+# O reverse proxy não roda neste host — fica noutra máquina da rede. Por isso a
+# API e o web precisam escutar num endereço que o proxy alcance, e `127.0.0.1`
+# não serve: o loopback deste servidor é invisível para qualquer outro.
+#
+# `BIND_ADDRESS` existe para essa escolha ser explícita. Com o proxy no mesmo
+# host, use `127.0.0.1`; com ele noutra máquina, o IP da LAN deste servidor —
+# nunca `0.0.0.0`, que publicaria também em interfaces que você não pretendia.
+#
+# Isso é mais do que higiene. A API roda com `trustProxy: true`, que ela precisa
+# para ler o IP real repassado em `X-Forwarded-For` — sem isso o rate limit por
+# IP trataria todo mundo como um endereço só, e a primeira pessoa a errar a
+# senha travaria as demais. O preço é que ela **confia** nesse cabeçalho: quem
+# alcança a porta diretamente forja o IP que quiser e contorna todos os tetos.
+#
+# Com o proxy noutra máquina, o endereço não basta: é preciso uma regra de
+# firewall aceitando essas portas **apenas** do IP do proxy. Está no README.
+#
+# MySQL e Redis não publicam porta nenhuma: falam só pela rede interna.
+
+name: prometheon-hub
+
+# Os três serviços da aplicação e as migrations saem da mesma imagem.
+#
+# A âncora existe para que **qualquer um deles** consiga reconstruí-la. Com a
+# seção `build` declarada só em `migrate`, um `docker compose build web` não
+# fazia nada — sem erro e sem aviso — e o deploy seguia com a imagem antiga
+# enquanto todo mundo achava que tinha atualizado.
+x-hub-app: &hub-app
+  build:
+    context: ../..
+    dockerfile: infrastructure/docker/Dockerfile
+  image: prometheon-hub:latest
+
+services:
+  # -------------------------------------------------------------------------
+  # Dados
+  # -------------------------------------------------------------------------
+
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    command:
+      # O schema foi criado com esta collation; deixar o servidor divergir faria
+      # comparações de texto se comportarem diferente entre tabelas.
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      # O Hub grava instantes com milissegundos e sempre em UTC.
+      - --default-time-zone=+00:00
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?defina MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DATABASE_NAME:?defina DATABASE_NAME}
+      MYSQL_USER: ${DATABASE_USER:?defina DATABASE_USER}
+      MYSQL_PASSWORD: ${DATABASE_PASSWORD:?defina DATABASE_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      # `mysqladmin ping` responde antes de o banco aceitar conexão de verdade
+      # na primeira subida; o `--silent` com credencial confere o caminho todo.
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-u', 'root', '-p${MYSQL_ROOT_PASSWORD}']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Senha obrigatória mesmo em rede interna: Redis sem autenticação aceita
+    # comandos que gravam arquivo no disco do container, e é o alvo favorito de
+    # quem já conseguiu executar qualquer coisa dentro da rede.
+    command: ['redis-server', '--requirepass', '${VALKEY_PASSWORD:?defina VALKEY_PASSWORD}', '--appendonly', 'yes']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', '${VALKEY_PASSWORD}', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    networks: [internal]
+
+  # -------------------------------------------------------------------------
+  # Migrations
+  # -------------------------------------------------------------------------
+
+  # Roda uma vez e sai. A API só sobe depois que este serviço terminar com
+  # sucesso — subir a API antes das migrations deixaria o Hub respondendo 500
+  # em tudo enquanto alguém tenta entender o que houve.
+  #
+  # O seed vem junto, e não é opcional: ele cria os papéis, as permissões e o
+  # plano padrão. Sem plano, o primeiro cadastro falha com "No default plan is
+  # configured" — um 500 numa instalação recém-migrada, que parece defeito e é
+  # só um passo que faltou. Ele é idempotente e pode rodar a cada subida.
+  migrate:
+    <<: *hub-app
+    restart: 'no'
+    command:
+      - sh
+      - -c
+      - 'node packages/database/dist/migrate.js && node packages/database/dist/seed.js'
+    env_file: [.env]
+    environment:
+      DATABASE_HOST: mysql
+      VALKEY_URL: redis://:${VALKEY_PASSWORD}@redis:6379
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks: [internal]
+
+  # -------------------------------------------------------------------------
+  # Aplicação
+  # -------------------------------------------------------------------------
+
+  api:
+    <<: *hub-app
+    restart: unless-stopped
+    command: ['node', 'apps/hub-api/dist/server.js']
+    env_file: [.env]
+    environment:
+      DATABASE_HOST: mysql
+      VALKEY_URL: redis://:${VALKEY_PASSWORD}@redis:6379
+      # O nome precisa ser o do certificado, senão o TLS recusa por divergência
+      # de host. O alias de rede do mailserver faz este nome resolver aqui dentro.
+      SMTP_HOST: ${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}
+      SMTP_PORT: '587'
+      # Confia na CA que assinou o certificado interno do servidor de e-mail, em
+      # vez de desligar a verificação de TLS.
+      #
+      # `NODE_TLS_REJECT_UNAUTHORIZED=0` resolveria numa linha e seria um
+      # desastre: valeria para **todas** as conexões do processo, e o Hub também
+      # fala com o GitHub e com o R2 — um proxy no meio do caminho passaria sem
+      # ninguém notar. Acrescentar uma CA específica mantém o resto verificado.
+      #
+      # Com um certificado público (Let's Encrypt), esta variável deixa de ser
+      # necessária; apontá-la para um arquivo ausente só gera um aviso.
+      NODE_EXTRA_CA_CERTS: /etc/ssl/prometheon/cacert.pem
+    volumes:
+      # Só a CA, somente leitura. A chave privada dela não entra aqui.
+      - ../mail/config/ssl/demoCA/cacert.pem:/etc/ssl/prometheon/cacert.pem:ro
+    ports:
+      # Ver `BIND_ADDRESS` no topo do arquivo.
+      - '${BIND_ADDRESS:-127.0.0.1}:${HUB_API_PORT:-3551}:3551'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        # `/health/ready` fica fora do prefixo `/v1`: ele descreve o processo,
+        # não a API versionada, e não deve mudar de lugar quando a v2 chegar.
+        - "fetch('http://127.0.0.1:3551/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks: [internal]
+
+  worker:
+    <<: *hub-app
+    restart: unless-stopped
+    command: ['node', 'apps/hub-worker/dist/server.js']
+    env_file: [.env]
+    environment:
+      DATABASE_HOST: mysql
+      VALKEY_URL: redis://:${VALKEY_PASSWORD}@redis:6379
+      # O nome precisa ser o do certificado, senão o TLS recusa por divergência
+      # de host. O alias de rede do mailserver faz este nome resolver aqui dentro.
+      SMTP_HOST: ${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}
+      SMTP_PORT: '587'
+      # Confia na CA que assinou o certificado interno do servidor de e-mail, em
+      # vez de desligar a verificação de TLS.
+      #
+      # `NODE_TLS_REJECT_UNAUTHORIZED=0` resolveria numa linha e seria um
+      # desastre: valeria para **todas** as conexões do processo, e o Hub também
+      # fala com o GitHub e com o R2 — um proxy no meio do caminho passaria sem
+      # ninguém notar. Acrescentar uma CA específica mantém o resto verificado.
+      #
+      # Com um certificado público (Let's Encrypt), esta variável deixa de ser
+      # necessária; apontá-la para um arquivo ausente só gera um aviso.
+      NODE_EXTRA_CA_CERTS: /etc/ssl/prometheon/cacert.pem
+    volumes:
+      # Só a CA, somente leitura. A chave privada dela não entra aqui.
+      - ../mail/config/ssl/demoCA/cacert.pem:/etc/ssl/prometheon/cacert.pem:ro
+    # Sem `ports`: a porta de health do worker (3552) é alcançada de dentro da
+    # rede, ou por `docker compose exec`. Ela não tem por que sair daqui.
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks: [internal]
+
+  web:
+    <<: *hub-app
+    restart: unless-stopped
+    # Chama o binário do Next diretamente, e não via `pnpm exec`: o corepack
+    # tentaria baixar o pnpm na primeira execução, e o container falharia ao
+    # subir numa máquina sem saída para o registry — ou ficaria esperando por ela.
+    #
+    # `--hostname 0.0.0.0` é dentro do container; quem restringe ao loopback do
+    # host é o mapeamento de porta abaixo.
+    # `working_dir` no app: o `next start` procura o `.next` no diretório atual.
+    working_dir: /app/apps/hub-web
+    command:
+      - node
+      - /app/apps/hub-web/node_modules/next/dist/bin/next
+      - start
+      - --port
+      - '3550'
+      - --hostname
+      - 0.0.0.0
+    env_file: [.env]
+    ports:
+      - '${BIND_ADDRESS:-127.0.0.1}:${HUB_WEB_PORT:-3550}:3550'
+    depends_on:
+      api:
+        condition: service_started
+    networks: [internal]
+
+  # -------------------------------------------------------------------------
+  # SMTP
+  # -------------------------------------------------------------------------
+
+  mailserver:
+    image: mailserver/docker-mailserver:latest
+    hostname: ${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}
+    restart: unless-stopped
+    env_file: [../mail/mailserver.env]
+    environment:
+      # `letsencrypt` é o alvo. `self-signed` existe para a fase em que o DNS
+      # ainda não resolve e não há certificado a emitir: sem isso o container não
+      # sobe, e o health da API reporta SMTP indisponível por uma dependência que
+      # nem chegou a ser criada.
+      #
+      # Um certificado auto-assinado entrega e recebe normalmente entre
+      # servidores; quem reclama é o cliente de e-mail, que exibe o aviso de
+      # certificado não confiável. Troque para `letsencrypt` assim que o
+      # certificado existir.
+      SSL_TYPE: ${MAIL_SSL_TYPE:-letsencrypt}
+    ports:
+      # 25 — recebimento entre servidores. É por onde chega tanto a mensagem que
+      # alguém manda para `mateus@`, quanto a devolução de um envio recusado.
+      - '25:25'
+      # 587 — envio autenticado a partir de um cliente de e-mail. Precisa ser
+      # pública: é a porta que o Thunderbird e o celular usam para mandar. A API
+      # não passa por aqui, fala pela rede interna.
+      - '587:587'
+      # 993 — leitura da caixa (IMAP sobre TLS). Sem ela, a mensagem chega e
+      # fica gravada dentro do container, sem forma de abrir.
+      - '993:993'
+    volumes:
+      - mail-data:/var/mail
+      - mail-state:/var/mail-state
+      - mail-logs:/var/log/mail
+      - ../mail/config/:/tmp/docker-mailserver/
+      # Certificado do host, quando existir. `MAIL_CERT_DIR` aponta para onde o
+      # seu proxy o mantém — com o aaPanel noutra máquina, é preciso copiá-lo ou
+      # emitir um aqui. Enquanto não houver, `MAIL_SSL_TYPE=self-signed` e este
+      # volume aponta para um diretório vazio, sem efeito.
+      - ${MAIL_CERT_DIR:-/opt/prometheon/certs}/:/etc/letsencrypt/live/${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}/:ro
+    cap_add:
+      - NET_ADMIN
+    networks:
+      internal:
+        # O certificado é emitido para o nome público. Sem este alias, a API
+        # teria de conectar em `mailserver` e o TLS falharia por divergência —
+        # e desligar a verificação para contornar seria pior que o problema.
+        aliases:
+          - ${MAIL_HOSTNAME:-smtp.prometheoncode.xyz}
+
+volumes:
+  mysql-data:
+  redis-data:
+  mail-data:
+  mail-state:
+  mail-logs:
+
+networks:
+  internal:
+    driver: bridge

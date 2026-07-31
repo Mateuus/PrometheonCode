@@ -1,18 +1,44 @@
 import * as vscode from 'vscode';
+import type { AgentProfileService } from '../agents/AgentProfileService';
 import type { AgentRegistry } from '../agents/AgentRegistry';
+import {
+  answerValues,
+  type AgentQuestionAnswer,
+  type AgentQuestionRequest,
+} from '../agents/questions';
 import type { LocalChatService } from '../chat/LocalChatService';
 import type { WebChatService } from '../chat/WebChatService';
-import type { ChatMessage } from '../chat/types';
+import { UNTITLED } from '../chat/LocalChatService';
+import {
+  IMAGE_MIME_TYPES,
+  type ChatMessage,
+  type ConversationSummary,
+  type ImageAttachment,
+  type ImageMimeType,
+} from '../chat/types';
 import type { HubClient } from '../hub/types';
 import type { Logger } from '../logger';
 import type { PermissionService } from '../permissions/PermissionService';
+import type { SpeechService } from '../speech/SpeechService';
+import type { ProviderProfileService } from '../providers/ProviderProfileService';
+import type { UsageTracker } from '../providers/UsageTracker';
 import type { LocalStateStore } from '../storage/LocalStateStore';
 import type { SettingsStore } from '../storage/SettingsStore';
+import type { McpConfigStore } from '../workspace/McpConfigStore';
 import type { WorkspaceInitializer } from '../workspace/WorkspaceInitializer';
 import type { WorkspaceService } from '../workspace/WorkspaceService';
+import { applyLanguage, isLanguageChoice, languageChoice, type LanguageChoice } from '../i18n';
 import { HubNotConfiguredError, serializeError } from '../utils/errors';
+import { newId } from '../utils/ids';
 import { parseHubUrl } from '../hub/HubClient';
-import type { WebviewToExtensionMessage, WorkspaceSetupChoice } from '../views/messages';
+import {
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENT_BYTES,
+  type AgentProfileDraft,
+  type DraftAttachment,
+  type WebviewToExtensionMessage,
+  type WorkspaceSetupChoice,
+} from '../views/messages';
 import type { EventBus } from './EventBus';
 import type { PrometheonViewState } from './state';
 import {
@@ -35,10 +61,22 @@ import {
   type BypassGrant,
   type BypassScope,
   type ChatType,
+  type AccountSummary,
+  type ActivityStatus,
+  type AgentProfileSummary,
   type HubConnectionStatus,
+  type McpServerDraft,
+  type McpStatus,
+  type ProviderOption,
+  type SpeechStatus,
   type WorkMode,
   type WorkspaceStatus,
 } from './types';
+
+/** Motivo mostrado na interface enquanto nenhum motor de voz está registrado. */
+const NO_SPEECH_ENGINE = 'No speech engine configured yet.';
+
+const IDLE_ACTIVITY: ActivityStatus = { phase: 'idle', label: '', startedAt: null };
 
 export interface PrometheonCoreDeps {
   readonly extensionVersion: string;
@@ -49,6 +87,11 @@ export interface PrometheonCoreDeps {
   readonly webChat: WebChatService;
   readonly hub: HubClient;
   readonly permissions: PermissionService;
+  readonly speech: SpeechService;
+  readonly profiles: ProviderProfileService;
+  readonly agentProfiles: AgentProfileService;
+  readonly mcp: McpConfigStore;
+  readonly usage: UsageTracker;
   readonly local: LocalStateStore;
   readonly settings: SettingsStore;
   readonly workspace: WorkspaceService;
@@ -70,10 +113,30 @@ export class PrometheonCore implements vscode.Disposable {
   private agents: readonly AgentSummary[] = [];
   private activeAgents: ActiveAgentSummary[] = [];
   private conversationId: string | null = null;
+  private conversationTitle: string = UNTITLED;
   private messages: readonly ChatMessage[] = [];
+  private sessions: readonly ConversationSummary[] = [];
   private busy = false;
   private currentRunId: string | null = null;
+  /** Pergunta aberta do agente; some quando é respondida ou o run acaba. */
+  private pendingQuestion: AgentQuestionRequest | null = null;
   private hubStatus: HubConnectionStatus = { state: 'local-only' };
+  private speechStatus: SpeechStatus = {
+    available: false,
+    state: 'idle',
+    detail: NO_SPEECH_ENGINE,
+  };
+  private accounts: readonly AccountSummary[] = [];
+  private agentProfiles: readonly AgentProfileSummary[] = [];
+  private mcpStatus: McpStatus = {
+    available: false,
+    exists: false,
+    file: null,
+    servers: [],
+    problems: [],
+    message: 'MCP servers are configured in .mcp.json at the root of the open folder.',
+  };
+  private activity: ActivityStatus = IDLE_ACTIVITY;
   private workspaceStatus: WorkspaceStatus = {
     configured: false,
     folderName: null,
@@ -87,6 +150,13 @@ export class PrometheonCore implements vscode.Disposable {
     this.disposables.push(
       deps.workspace.onDidChange(() => {
         void this.onWorkspaceChanged();
+      }),
+      // O idioma também pode ser trocado pelas configurações do VS Code; o
+      // painel precisa acompanhar de qualquer um dos dois lugares.
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('prometheon.language')) {
+          void this.refreshLanguage();
+        }
       }),
     );
   }
@@ -118,6 +188,9 @@ export class PrometheonCore implements vscode.Disposable {
     });
 
     this.hubStatus = this.deps.hub.getStatus();
+    await this.refreshSpeechStatus();
+    await this.refreshAccounts();
+    await this.refreshMcp();
     this.workspaceStatus = await this.deps.workspace.status();
     await this.ensureConversation();
     await this.publish();
@@ -126,6 +199,7 @@ export class PrometheonCore implements vscode.Disposable {
   get snapshot(): PrometheonViewState {
     return {
       extensionVersion: this.deps.extensionVersion,
+      language: languageChoice(),
       chatType: this.chatType,
       workMode: this.workMode,
       autonomy: this.autonomy,
@@ -134,15 +208,33 @@ export class PrometheonCore implements vscode.Disposable {
       agents: this.agents,
       activeAgents: this.activeAgents,
       hub: this.hubStatus,
+      speech: this.speechStatus,
+      accounts: this.accounts,
+      providers: this.providerOptions,
+      agentProfiles: this.agentProfiles,
+      mcp: this.mcpStatus,
+      activity: this.activity,
       workspace: this.workspaceStatus,
       conversationId: this.conversationId,
+      conversationTitle: this.conversationTitle,
       messages: this.messages,
+      sessions: this.sessions,
       busy: this.busy,
+      pendingQuestion: this.pendingQuestion,
     };
   }
 
   get isBypassActive(): boolean {
     return this.bypass !== null;
+  }
+
+  /** Provedores com adaptador registrado, como a interface os oferece. */
+  private get providerOptions(): readonly ProviderOption[] {
+    return this.deps.profiles.providers.map((adapter) => ({
+      id: adapter.providerId,
+      name: adapter.displayName,
+      configEnvironmentVariable: adapter.configEnvironmentVariable,
+    }));
   }
 
   async handleWebviewMessage(message: WebviewToExtensionMessage): Promise<void> {
@@ -152,7 +244,7 @@ export class PrometheonCore implements vscode.Disposable {
         await this.publish();
         return;
       case 'chat.send':
-        await this.send(message.payload.content);
+        await this.send(message.payload.content, message.payload.attachments);
         return;
       case 'chat.cancel':
         await this.cancel(message.payload.runId);
@@ -162,6 +254,75 @@ export class PrometheonCore implements vscode.Disposable {
         return;
       case 'chat.clearLocal':
         await this.clearLocalChat();
+        return;
+      case 'chat.openSession':
+        await this.openSession(message.payload.conversationId);
+        return;
+      case 'chat.attachImages':
+        await this.attachImages();
+        return;
+      case 'question.answer':
+        await this.answerQuestion(message.payload.requestId, message.payload.answers);
+        return;
+      case 'question.cancel':
+        await this.cancelQuestion(message.payload.requestId);
+        return;
+      case 'speech.start':
+        await this.startDictation();
+        return;
+      case 'speech.stop':
+        await this.stopDictation();
+        return;
+      case 'speech.cancel':
+        await this.cancelDictation();
+        return;
+      case 'accounts.refresh':
+        await this.refreshAccounts();
+        await this.publish();
+        return;
+      case 'accounts.create':
+        await this.createAccount(
+          message.payload.name,
+          message.payload.providerId,
+          message.payload.model,
+        );
+        return;
+      case 'agentProfiles.create':
+        await this.createAgentProfile(message.payload.profile);
+        return;
+      case 'agentProfiles.update':
+        await this.updateAgentProfile(message.payload.id, message.payload.profile);
+        return;
+      case 'agentProfiles.remove':
+        await this.removeAgentProfile(message.payload.id);
+        return;
+      case 'agentProfiles.setEnabled':
+        await this.setAgentProfileEnabled(message.payload.id, message.payload.enabled);
+        return;
+      case 'mcp.refresh':
+        await this.refreshMcp();
+        await this.publish();
+        return;
+      case 'mcp.import':
+        await this.importMcpServers();
+        return;
+      case 'mcp.save':
+        await this.saveMcpServer(message.payload.server);
+        return;
+      case 'mcp.remove':
+        await this.removeMcpServer(message.payload.name);
+        return;
+      case 'mcp.setEnabled':
+        await this.setMcpServerEnabled(message.payload.name, message.payload.enabled);
+        return;
+      case 'accounts.login':
+        await this.loginAccount(message.payload.profileId);
+        return;
+      case 'accounts.logout':
+        await this.logoutAccount(message.payload.profileId);
+        return;
+      case 'accounts.remove':
+        await this.removeAccount(message.payload.profileId);
         return;
       case 'chat.selectType':
         await this.setChatType(message.payload.chatType);
@@ -175,8 +336,11 @@ export class PrometheonCore implements vscode.Disposable {
       case 'settings.selectMainAgent':
         await this.setMainAgent(message.payload.agentId);
         return;
-      case 'settings.open':
-        await this.openSettings();
+      case 'settings.setLanguage':
+        await this.setLanguage(message.payload.language);
+        return;
+      case 'settings.openEditor':
+        await this.openSettingsEditor();
         return;
       case 'workspace.initialize':
         await this.configureWorkspace(message.payload.choice);
@@ -192,7 +356,7 @@ export class PrometheonCore implements vscode.Disposable {
 
   // ---------- Chat ----------
 
-  async send(content: string): Promise<void> {
+  async send(content: string, drafts: readonly DraftAttachment[] = []): Promise<void> {
     if (this.chatType === 'web') {
       // O contrato do Web Chat já falha por si; aqui só evitamos iniciar o run.
       this.deps.bus.emit('chat.error', serializeError(new HubNotConfiguredError()));
@@ -202,25 +366,56 @@ export class PrometheonCore implements vscode.Disposable {
       return;
     }
 
+    const attachments = drafts.map<ImageAttachment>((draft) => ({ id: newId('att'), ...draft }));
     const conversationId = await this.ensureConversation();
     this.busy = true;
+    this.setActivity('sending', 'Sending…');
     await this.publish();
 
     try {
       for await (const event of this.deps.localChat.sendMessage({
         conversationId,
         content,
+        ...(attachments.length === 0 ? {} : { attachments }),
         workMode: this.workMode,
         autonomy: this.autonomy,
         mainAgentId: this.mainAgentId,
       })) {
         if (event.type === 'agent.status') {
           this.upsertActiveAgent(event.agent);
+          this.trackActivity(event.agent.status);
           this.deps.bus.emit('agents.updated', this.activeAgents);
+          this.deps.bus.emit('activity.changed', this.activity);
           continue;
         }
         if (event.type === 'run.started') {
           this.currentRunId = event.runId;
+          this.setActivity('thinking', 'Thinking…');
+          this.deps.bus.emit('activity.changed', this.activity);
+        }
+        if (event.type === 'run.usage') {
+          // Contagem em andamento: alimenta o relógio da barra de atividade e
+          // não entra no histórico de uso, que só conta o total do fim do run.
+          this.activity = { ...this.activity, usage: event.usage };
+          this.deps.bus.emit('activity.changed', this.activity);
+        }
+        if (event.type === 'question.asked') {
+          // A pergunta entra no estado antes de ir para a interface: se a view
+          // for reconstruída enquanto o agente espera, o modal volta com ela.
+          this.pendingQuestion = event.request;
+          this.deps.bus.emit('question.ask', event.request);
+        }
+        if (event.type === 'question.closed') {
+          this.clearPendingQuestion(event.requestId);
+        }
+        if (event.type === 'message.completed' && event.usage !== undefined) {
+          // O uso é contabilizado no perfil que executou, não no agente.
+          await this.deps.usage.record(this.usageProfileId(), event.usage);
+          await this.refreshAccounts();
+          // O total do agente vence a estimativa em andamento nos últimos
+          // instantes do run, para o número exibido terminar no valor certo.
+          this.activity = { ...this.activity, usage: event.usage };
+          this.deps.bus.emit('activity.changed', this.activity);
         }
         this.deps.bus.emit('chat.event', event);
         if (event.type === 'run.failed') {
@@ -231,8 +426,12 @@ export class PrometheonCore implements vscode.Disposable {
       this.deps.logger.error(`Falha ao enviar mensagem: ${String(error)}`);
       this.deps.bus.emit('chat.error', serializeError(error));
     } finally {
+      // Um run que acabou não tem pergunta aberta, aconteça o que acontecer.
+      this.clearPendingQuestion(this.pendingQuestion?.requestId ?? null);
       this.busy = false;
       this.currentRunId = null;
+      this.activity = IDLE_ACTIVITY;
+      this.deps.bus.emit('activity.changed', this.activity);
       await this.expireOneTaskBypass();
       await this.publish();
     }
@@ -240,6 +439,73 @@ export class PrometheonCore implements vscode.Disposable {
 
   async cancel(runId: string): Promise<void> {
     await this.deps.localChat.cancel(runId);
+  }
+
+  // ---------- Idioma ----------
+
+  /**
+   * Troca o idioma do painel. A escolha vai para a configuração do usuário —
+   * é preferência de pessoa, não do projeto — e o HTML da webview é refeito,
+   * porque o texto viaja junto dele.
+   */
+  async setLanguage(choice: LanguageChoice): Promise<void> {
+    await vscode.workspace
+      .getConfiguration('prometheon')
+      .update('language', choice, vscode.ConfigurationTarget.Global);
+    await this.refreshLanguage();
+  }
+
+  /** Relê a preferência e redesenha a interface, se algo mudou. */
+  private async refreshLanguage(): Promise<void> {
+    const preferred = vscode.workspace.getConfiguration('prometheon').get<string>('language');
+    if (applyLanguage(isLanguageChoice(preferred) ? preferred : 'auto')) {
+      this.deps.bus.emit('language.changed', languageChoice());
+      await this.publish();
+    }
+  }
+
+  // ---------- Perguntas do agente ----------
+
+  /**
+   * Entrega a resposta ao agente que perguntou. A checagem aqui não é
+   * formalidade: a webview poderia mandar rótulo que ninguém ofereceu, e o
+   * agente receberia isso como se tivesse vindo do usuário.
+   */
+  async answerQuestion(
+    requestId: string,
+    answers: readonly AgentQuestionAnswer[],
+  ): Promise<void> {
+    const request = this.pendingQuestion;
+    if (request === null || request.requestId !== requestId) {
+      this.deps.logger.warn(`Resposta para uma pergunta que não está aberta: ${requestId}.`);
+      return;
+    }
+    if (!matchesRequest(request, answers)) {
+      this.deps.logger.warn(`Resposta descartada: não corresponde à pergunta ${requestId}.`);
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: 'The answer did not match the question and was discarded.',
+      });
+      return;
+    }
+    await this.deps.localChat.answerQuestion(requestId, { type: 'answered', answers });
+  }
+
+  /** O usuário fechou o modal: o agente recebe "cancelado" e segue o run. */
+  async cancelQuestion(requestId: string): Promise<void> {
+    if (this.pendingQuestion?.requestId !== requestId) {
+      return;
+    }
+    await this.deps.localChat.answerQuestion(requestId, { type: 'cancelled' });
+  }
+
+  /** Tira a pergunta do estado e fecha o modal, se ainda for a mesma. */
+  private clearPendingQuestion(requestId: string | null): void {
+    if (requestId === null || this.pendingQuestion?.requestId !== requestId) {
+      return;
+    }
+    this.pendingQuestion = null;
+    this.deps.bus.emit('question.close', requestId);
   }
 
   async stopAgent(sessionId: string): Promise<void> {
@@ -255,9 +521,84 @@ export class PrometheonCore implements vscode.Disposable {
   async newLocalChat(): Promise<void> {
     const conversation = await this.deps.localChat.createConversation({ chatType: 'local' });
     this.conversationId = conversation.id;
+    this.conversationTitle = conversation.title;
     this.activeAgents = [];
     await this.setChatType('local');
     await this.publish();
+  }
+
+  /** Abre uma sessão já existente do histórico local. */
+  async openSession(conversationId: string): Promise<void> {
+    if (this.busy) {
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: 'Wait for the current run to finish before switching sessions.',
+      });
+      return;
+    }
+    const session = (await this.deps.localChat.listConversations()).find(
+      (item) => item.id === conversationId,
+    );
+    if (session === undefined) {
+      this.deps.bus.emit('notification', { level: 'warning', message: 'Session not found.' });
+      return;
+    }
+    this.conversationId = session.id;
+    this.conversationTitle = session.title;
+    this.activeAgents = [];
+    await this.deps.local.setActiveConversationId(session.id);
+    if (this.chatType !== session.chatType) {
+      await this.setChatType(session.chatType);
+      return;
+    }
+    await this.publish();
+  }
+
+  /**
+   * Escolhe imagens em disco e devolve os bytes para a webview montar as
+   * miniaturas. A leitura acontece aqui: a webview nunca abre arquivo.
+   */
+  async attachImages(): Promise<void> {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectMany: true,
+      openLabel: 'Attach',
+      title: 'Attach images',
+      filters: { Images: ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
+    });
+    if (picked === undefined || picked.length === 0) {
+      return;
+    }
+
+    const attachments: ImageAttachment[] = [];
+    for (const uri of picked.slice(0, MAX_ATTACHMENTS_PER_MESSAGE)) {
+      const mimeType = imageMimeType(uri.fsPath);
+      if (mimeType === null) {
+        this.deps.bus.emit('notification', {
+          level: 'warning',
+          message: `Unsupported image format: ${baseName(uri.fsPath)}`,
+        });
+        continue;
+      }
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+        this.deps.bus.emit('notification', {
+          level: 'warning',
+          message: `${baseName(uri.fsPath)} is larger than ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB.`,
+        });
+        continue;
+      }
+      attachments.push({
+        id: newId('att'),
+        name: baseName(uri.fsPath),
+        mimeType,
+        data: Buffer.from(bytes).toString('base64'),
+        byteSize: bytes.byteLength,
+      });
+    }
+
+    if (attachments.length > 0) {
+      this.deps.bus.emit('attachments.added', attachments);
+    }
   }
 
   async clearLocalChat(): Promise<void> {
@@ -265,6 +606,7 @@ export class PrometheonCore implements vscode.Disposable {
       return;
     }
     await this.deps.localChat.clearConversation(this.conversationId);
+    this.conversationTitle = UNTITLED;
     this.activeAgents = [];
     await this.publish();
   }
@@ -460,11 +802,411 @@ export class PrometheonCore implements vscode.Disposable {
     }
 
     await this.refreshWorkspaceStatus();
+    // A seção MCP depende de `.prometheon/`: com o workspace pronto, ela sai do
+    // estado "indisponível" sem o usuário precisar reabrir o painel.
+    await this.refreshMcp();
     await this.publish();
   }
 
   async initializeWorkspace(): Promise<void> {
     await this.configureWorkspace('current');
+  }
+
+  // ---------- Contas de provedor ----------
+
+  /**
+   * Relê os perfis e o que os CLIs reportam. Envolve rodar `auth status` de cada
+   * perfil, então acontece sob demanda — abrir o painel de contas, criar perfil,
+   * concluir um run — e não a cada publicação de estado.
+   */
+  async refreshAccounts(): Promise<void> {
+    try {
+      const statuses = await this.deps.profiles.statuses();
+      this.accounts = statuses.map((status) => ({
+        profileId: status.profile.id,
+        name: status.profile.name,
+        providerId: status.profile.providerId,
+        providerName: status.providerName,
+        configDirectory: status.profile.configDirectory,
+        cliInstalled: status.installation.installed,
+        ...optionalText('cliVersion', status.installation.version),
+        authenticated: status.auth.authenticated,
+        ...optionalText('accountLabel', status.auth.accountLabel),
+        ...optionalText('organization', status.auth.organization),
+        ...optionalText('plan', status.auth.plan),
+        ...optionalText('authMethod', status.auth.authMethod),
+        ...optionalText('message', status.auth.message),
+        usage: this.deps.usage.usageFor(status.profile.id),
+      }));
+    } catch (error) {
+      this.deps.logger.error(`Falha ao ler as contas: ${serializeError(error).message}`);
+      this.accounts = [];
+    }
+    // O binding de cada agente é resolvido contra estas contas, então ele é
+    // recalculado junto — nunca fica apontando para um estado antigo.
+    await this.refreshAgentProfiles();
+  }
+
+  /**
+   * Cria uma conta local para um provedor. O nome e o provedor vêm do
+   * formulário do painel — nenhum diálogo do VS Code participa disso. O login
+   * continua sendo um passo à parte, pelo fluxo oficial do CLI (documento §11).
+   */
+  async createAccount(name: string, providerId: string, model = ''): Promise<void> {
+    try {
+      const profile = await this.deps.profiles.create({ name, providerId, model });
+      const adapter = this.deps.profiles.adapterFor(profile.providerId);
+      await this.refreshAccounts();
+      await this.publish();
+      this.deps.bus.emit('notification', {
+        level: 'info',
+        message: `Account "${profile.name}" created with its own ${adapter.configEnvironmentVariable}. Use Sign in to authenticate it through the official CLI flow.`,
+      });
+    } catch (error) {
+      this.reportFailure('Não foi possível criar a conta', error);
+    }
+  }
+
+  // ---------- Agent Profiles ----------
+
+  /**
+   * Relê os agentes e resolve o binding contra as contas conhecidas. Um agente
+   * cuja conta sumiu ganha um aviso: nunca é reapontado para outro perfil.
+   */
+  async refreshAgentProfiles(): Promise<void> {
+    try {
+      this.agentProfiles = await this.deps.agentProfiles.summaries(this.accounts);
+    } catch (error) {
+      this.deps.logger.error(`Falha ao ler os Agent Profiles: ${serializeError(error).message}`);
+      this.agentProfiles = [];
+    }
+  }
+
+  async createAgentProfile(draft: AgentProfileDraft): Promise<void> {
+    try {
+      const profile = await this.deps.agentProfiles.create(draft);
+      await this.refreshAgentProfiles();
+      await this.publish();
+      this.deps.bus.emit('notification', {
+        level: 'info',
+        message: `Agent profile "${profile.name}" created.`,
+      });
+    } catch (error) {
+      this.reportFailure('Não foi possível criar o Agent Profile', error);
+    }
+  }
+
+  async updateAgentProfile(id: string, draft: AgentProfileDraft): Promise<void> {
+    try {
+      await this.deps.agentProfiles.update(id, draft);
+      await this.refreshAgentProfiles();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível salvar o Agent Profile', error);
+    }
+  }
+
+  async setAgentProfileEnabled(id: string, enabled: boolean): Promise<void> {
+    try {
+      await this.deps.agentProfiles.setEnabled(id, enabled);
+      await this.refreshAgentProfiles();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível alterar o Agent Profile', error);
+    }
+  }
+
+  /** Remoção é destrutiva: confirma no diálogo modal do VS Code. */
+  async removeAgentProfile(id: string): Promise<void> {
+    try {
+      const profile = await this.deps.agentProfiles.require(id);
+      const confirm = 'Remove agent';
+      const answer = await vscode.window.showWarningMessage(
+        `Remove the agent profile "${profile.name}"?`,
+        {
+          modal: true,
+          detail: 'The provider account and its sign-in are not touched.',
+        },
+        confirm,
+      );
+      if (answer !== confirm) {
+        return;
+      }
+      await this.deps.agentProfiles.remove(id);
+      await this.refreshAgentProfiles();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível remover o Agent Profile', error);
+    }
+  }
+
+  // ---------- MCP ----------
+
+  async refreshMcp(): Promise<void> {
+    try {
+      this.mcpStatus = await this.deps.mcp.status();
+    } catch (error) {
+      this.deps.logger.error(`Falha ao ler o .mcp.json: ${serializeError(error).message}`);
+      this.mcpStatus = {
+        available: false,
+        exists: false,
+        file: null,
+        servers: [],
+        problems: [],
+        message: 'Could not read .mcp.json.',
+      };
+    }
+  }
+
+  async saveMcpServer(server: McpServerDraft): Promise<void> {
+    try {
+      await this.deps.mcp.save(server);
+      await this.refreshMcp();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível salvar o servidor MCP', error);
+    }
+  }
+
+  /**
+   * Escolhe outro `.mcp.json` e mescla as entradas. A leitura do disco acontece
+   * aqui: a webview só pede. Nome já existente vira aviso, nunca sobrescrita.
+   */
+  async importMcpServers(): Promise<void> {
+    try {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        openLabel: 'Import MCP servers',
+        title: 'Choose an .mcp.json to import',
+        filters: { 'MCP configuration': ['json'] },
+      });
+      const source = picked?.[0];
+      if (source === undefined) {
+        return;
+      }
+
+      const result = await this.deps.mcp.importFrom(source);
+      await this.refreshMcp();
+      await this.publish();
+
+      const parts = [`${result.imported.length} MCP server(s) imported.`];
+      if (result.conflicts.length > 0) {
+        parts.push(
+          `Skipped because the name already exists: ${result.conflicts.join(', ')}. Rename or edit them instead.`,
+        );
+      }
+      if (result.problems.length > 0) {
+        parts.push(`${result.problems.length} entry(ies) could not be read.`);
+      }
+      this.deps.bus.emit('notification', {
+        level: result.conflicts.length > 0 || result.problems.length > 0 ? 'warning' : 'info',
+        message: parts.join(' '),
+      });
+    } catch (error) {
+      this.reportFailure('Não foi possível importar servidores MCP', error);
+    }
+  }
+
+  async setMcpServerEnabled(name: string, enabled: boolean): Promise<void> {
+    try {
+      await this.deps.mcp.setEnabled(name, enabled);
+      await this.refreshMcp();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível alterar o servidor MCP', error);
+    }
+  }
+
+  async removeMcpServer(name: string): Promise<void> {
+    try {
+      const confirm = 'Remove server';
+      const answer = await vscode.window.showWarningMessage(
+        `Remove the MCP server "${name}"?`,
+        { modal: true, detail: 'It is removed from .mcp.json. The rest of the file is kept.' },
+        confirm,
+      );
+      if (answer !== confirm) {
+        return;
+      }
+      await this.deps.mcp.remove(name);
+      await this.refreshMcp();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível remover o servidor MCP', error);
+    }
+  }
+
+  /**
+   * Erro de uma ação do painel: log em português para quem mantém, mensagem já
+   * pronta em inglês para quem usa. Nada de stack trace na interface.
+   */
+  private reportFailure(context: string, error: unknown): void {
+    const serialized = serializeError(error);
+    this.deps.logger.error(`${context}: ${serialized.message}`);
+    this.deps.bus.emit('notification', { level: 'error', message: serialized.message });
+  }
+
+  async loginAccount(profileId: string): Promise<void> {
+    await this.deps.profiles.login(profileId);
+    // O login roda num terminal e termina quando o usuário quiser; o estado é
+    // relido quando ele reabrir o painel de contas.
+    this.deps.bus.emit('notification', {
+      level: 'info',
+      message: 'Finish the sign-in in the terminal, then refresh the accounts panel.',
+    });
+  }
+
+  async logoutAccount(profileId: string): Promise<void> {
+    const profile = await this.deps.profiles.require(profileId);
+    const confirm = 'Sign out';
+    const answer = await vscode.window.showWarningMessage(
+      `Sign out of "${profile.name}"?`,
+      { modal: true, detail: 'The isolated configuration directory is kept.' },
+      confirm,
+    );
+    if (answer !== confirm) {
+      return;
+    }
+    await this.deps.profiles.logout(profileId);
+    await this.refreshAccounts();
+    await this.publish();
+  }
+
+  /** Remove o perfil da lista. As credenciais em disco não são tocadas. */
+  async removeAccount(profileId: string): Promise<void> {
+    const profile = await this.deps.profiles.require(profileId);
+    // Agentes vinculados não são reapontados para outra conta: eles passam a
+    // avisar que o binding quebrou, e é isso que o diálogo antecipa.
+    const bound = this.agentProfiles.filter(
+      (summary) => summary.profile.providerProfileId === profileId,
+    );
+    const boundDetail =
+      bound.length === 0
+        ? ''
+        : ` ${bound.length} agent profile(s) still point to it (${bound.map((summary) => summary.profile.name).join(', ')}) and will stop until you bind them to another account.`;
+    const confirm = 'Remove profile';
+    const answer = await vscode.window.showWarningMessage(
+      `Remove the profile "${profile.name}" from Prometheon?`,
+      {
+        modal: true,
+        detail: `The credentials in ${profile.configDirectory} are left untouched — delete that folder yourself if you also want to drop the sign-in.${boundDetail}`,
+      },
+      confirm,
+    );
+    if (answer !== confirm) {
+      return;
+    }
+    await this.deps.profiles.remove(profileId);
+    await this.refreshAccounts();
+    await this.publish();
+  }
+
+  // ---------- Atividade ----------
+
+  private setActivity(phase: ActivityStatus['phase'], label: string): void {
+    const agent = this.agents.find((item) => item.id === this.mainAgentId);
+    const account = this.accounts.find((item) => item.profileId === this.usageProfileId());
+    const detail = [
+      agent?.displayName ?? this.mainAgentId,
+      account === undefined ? null : `${account.providerName} · ${account.name}`,
+      WORK_MODE_LABELS[this.workMode],
+    ]
+      .filter((part): part is string => part !== null)
+      .join(' · ');
+
+    this.activity = {
+      phase,
+      label,
+      detail,
+      startedAt: this.activity.phase === 'idle' ? Date.now() : this.activity.startedAt,
+      // A contagem pertence ao run, não à fase: trocar de fase não a zera.
+      ...(this.activity.usage === undefined ? {} : { usage: this.activity.usage }),
+    };
+  }
+
+  /** Traduz o estado do agente para o que a interface mostra acima do chat. */
+  private trackActivity(status: ActiveAgentSummary['status']): void {
+    switch (status) {
+      case 'starting':
+        this.setActivity('sending', 'Starting…');
+        break;
+      case 'working':
+        this.setActivity('working', 'Working…');
+        break;
+      case 'waiting':
+      case 'blocked':
+        this.setActivity('waiting', 'Waiting for approval…');
+        break;
+      default:
+        this.activity = IDLE_ACTIVITY;
+    }
+  }
+
+  /**
+   * Perfil ao qual o uso é creditado. Enquanto os agentes não têm binding com
+   * um Provider Profile, cai no primeiro perfil conhecido — ou num balde local.
+   */
+  private usageProfileId(): string {
+    return this.accounts[0]?.profileId ?? 'local';
+  }
+
+  // ---------- Ditado ----------
+
+  /**
+   * Começa a ouvir. Sem motor registrado nada é gravado: a interface é avisada
+   * do motivo, em vez de ficar com um botão que não faz nada.
+   */
+  async startDictation(): Promise<void> {
+    if (!(await this.refreshSpeechStatus())) {
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: this.speechStatus.detail ?? NO_SPEECH_ENGINE,
+      });
+      await this.publish();
+      return;
+    }
+    try {
+      await this.deps.speech.start();
+    } catch (error) {
+      const serialized = serializeError(error);
+      this.deps.logger.info(`Ditado não iniciado: ${serialized.message}`);
+      this.deps.bus.emit('notification', { level: 'warning', message: serialized.message });
+    }
+    await this.refreshSpeechStatus();
+    await this.publish();
+  }
+
+  /** Encerra a captura e entrega o texto à webview, que o insere no rascunho. */
+  async stopDictation(): Promise<void> {
+    try {
+      const transcript = await this.deps.speech.stop();
+      if (transcript !== null) {
+        this.deps.bus.emit('speech.transcript', transcript);
+      }
+    } catch (error) {
+      const serialized = serializeError(error);
+      this.deps.logger.error(`Falha ao transcrever: ${serialized.message}`);
+      this.deps.bus.emit('notification', { level: 'error', message: serialized.message });
+    }
+    await this.refreshSpeechStatus();
+    await this.publish();
+  }
+
+  async cancelDictation(): Promise<void> {
+    await this.deps.speech.cancel();
+    await this.refreshSpeechStatus();
+    await this.publish();
+  }
+
+  /** Reavalia disponibilidade e estado do motor. Devolve se dá para ditar. */
+  private async refreshSpeechStatus(): Promise<boolean> {
+    const available = await this.deps.speech.isAvailable();
+    this.speechStatus = {
+      available,
+      state: this.deps.speech.state,
+      ...(available ? {} : { detail: NO_SPEECH_ENGINE }),
+    };
+    return available;
   }
 
   // ---------- Hub ----------
@@ -570,6 +1312,7 @@ export class PrometheonCore implements vscode.Disposable {
     }
     const conversation = await this.deps.localChat.createConversation({ chatType: 'local' });
     this.conversationId = conversation.id;
+    this.conversationTitle = conversation.title;
     this.messages = conversation.messages;
     return conversation.id;
   }
@@ -676,6 +1419,7 @@ export class PrometheonCore implements vscode.Disposable {
       await this.disableBypass('Bypass cancelled: the workspace changed.');
     }
     await this.refreshWorkspaceStatus();
+    await this.refreshMcp();
     await this.publish();
   }
 
@@ -707,7 +1451,7 @@ export class PrometheonCore implements vscode.Disposable {
     return picked?.choice;
   }
 
-  private async openSettings(): Promise<void> {
+  private async openSettingsEditor(): Promise<void> {
     await vscode.commands.executeCommand(
       'workbench.action.openSettings',
       '@ext:prometheon.prometheon-code',
@@ -722,7 +1466,30 @@ export class PrometheonCore implements vscode.Disposable {
         this.messages = [];
       }
     }
+    await this.refreshSessions();
     this.deps.bus.emit('state.changed', this.snapshot);
+  }
+
+  /**
+   * Lista as sessões do tipo de chat selecionado, da mais recente para a mais
+   * antiga. Sem Hub, o Web Chat simplesmente não tem sessões para mostrar.
+   */
+  private async refreshSessions(): Promise<void> {
+    const service = this.chatType === 'web' ? this.deps.webChat : this.deps.localChat;
+    let sessions: readonly ConversationSummary[] = [];
+    try {
+      sessions = await service.listConversations();
+    } catch (error) {
+      this.deps.logger.info(`Sessões indisponíveis: ${serializeError(error).message}`);
+    }
+    this.sessions = [...sessions]
+      .filter((session) => session.chatType === this.chatType)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+
+    const current = this.sessions.find((session) => session.id === this.conversationId);
+    if (current !== undefined) {
+      this.conversationTitle = current.title;
+    }
   }
 
   dispose(): void {
@@ -730,4 +1497,61 @@ export class PrometheonCore implements vscode.Disposable {
       disposable.dispose();
     }
   }
+}
+
+/**
+ * A resposta corresponde ao que foi perguntado: uma entrada por pergunta, na
+ * mesma ordem, com rótulos que estavam entre as opções e escolha única onde a
+ * pergunta é de escolha única. Texto livre é a única resposta que pode não
+ * constar da lista — foi o usuário quem escreveu.
+ */
+function matchesRequest(
+  request: AgentQuestionRequest,
+  answers: readonly AgentQuestionAnswer[],
+): boolean {
+  if (answers.length !== request.questions.length) {
+    return false;
+  }
+  return request.questions.every((question, index) => {
+    const answer = answers[index];
+    if (answer === undefined || answer.header !== question.header) {
+      return false;
+    }
+    const labels = question.options.map((option) => option.label);
+    if (answer.selected.some((choice) => !labels.includes(choice))) {
+      return false;
+    }
+    const values = answerValues(answer);
+    if (values.length === 0) {
+      return false;
+    }
+    return question.multiSelect || values.length === 1;
+  });
+}
+
+const IMAGE_EXTENSIONS: Record<string, ImageMimeType> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+};
+
+/** Mime derivado da extensão, restrito à lista de formatos aceitos. */
+function imageMimeType(fsPath: string): ImageMimeType | null {
+  const extension = fsPath.split('.').pop()?.toLowerCase() ?? '';
+  const mimeType = IMAGE_EXTENSIONS[extension];
+  return mimeType !== undefined && IMAGE_MIME_TYPES.includes(mimeType) ? mimeType : null;
+}
+
+function baseName(fsPath: string): string {
+  return fsPath.split(/[\\/]/).pop() ?? fsPath;
+}
+
+/** Campo opcional só entra no objeto quando tem valor — nada de `undefined`. */
+function optionalText<K extends string>(
+  key: K,
+  value: string | undefined,
+): Record<K, string> | object {
+  return value === undefined ? {} : ({ [key]: value } as Record<K, string>);
 }

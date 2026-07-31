@@ -1,0 +1,26 @@
+{
+  // Herda o rigor do monorepo e sobrescreve só o que o Next exige: resolução de
+  // bundler, JSX preservado e a lib do DOM. `composite`/`declaration` saem
+  // porque o Next compila com `noEmit`.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "allowJs": true,
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": true,
+    "types": ["node"],
+    "plugins": [{ "name": "next" }],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "next-env.d.ts", ".next/types/**/*.ts", "*.ts", "*.mts", "e2e"],
+  "exclude": ["node_modules", ".next", "out", "playwright-report", "test-results"]
+}

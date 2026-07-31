@@ -13,7 +13,8 @@ eslint.config.mjs
 .gitignore
 
 # Arte de origem e tamanhos não usados em runtime: ficam no repositório, fora do
-# pacote. O manifest usa media/prometheon-icon-256.png e media/prometheon-view.svg.
+# pacote. O manifest usa media/prometheon-icon-256.png e media/prometheon-view-mono.svg;
+# media/prometheon-view.svg vai junto porque o cabeçalho do painel o exibe.
 media/prometheon-icon-master.png
 media/prometheon-icon-512.png
 media/prometheon-icon-64.png

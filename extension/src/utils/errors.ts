@@ -27,6 +27,15 @@ export class PermissionDeniedError extends PrometheonError {
   }
 }
 
+/** Ditado acionado sem nenhum motor de voz disponível. */
+export class SpeechNotConfiguredError extends PrometheonError {
+  constructor(
+    message = 'No speech engine is configured. Dictation stays off until one is available.',
+  ) {
+    super(message, 'speech.not-configured');
+  }
+}
+
 /** Mensagem recebida da webview não passou na validação de runtime. */
 export class InvalidMessageError extends PrometheonError {
   constructor(message: string) {
