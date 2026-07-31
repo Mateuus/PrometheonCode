@@ -276,7 +276,38 @@ suite('Validação das mensagens da webview', () => {
         type: 'accounts.create',
         payload: { name: '  Mateus27  ', providerId: 'claude-code' },
       }),
-      { type: 'accounts.create', payload: { name: 'Mateus27', providerId: 'claude-code' } },
+      // Sem modelo escolhido, o campo chega vazio — que significa "o que o CLI
+      // já usa", e não um modelo chamado string vazia.
+      { type: 'accounts.create', payload: { name: 'Mateus27', providerId: 'claude-code', model: '' } },
+    );
+
+    assert.deepEqual(
+      parseWebviewMessage({
+        type: 'accounts.create',
+        payload: { name: 'Mateus27', providerId: 'claude-code', model: 'claude-opus-5' },
+      }),
+      {
+        type: 'accounts.create',
+        payload: { name: 'Mateus27', providerId: 'claude-code', model: 'claude-opus-5' },
+      },
+    );
+
+    // O modelo **não** é restrito a uma lista conhecida: o provedor lança
+    // modelos sem avisar, e recusar um identificador novo faria o Prometheon
+    // ser o motivo de alguém não conseguir usar o mais recente.
+    assert.deepEqual(
+      parseWebviewMessage({
+        type: 'accounts.create',
+        payload: { name: 'Mateus27', providerId: 'claude-code', model: 'modelo-que-ainda-nao-existe' },
+      }),
+      {
+        type: 'accounts.create',
+        payload: {
+          name: 'Mateus27',
+          providerId: 'claude-code',
+          model: 'modelo-que-ainda-nao-existe',
+        },
+      },
     );
 
     for (const payload of [

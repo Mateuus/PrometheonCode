@@ -281,7 +281,11 @@ export class PrometheonCore implements vscode.Disposable {
         await this.publish();
         return;
       case 'accounts.create':
-        await this.createAccount(message.payload.name, message.payload.providerId);
+        await this.createAccount(
+          message.payload.name,
+          message.payload.providerId,
+          message.payload.model,
+        );
         return;
       case 'agentProfiles.create':
         await this.createAgentProfile(message.payload.profile);
@@ -848,9 +852,9 @@ export class PrometheonCore implements vscode.Disposable {
    * formulário do painel — nenhum diálogo do VS Code participa disso. O login
    * continua sendo um passo à parte, pelo fluxo oficial do CLI (documento §11).
    */
-  async createAccount(name: string, providerId: string): Promise<void> {
+  async createAccount(name: string, providerId: string, model = ''): Promise<void> {
     try {
-      const profile = await this.deps.profiles.create({ name, providerId });
+      const profile = await this.deps.profiles.create({ name, providerId, model });
       const adapter = this.deps.profiles.adapterFor(profile.providerId);
       await this.refreshAccounts();
       await this.publish();

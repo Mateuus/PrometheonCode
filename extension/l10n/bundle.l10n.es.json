@@ -253,5 +253,12 @@
   "Delete sign-ins": "Borrar sesiones",
   "Keep them": "Conservar",
   "Prometheon was reset. Reload the window to finish.": "Prometheon se restableció. Recarga la ventana para terminar.",
-  "Reload window": "Recargar ventana"
+  "Reload window": "Recargar ventana",
+  "Account default": "Predeterminado de la cuenta",
+  "O que o CLI já usa": "Lo que ya usa la CLI",
+  "O mais capaz": "El más capaz",
+  "Rápido e criativo": "Rápido y creativo",
+  "Equilíbrio entre custo e capacidade": "Equilibrio entre coste y capacidad",
+  "Geração anterior": "Generación anterior",
+  "O mais barato e rápido": "El más barato y rápido"
 }

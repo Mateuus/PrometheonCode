@@ -23,10 +23,40 @@ export interface ProviderProfile {
   /** Diretório isolado de configuração do CLI, fora do repositório. */
   readonly configDirectory: string;
   readonly executablePath?: string;
+  /**
+   * Modelo que esta conta usa. Ausente deixa a escolha com o CLI.
+   *
+   * Guardado como o identificador que o provedor entende, e não como um rótulo
+   * bonito: rótulo muda de uma versão para outra e a conta pararia de funcionar
+   * sozinha. O nome legível é resolvido na hora de exibir.
+   */
+  readonly model?: string;
   readonly enabled: boolean;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
+
+/**
+ * Modelos que a interface oferece.
+ *
+ * A lista é uma conveniência, não uma trava: um identificador fora dela
+ * continua valendo, porque o provedor lança modelos sem avisar ninguém — e o
+ * Prometheon não deve ser o motivo de você não conseguir usar o mais novo.
+ */
+export interface ModelChoice {
+  readonly id: string;
+  readonly label: string;
+  readonly hint: string;
+}
+
+export const CLAUDE_MODELS: readonly ModelChoice[] = [
+  { id: '', label: 'Account default', hint: 'O que o CLI já usa' },
+  { id: 'claude-opus-5', label: 'Opus 5', hint: 'O mais capaz' },
+  { id: 'claude-fable-5', label: 'Fable 5', hint: 'Rápido e criativo' },
+  { id: 'claude-sonnet-5', label: 'Sonnet 5', hint: 'Equilíbrio entre custo e capacidade' },
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', hint: 'Geração anterior' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', hint: 'O mais barato e rápido' },
+];
 
 export interface ProviderInstallation {
   readonly installed: boolean;

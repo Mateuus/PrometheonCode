@@ -109,6 +109,7 @@ export const WEBVIEW_STRINGS = {
   'accounts.signedOut': 'Signed out',
   'accounts.cliMissing': 'CLI missing',
   'accounts.provider': 'Provider',
+  'accounts.model': 'Model',
   'accounts.authMethod': 'Auth method',
   'accounts.email': 'Email',
   'accounts.organization': 'Organization',

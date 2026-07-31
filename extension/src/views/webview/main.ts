@@ -11,6 +11,7 @@ import type {
   ImageAttachment,
 } from '../../chat/types';
 import type { LanguageChoice } from '../../i18n/language';
+import { CLAUDE_MODELS } from '../../providers/types';
 import {
   IMAGE_MIME_TYPES,
   MAX_STEP_OUTPUT_CHARS,
@@ -839,6 +840,8 @@ const AGENT_AUTONOMY_ICONS: Record<AgentAutonomyMode, string> = {
 interface AccountDraft {
   name: string;
   providerId: string;
+  /** Vazio deixa a escolha do modelo com o CLI do provedor. */
+  model: string;
 }
 
 /** Rascunho de um Agent Profile. `id` nulo significa criação. */
@@ -873,7 +876,7 @@ interface McpDraft {
 }
 
 let settingsSection: SettingsSection = 'accounts';
-let accountDraft: AccountDraft = { name: '', providerId: '' };
+let accountDraft: AccountDraft = { name: '', providerId: '', model: '' };
 let agentDraft: AgentDraft | null = null;
 let mcpDraft: McpDraft | null = null;
 /** Menus criados para a seção aberta; descartados a cada redesenho. */
@@ -1295,6 +1298,22 @@ function renderAccountForm(providers: PrometheonViewState['providers']): HTMLEle
         renderSettings();
       },
     ),
+    // O modelo é escolha da conta: duas contas do mesmo provedor podem usar
+    // modelos diferentes, que é justamente o motivo de existirem duas.
+    menuField(
+      s('Model'),
+      CLAUDE_MODELS.map((model) => ({
+        value: model.id,
+        label: model.label,
+        description: model.hint,
+        icon: 'sparkle',
+      })),
+      accountDraft.model,
+      (value) => {
+        accountDraft = { ...accountDraft, model: value };
+        renderSettings();
+      },
+    ),
     actionRow(
       actionButton(s('Create account'), 'primary', () => {
         const name = accountDraft.name.trim();
@@ -1302,7 +1321,10 @@ function renderAccountForm(providers: PrometheonViewState['providers']): HTMLEle
           showNotification(s('Give the account a name before creating it.'), 'warning');
           return;
         }
-        post({ type: 'accounts.create', payload: { name, providerId: accountDraft.providerId } });
+        post({
+          type: 'accounts.create',
+          payload: { name, providerId: accountDraft.providerId, model: accountDraft.model },
+        });
         accountDraft = { ...accountDraft, name: '' };
         renderSettings();
       }),

@@ -63,7 +63,11 @@ export class ProviderProfileService {
   }
 
   /** Cria o perfil e o diretório isolado. O login continua sendo um passo à parte. */
-  async create(input: { name: string; providerId: ProviderId }): Promise<ProviderProfile> {
+  async create(input: {
+    name: string;
+    providerId: ProviderId;
+    model?: string | undefined;
+  }): Promise<ProviderProfile> {
     const adapter = this.adapterFor(input.providerId);
     const id = await this.uniqueId(input.providerId, input.name);
     const now = Date.now();
@@ -72,6 +76,9 @@ export class ProviderProfileService {
       name: input.name,
       providerId: input.providerId,
       configDirectory: this.store.directoryFor(input.providerId, id),
+      // Vazio significa "o que o CLI já usa": guardar a string vazia faria o
+      // adaptador passar `--model ` e o provedor recusar.
+      ...(input.model === undefined || input.model === '' ? {} : { model: input.model }),
       enabled: true,
       createdAt: now,
       updatedAt: now,

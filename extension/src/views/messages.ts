@@ -110,7 +110,12 @@ export type WebviewToExtensionMessage =
   | { readonly type: 'accounts.refresh' }
   | {
       readonly type: 'accounts.create';
-      readonly payload: { readonly name: string; readonly providerId: string };
+      readonly payload: {
+        readonly name: string;
+        readonly providerId: string;
+        /** Vazio deixa a escolha do modelo com o CLI. */
+        readonly model: string;
+      };
     }
   | { readonly type: 'accounts.login'; readonly payload: { readonly profileId: string } }
   | { readonly type: 'accounts.logout'; readonly payload: { readonly profileId: string } }
@@ -593,9 +598,13 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
       // O provedor é restrito à lista conhecida: a webview não inventa CLI.
       const name = payload === undefined ? null : nonEmptyString(payload['name'], MAX_PROFILE_NAME_LENGTH);
       const providerId = payload === undefined ? null : oneOf(payload['providerId'], PROVIDER_IDS);
+      // O modelo **não** é restrito a uma lista: o provedor lança modelos sem
+      // avisar, e recusar um identificador novo faria o Prometheon ser o motivo
+      // de você não conseguir usar o mais recente.
+      const model = payload === undefined ? '' : (nonEmptyString(payload['model'], 64) ?? '');
       return name === null || providerId === null
         ? null
-        : { type: 'accounts.create', payload: { name, providerId } };
+        : { type: 'accounts.create', payload: { name, providerId, model } };
     }
 
     case 'agentProfiles.create': {

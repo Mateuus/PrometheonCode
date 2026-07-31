@@ -95,7 +95,12 @@ export class ClaudeCodeAgentAdapter implements AgentAdapter {
     const profile = await this.resolveProfile();
 
     if (profile === undefined) {
-      throw new Error('No Claude Code account is configured. Add one in the settings panel.');
+      // Esta mensagem vai para a conversa. Ela precisa dizer o que fazer, e
+      // não só o que falta: sem o mock atrás, é a primeira coisa que alguém vê
+      // ao tentar usar o Prometheon numa instalação nova.
+      throw new Error(
+        'No account yet. Open the settings panel (gear icon) and add a Claude Code account to start.',
+      );
     }
 
     const id = `claude-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -583,6 +588,13 @@ function argumentsFor(session: RunningSession, message: AgentInput): string[] {
     '--permission-mode',
     permissionModeFor(message),
   ];
+
+  // O modelo escolhido na conta. Ausente deixa a decisão com o CLI, que é o
+  // comportamento certo por padrão: ele acompanha os lançamentos do provedor
+  // sem depender de o Prometheon ser atualizado junto.
+  if (session.profile.model !== undefined && session.profile.model !== '') {
+    args.push('--model', session.profile.model);
+  }
 
   // Retomar a conversa é o que dá contexto à segunda mensagem. Sem isto, cada
   // envio começaria do zero e o agente não lembraria do que acabou de fazer.
