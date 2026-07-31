@@ -128,14 +128,21 @@ O projeto segue [SemVer](https://semver.org/lang/pt-BR/).
   junto da sessão que a produziu. A conversa continua guardando a versão
   truncada, mas a contagem de linhas é da saída inteira e o original permanece
   recuperável.
+- **Ditado por voz na própria máquina**: o Whisper local roda por
+  `media/speech/prometheon_speech.py` e o áudio não sai do computador. O
+  ambiente Python é conferido antes de gravar, e o que falta é dito na interface
+  em vez de falhar em silêncio.
+
+### Corrigido
+
+- O reconhecedor de voz repetia a última palavra enquanto ninguém falava. O
+  silêncio agora é tratado como silêncio.
 
 ### Notas
 
 - O único agente disponível é o `Mock Agent`. Nenhuma CLI externa é executada.
 - Sem telemetria.
-- O ditado não tem motor de voz. A API `speech` do VS Code não serve: a extensão
-  `ms-vscode.vscode-speech` apenas **registra** um provider para o workbench
-  consumir (`contributes.speechProviders`), não expõe API pública e a proposta
-  não tem lado de consumo para extensões de terceiros. As alternativas em aberto
-  são um módulo nativo de captura, um comando externo configurável (ffmpeg +
-  whisper local) ou o Prometheon Hub.
+- O ditado usa um motor local próprio, e não a API `speech` do VS Code: a
+  extensão `ms-vscode.vscode-speech` apenas **registra** um provider para o
+  workbench consumir (`contributes.speechProviders`), não expõe API pública e a
+  proposta não tem lado de consumo para extensões de terceiros.

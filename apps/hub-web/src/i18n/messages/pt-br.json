@@ -441,17 +441,6 @@
   "Give the plan a name.": "Dê um nome ao plano.",
   "A plan with this code already exists.": "Já existe um plano com este código.",
   "Type the price with up to two decimals.": "Digite o preço com até duas casas decimais.",
-  "Dictate message": "Ditar mensagem",
-  "Stop dictating": "Parar de ditar",
-  "Opening the microphone…": "Abrindo o microfone…",
-  "Listening — speak and the text appears here.": "Ouvindo — fale e o texto aparece aqui.",
-  "Finishing the last sentence…": "Terminando a última frase…",
-  "Microphone access was denied. Allow it in your browser settings to dictate.": "O acesso ao microfone foi negado. Libere nas configurações do navegador para ditar.",
-  "No microphone was found on this device.": "Nenhum microfone foi encontrado neste dispositivo.",
-  "This browser cannot capture audio for dictation.": "Este navegador não consegue capturar áudio para ditado.",
-  "Could not start dictation. Try again.": "Não foi possível iniciar o ditado. Tente de novo.",
-  "The dictation connection dropped.": "A conexão do ditado caiu.",
-  "The transcription service is unavailable right now.": "O serviço de transcrição está indisponível agora.",
   "Session signed out.": "Sessão encerrada.",
   "Device disconnected.": "Dispositivo desconectado."
 }

@@ -14,6 +14,8 @@
   "command.openSettings": "Abrir configuración",
   "command.showDiagnostics": "Mostrar diagnóstico",
   "configuration.language": "Idioma del panel de Prometheon. Los menús aportados a VS Code siguen siempre al editor.",
+  "configuration.speech.language": "Idioma hablado en el dictado, como código de dos letras: pt, en, es. Deja 'auto' para que el modelo lo detecte — preciso en frases largas, menos en cortas.",
+  "configuration.speech.pythonPath": "Python usado para crear el entorno del dictado. Vacío busca en el sistema un Python 3.9 o más nuevo. El motor se ejecuta por completo en esta máquina y no usa red.",
   "configuration.language.auto": "Seguir el idioma de visualización de VS Code.",
   "configuration.language.en": "Inglés, el idioma fuente de la interfaz.",
   "configuration.language.ptbr": "Portugués de Brasil.",

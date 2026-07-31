@@ -259,6 +259,13 @@ export type ExtensionToWebviewMessage =
     }
   /** Texto ditado, para o cliente inserir no rascunho onde está o cursor. */
   | { readonly type: 'speech.transcript'; readonly payload: { readonly text: string } }
+  /**
+   * Revisão do ditado, enquanto a fala continua.
+   *
+   * Substitui o rascunho corrente por inteiro em vez de acrescentar: o modelo
+   * reescreve palavras já ditas quando o resto da frase esclarece o sentido.
+   */
+  | { readonly type: 'speech.partial'; readonly payload: { readonly text: string } }
   /** Texto para o composer receber no ponto do cursor (citação de arquivo). */
   | { readonly type: 'composer.insert'; readonly payload: { readonly text: string } }
   /** Abre o modal de pergunta do agente; o run espera do outro lado. */

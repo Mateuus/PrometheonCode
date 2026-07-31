@@ -20,6 +20,14 @@ export interface PrometheonEventMap {
   'hub.status': HubConnectionStatus;
   'attachments.added': readonly ImageAttachment[];
   'speech.transcript': string;
+  /**
+   * Texto do ditado enquanto a pessoa ainda fala.
+   *
+   * Cada revisão **substitui** a anterior por inteiro: o modelo reconsidera o
+   * que já ouviu à luz do que vem depois. A webview troca o rascunho corrente
+   * em vez de concatenar.
+   */
+  'speech.partial': string;
   /** Texto que o composer deve receber no ponto do cursor. */
   'composer.insert': { readonly text: string };
   'activity.changed': ActivityStatus;

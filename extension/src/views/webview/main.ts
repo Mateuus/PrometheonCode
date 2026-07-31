@@ -4095,9 +4095,20 @@ function endDictationGesture(): void {
   dictation.pending = false;
 }
 
+/** Estado do ditado na renderização anterior, para detectar a transição. */
+let wasListening = false;
+
 function renderDictation(speech: PrometheonViewState['speech']): void {
   const listening = speech.state === 'listening';
   const transcribing = speech.state === 'transcribing';
+
+  // O tom acompanha o estado real do motor, e não o clique. A diferença
+  // aparece quando o microfone demora a abrir ou falha: tocar no clique
+  // avisaria que gravou algo que não começou a gravar.
+  if (listening !== wasListening) {
+    playDictationTone(listening ? 'up' : 'down');
+    wasListening = listening;
+  }
   dom.dictate.classList.toggle('listening', listening);
   dom.dictate.classList.toggle('transcribing', transcribing);
   dom.dictate.setAttribute('aria-pressed', String(listening));
@@ -4113,6 +4124,17 @@ function renderDictation(speech: PrometheonViewState['speech']): void {
 
 /** Insere o texto ditado onde está o cursor, sem apagar o que já foi escrito. */
 function insertTranscript(text: string): void {
+  // Durante o ditado o texto tem lugar próprio no campo, e o final apenas
+  // fecha o que as revisões vinham escrevendo. Inserir no cursor aqui
+  // duplicaria a fala inteira.
+  if (dictationAnchor !== null) {
+    applyPartial(text);
+    dictationAnchor = null;
+    dom.input.focus();
+    persistUi();
+    return;
+  }
+
   const input = dom.input;
   const start = input.selectionStart ?? input.value.length;
   const end = input.selectionEnd ?? start;
@@ -4126,6 +4148,93 @@ function insertTranscript(text: string): void {
   autoGrow();
   updateSendState();
   persistUi();
+}
+
+/**
+ * Trecho do campo que pertence ao ditado em curso.
+ *
+ * Guardado porque cada revisão **substitui** a anterior em vez de continuá-la:
+ * o modelo reescreve o que já tinha ouvido quando o resto da frase esclarece o
+ * sentido. Sem uma âncora fixa, cada revisão seria acrescentada e a mesma frase
+ * apareceria repetida, crescendo a cada segundo.
+ *
+ * Fica `null` fora do ditado, e é o que faz o texto final saber se deve
+ * substituir ou inserir no cursor.
+ */
+let dictationAnchor: { start: number; length: number } | null = null;
+
+/**
+ * Aviso sonoro de início e fim do ditado.
+ *
+ * Sintetizado, e não um arquivo: dois tons curtos são meia dúzia de linhas de
+ * Web Audio, enquanto um `.wav` empacotado precisaria passar pela política de
+ * conteúdo da webview e viraria mais um recurso a versionar.
+ *
+ * O som importa porque o gesto é sem retorno visual imediato: quem clica e
+ * começa a falar não olha para o botão, e sem confirmação audível a primeira
+ * frase é dita para um microfone que talvez nem tenha aberto. Subindo indica
+ * que abriu, descendo que fechou — a direção é reconhecível sem aprender nada.
+ */
+function playDictationTone(direction: 'up' | 'down'): void {
+  try {
+    const audio = new AudioContext();
+    const oscillator = audio.createOscillator();
+    const gain = audio.createGain();
+
+    const [from, to] = direction === 'up' ? [520, 780] : [780, 520];
+    const now = audio.currentTime;
+
+    oscillator.frequency.setValueAtTime(from, now);
+    oscillator.frequency.exponentialRampToValueAtTime(to, now + 0.08);
+
+    // Envelope curto com decaimento suave. Um tom que corta seco produz um
+    // clique audível — o degrau na forma de onda vira ruído de banda larga.
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.06, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
+
+    oscillator.connect(gain);
+    gain.connect(audio.destination);
+    oscillator.start(now);
+    oscillator.stop(now + 0.15);
+
+    // Fecha o contexto depois do som: cada um consome um recurso de áudio do
+    // navegador, e abrir um por ditado sem fechar esgota o limite numa sessão
+    // longa.
+    oscillator.onended = () => {
+      void audio.close().catch(() => undefined);
+    };
+  } catch {
+    // Sem saída de áudio, ou política do navegador barrando som sem gesto.
+    // O ditado funciona igual; o aviso sonoro é um extra.
+  }
+}
+
+function applyPartial(text: string): void {
+  const input = dom.input;
+
+  if (dictationAnchor === null) {
+    // Primeira revisão: abre espaço a partir do cursor, respeitando o que a
+    // pessoa já tinha escrito à mão.
+    const start = input.selectionStart ?? input.value.length;
+    const before = input.value.slice(0, start);
+    const spacer = before === '' || before.endsWith(' ') || before.endsWith('\n') ? '' : ' ';
+
+    input.value = `${before}${spacer}${input.value.slice(start)}`;
+    dictationAnchor = { start: start + spacer.length, length: 0 };
+  }
+
+  const { start, length } = dictationAnchor;
+  const before = input.value.slice(0, start);
+  const after = input.value.slice(start + length);
+
+  input.value = `${before}${text}${after}`;
+  dictationAnchor.length = text.length;
+
+  const caret = start + text.length;
+  input.setSelectionRange(caret, caret);
+  autoGrow();
+  updateSendState();
 }
 
 // ---------- Histórico de sessões ----------
@@ -5090,6 +5199,16 @@ function send(): void {
   if (content === '' && drafts.length === 0) {
     return;
   }
+
+  // Enviar encerra o ditado. Sem isto o microfone segue aberto depois da
+  // mensagem ir embora: o indicador do sistema fica aceso, a frase seguinte
+  // — dita para outra pessoa, ou para ninguém — entra num campo já vazio, e
+  // uma vaga de inferência continua ocupada por uma sessão que ninguém quer.
+  if (isListening()) {
+    stopDictation();
+  }
+  dictationAnchor = null;
+
   post({ type: 'chat.send', payload: { content, attachments: drafts } });
   drafts = [];
   renderDrafts();
@@ -5345,6 +5464,9 @@ window.addEventListener('message', (event: MessageEvent<ExtensionToWebviewMessag
       break;
     case 'speech.transcript':
       insertTranscript(message.payload.text);
+      break;
+    case 'speech.partial':
+      applyPartial(message.payload.text);
       break;
     case 'composer.insert':
       insertTranscript(message.payload.text);

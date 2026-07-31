@@ -178,26 +178,3 @@ export const realtimeTicketSchema = z.object({
   protocolVersion: z.number().int().positive(),
   heartbeatIntervalMs: z.number().int().positive(),
 });
-
-// ------------------------------------------------------------- transcription
-
-/** `GET /v1/transcription/ticket`. */
-export const transcriptionTicketSchema = z.object({
-  token: z.string(),
-  tokenType: z.literal('Bearer'),
-  expiresIn: z.number().int().positive(),
-  expiresAt: z.string(),
-  url: z.string(),
-  sampleRate: z.number().int().positive(),
-  language: z.string(),
-  maxSessionMs: z.number().int().positive(),
-});
-
-/** `GET /v1/transcription/status`. */
-export const transcriptionStatusSchema = z.object({
-  enabled: z.boolean(),
-  ready: z.boolean(),
-  language: z.string(),
-  model: z.string().optional(),
-  device: z.string().optional(),
-});

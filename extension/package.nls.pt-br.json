@@ -14,6 +14,8 @@
   "command.openSettings": "Abrir configurações",
   "command.showDiagnostics": "Mostrar diagnóstico",
   "configuration.language": "Idioma do painel do Prometheon. Os menus contribuídos ao VS Code seguem sempre o editor.",
+  "configuration.speech.language": "Idioma falado no ditado, como código de duas letras: pt, en, es. Deixe 'auto' para o modelo detectar — preciso em frases longas, menos em curtas.",
+  "configuration.speech.pythonPath": "Python usado para criar o ambiente do ditado. Vazio procura no sistema um Python 3.9 ou mais novo. O motor roda inteiramente nesta máquina e não usa rede.",
   "configuration.language.auto": "Seguir o idioma de exibição do VS Code.",
   "configuration.language.en": "Inglês, o idioma-fonte da interface.",
   "configuration.language.ptbr": "Português do Brasil.",

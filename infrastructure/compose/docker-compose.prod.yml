@@ -225,79 +225,6 @@ services:
     networks: [internal]
 
   # -------------------------------------------------------------------------
-  # Transcrição de voz
-  # -------------------------------------------------------------------------
-
-  # O ditado do chat. Sem `ports`: quem fala com ele é a API, pela rede interna.
-  #
-  # **Isso não é detalhe de arrumação.** O serviço aceita subir sem autenticação
-  # nenhuma, e publicar a porta poria uma API que executa modelos de voz — e
-  # grava arquivos em disco — ao alcance de quem chegasse ao host. Defina
-  # `TRANSCRIPTION_API_KEY` mesmo com a rede fechada, porque uma rede fechada é
-  # uma suposição, não uma garantia.
-  #
-  # A variável entra com `:-` e não com `:?` de propósito. O Compose interpola o
-  # arquivo **inteiro** antes de olhar os profiles: com `:?`, quem não usa ditado
-  # não conseguia sequer subir o Hub sem definir uma chave que não vai usar. Quem
-  # liga o ditado é cobrado no lugar certo — a Hub API recusa
-  # `TRANSCRIPTION_ENABLED=true` sem `TRANSCRIPTION_URL`, e o serviço sem chave
-  # não é alcançável de fora desta rede.
-  #
-  # Fica atrás de um profile: a imagem tem vários gigabytes e o modelo ocupa
-  # memória permanente. Quem não usa ditado não deveria pagar isso. Para ligar:
-  #
-  #     docker compose -f docker-compose.prod.yml --profile voice up -d
-  #
-  # Com o serviço noutra máquina — a que já roda o Applio, por exemplo —, não
-  # suba este contêiner: aponte `TRANSCRIPTION_URL` para lá e trate o acesso
-  # com regra de firewall, como se faz com o proxy no topo deste arquivo.
-  applio:
-    image: ${APPLIO_IMAGE:-mateuus27/applio-api:latest}
-    restart: unless-stopped
-    profiles: [voice]
-    environment:
-      PYTHONUNBUFFERED: '1'
-      DOCKER_CONTAINER: '1'
-      DISABLE_DISCORD_PRESENCE: '1'
-      API_KEY: ${TRANSCRIPTION_API_KEY:-}
-      STREAMING_ENABLED: 'true'
-      # Precisa bater com o `--build-arg STREAMING_MODEL` da imagem. Divergir
-      # não quebra nada de imediato — e é justamente o problema: o serviço baixa
-      # o outro modelo na primeira conexão, com alguém esperando do outro lado.
-      STREAMING_MODEL_SIZE: ${STREAMING_MODEL_SIZE:-large-v3-turbo}
-      STREAMING_DEVICE: ${STREAMING_DEVICE:-cpu}
-      STREAMING_PRELOAD: 'true'
-      # O `/transcribe` em lote usa outro motor e outros pesos; o ditado não
-      # passa por ele. Pré-carregá-lo seriam gigabytes de RAM parados.
-      WHISPER_PRELOAD: 'false'
-      PYANNOTE_PRELOAD: 'false'
-    volumes:
-      - applio-cache:/app/.cache/huggingface
-    healthcheck:
-      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:8000/health']
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      # Os pesos levam bem mais que a subida de um serviço comum. Com um
-      # start_period curto o contêiner seria marcado como doente durante o que
-      # é o comportamento normal de partida.
-      start_period: 180s
-    networks: [internal]
-
-    # GPU. A transcrição ao vivo funciona em CPU — foi medida assim —, mas com
-    # o modelo grande e mais de uma pessoa ditando ao mesmo tempo a CPU vira o
-    # gargalo. Com uma placa disponível, descomente e troque `STREAMING_DEVICE`
-    # para `cuda`.
-    #
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
-
-  # -------------------------------------------------------------------------
   # SMTP
   # -------------------------------------------------------------------------
 
@@ -354,10 +281,6 @@ volumes:
   mail-data:
   mail-state:
   mail-logs:
-  # Pesos do modelo de transcrição. A imagem já os traz, e este volume existe
-  # para o caso de `STREAMING_MODEL_SIZE` apontar para outro: sem ele, o
-  # download aconteceria de novo a cada recriação do contêiner.
-  applio-cache:
 
 networks:
   internal:

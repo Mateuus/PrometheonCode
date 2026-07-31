@@ -216,6 +216,18 @@
           "description": "%configuration.language%",
           "order": 1
         },
+        "prometheon.speech.language": {
+          "type": "string",
+          "default": "auto",
+          "description": "%configuration.speech.language%",
+          "order": 2
+        },
+        "prometheon.speech.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "%configuration.speech.pythonPath%",
+          "order": 3
+        },
         "prometheon.hub.url": {
           "type": "string",
           "default": "",
