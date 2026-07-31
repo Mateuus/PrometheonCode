@@ -31,6 +31,7 @@ function agentProfile(overrides: Record<string, unknown> = {}): Record<string, u
     autonomyMode: 'manual',
     allowedTools: [],
     deniedTools: [],
+    skills: [],
     maxConcurrentSessions: 1,
     contextStrategy: 'project',
     enabled: true,
@@ -276,38 +277,18 @@ suite('Validação das mensagens da webview', () => {
         type: 'accounts.create',
         payload: { name: '  Mateus27  ', providerId: 'claude-code' },
       }),
-      // Sem modelo escolhido, o campo chega vazio — que significa "o que o CLI
-      // já usa", e não um modelo chamado string vazia.
-      { type: 'accounts.create', payload: { name: 'Mateus27', providerId: 'claude-code', model: '' } },
+      { type: 'accounts.create', payload: { name: 'Mateus27', providerId: 'claude-code' } },
     );
 
+    // Uma conta é um login isolado e não escolhe modelo: quem escolhe é o Agent
+    // Profile. Um `model` no payload é ignorado em vez de virar configuração
+    // que ninguém consegue ver depois na interface.
     assert.deepEqual(
       parseWebviewMessage({
         type: 'accounts.create',
         payload: { name: 'Mateus27', providerId: 'claude-code', model: 'claude-opus-5' },
       }),
-      {
-        type: 'accounts.create',
-        payload: { name: 'Mateus27', providerId: 'claude-code', model: 'claude-opus-5' },
-      },
-    );
-
-    // O modelo **não** é restrito a uma lista conhecida: o provedor lança
-    // modelos sem avisar, e recusar um identificador novo faria o Prometheon
-    // ser o motivo de alguém não conseguir usar o mais recente.
-    assert.deepEqual(
-      parseWebviewMessage({
-        type: 'accounts.create',
-        payload: { name: 'Mateus27', providerId: 'claude-code', model: 'modelo-que-ainda-nao-existe' },
-      }),
-      {
-        type: 'accounts.create',
-        payload: {
-          name: 'Mateus27',
-          providerId: 'claude-code',
-          model: 'modelo-que-ainda-nao-existe',
-        },
-      },
+      { type: 'accounts.create', payload: { name: 'Mateus27', providerId: 'claude-code' } },
     );
 
     for (const payload of [
@@ -327,6 +308,31 @@ suite('Validação das mensagens da webview', () => {
     assert.equal(parseWebviewMessage({ type: 'accounts.create' }), null);
   });
 
+  test('accounts.rename exige o perfil e um nome utilizável', () => {
+    assert.deepEqual(
+      parseWebviewMessage({
+        type: 'accounts.rename',
+        payload: { profileId: 'mainagent', name: '  MainAgent  ' },
+      }),
+      { type: 'accounts.rename', payload: { profileId: 'mainagent', name: 'MainAgent' } },
+    );
+
+    for (const payload of [
+      { profileId: 'mainagent', name: '   ' },
+      { profileId: 'mainagent', name: 'x'.repeat(MAX_PROFILE_NAME_LENGTH + 1) },
+      { profileId: 'mainagent' },
+      { profileId: '', name: 'MainAgent' },
+      { name: 'MainAgent' },
+    ]) {
+      assert.equal(
+        parseWebviewMessage({ type: 'accounts.rename', payload }),
+        null,
+        `deveria recusar: ${JSON.stringify(payload)}`,
+      );
+    }
+    assert.equal(parseWebviewMessage({ type: 'accounts.rename' }), null);
+  });
+
   test('agentProfiles.create exige o binding com uma conta', () => {
     const parsed = parseWebviewMessage({
       type: 'agentProfiles.create',
@@ -342,6 +348,7 @@ suite('Validação das mensagens da webview', () => {
           autonomyMode: 'manual',
           allowedTools: [],
           deniedTools: [],
+          skills: [],
           maxConcurrentSessions: 1,
           contextStrategy: 'project',
           enabled: true,
@@ -393,6 +400,7 @@ suite('Validação das mensagens da webview', () => {
             autonomyMode: 'manual',
             allowedTools: [],
             deniedTools: [],
+            skills: [],
             maxConcurrentSessions: 1,
             contextStrategy: 'project',
             enabled: true,
@@ -596,5 +604,80 @@ suite('Validação das mensagens da webview', () => {
       parseWebviewMessage({ type: 'chat.openSession', payload: { conversationId: '' } }),
       null,
     );
+  });
+
+  test('chat.openStepOutput exige o passo e o rótulo da aba', () => {
+    assert.deepEqual(
+      parseWebviewMessage({
+        type: 'chat.openStepOutput',
+        payload: { stepId: 'tool_1', label: 'Bash-npm test' },
+      }),
+      { type: 'chat.openStepOutput', payload: { stepId: 'tool_1', label: 'Bash-npm test' } },
+    );
+    assert.equal(parseWebviewMessage({ type: 'chat.openStepOutput' }), null);
+    assert.equal(
+      parseWebviewMessage({ type: 'chat.openStepOutput', payload: { stepId: '', label: 'x' } }),
+      null,
+    );
+    assert.equal(
+      parseWebviewMessage({
+        type: 'chat.openStepOutput',
+        payload: { stepId: 'x'.repeat(129), label: 'x' },
+      }),
+      null,
+    );
+  });
+
+  test('chat.deleteSession exige o identificador da conversa', () => {
+    assert.deepEqual(
+      parseWebviewMessage({ type: 'chat.deleteSession', payload: { conversationId: 'conv_1' } }),
+      { type: 'chat.deleteSession', payload: { conversationId: 'conv_1' } },
+    );
+    assert.equal(parseWebviewMessage({ type: 'chat.deleteSession' }), null);
+    assert.equal(
+      parseWebviewMessage({ type: 'chat.deleteSession', payload: { conversationId: '' } }),
+      null,
+    );
+  });
+
+  test('context.setAutoCompact só aceita booleano', () => {
+    assert.deepEqual(
+      parseWebviewMessage({ type: 'context.setAutoCompact', payload: { enabled: false } }),
+      { type: 'context.setAutoCompact', payload: { enabled: false } },
+    );
+    // 'true' como texto viria de um `value` de formulário mal convertido; aceitar
+    // ligaria a compactação automática de quem pediu para desligá-la.
+    assert.equal(
+      parseWebviewMessage({ type: 'context.setAutoCompact', payload: { enabled: 'true' } }),
+      null,
+    );
+    assert.equal(parseWebviewMessage({ type: 'context.setAutoCompact' }), null);
+  });
+
+  test('settings.setModel aceita identificador fora da lista e recusa o comprido', () => {
+    assert.deepEqual(
+      parseWebviewMessage({ type: 'settings.setModel', payload: { model: 'claude-opus-5' } }),
+      { type: 'settings.setModel', payload: { model: 'claude-opus-5' } },
+    );
+    // Um modelo que ainda não conhecemos passa: a lista da interface é
+    // conveniência, e recusar aqui travaria o lançamento seguinte do provedor.
+    assert.deepEqual(
+      parseWebviewMessage({ type: 'settings.setModel', payload: { model: 'modelo-do-futuro' } }),
+      { type: 'settings.setModel', payload: { model: 'modelo-do-futuro' } },
+    );
+    // Vazio é "deixa com o CLI", e não uma mensagem inválida.
+    assert.deepEqual(parseWebviewMessage({ type: 'settings.setModel', payload: { model: '' } }), {
+      type: 'settings.setModel',
+      payload: { model: '' },
+    });
+    assert.deepEqual(
+      parseWebviewMessage({ type: 'settings.setModel', payload: { model: 'x'.repeat(200) } }),
+      { type: 'settings.setModel', payload: { model: '' } },
+    );
+  });
+
+  test('as ações de contexto sem payload são aceitas', () => {
+    assert.deepEqual(parseWebviewMessage({ type: 'context.addFile' }), { type: 'context.addFile' });
+    assert.deepEqual(parseWebviewMessage({ type: 'context.compact' }), { type: 'context.compact' });
   });
 });

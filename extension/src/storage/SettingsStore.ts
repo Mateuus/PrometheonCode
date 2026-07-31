@@ -4,6 +4,8 @@ import type { Logger } from '../logger';
 import {
   initialConfigText,
   normalizeConfig,
+  type GitConfig,
+  type GraphifyConfig,
   type PersistableAutonomy,
   type WorkspaceConfig,
 } from '../workspace/types';
@@ -19,6 +21,9 @@ export interface OrchestrationPatch {
   readonly mainAgent?: string;
   readonly maxWorkers?: number;
 }
+
+export type GraphPatch = Partial<GraphifyConfig>;
+export type GitPatch = Partial<GitConfig>;
 
 /**
  * Leitura e escrita de `.prometheon/prometheon.yaml` — a configuração
@@ -77,6 +82,31 @@ export class SettingsStore {
 
   async updateDefaultChatType(configUri: vscode.Uri, chatType: ChatType): Promise<void> {
     await this.applyEntries(configUri, [[['chat', 'defaultType'], chatType]]);
+  }
+
+  /**
+   * Grava um ou mais campos do grafo. Só o que veio no patch é tocado: o painel
+   * edita um controle por vez e reescrever o bloco inteiro apagaria o que outra
+   * pessoa acabou de mudar no arquivo.
+   */
+  async updateGraph(configUri: vscode.Uri, patch: GraphPatch): Promise<void> {
+    const entries: [string[], unknown][] = [];
+    for (const [key, value] of Object.entries(patch)) {
+      if (value !== undefined) {
+        entries.push([['knowledge', 'graphify', key], value]);
+      }
+    }
+    await this.applyEntries(configUri, entries);
+  }
+
+  async updateGit(configUri: vscode.Uri, patch: GitPatch): Promise<void> {
+    const entries: [string[], unknown][] = [];
+    for (const [key, value] of Object.entries(patch)) {
+      if (value !== undefined) {
+        entries.push([['git', key], value]);
+      }
+    }
+    await this.applyEntries(configUri, entries);
   }
 
   async updateHub(configUri: vscode.Uri, enabled: boolean, url?: string): Promise<void> {

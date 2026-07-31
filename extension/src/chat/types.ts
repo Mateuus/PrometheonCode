@@ -49,6 +49,14 @@ export type AgentStepStatus = 'running' | 'done' | 'failed';
 export interface AgentStep {
   /** Igual ao `toolId` do adaptador; liga início e fim do mesmo passo. */
   readonly id: string;
+  /**
+   * Sessão de agente que produziu o passo.
+   *
+   * É o que permite separar por agente o que hoje chega numa timeline só. Com
+   * um agente executando, todos os passos têm o mesmo valor; com delegação, é a
+   * diferença entre um console por agente e um amontoado.
+   */
+  readonly sessionId?: string;
   readonly kind: AgentStepKind;
   /** Nome exibido em destaque: "Write", "Bash", "Read". */
   readonly tool: string;
@@ -60,6 +68,10 @@ export interface AgentStep {
   readonly output?: string;
   /** A saída foi cortada em `MAX_STEP_OUTPUT_CHARS`; a interface avisa. */
   readonly truncated?: boolean;
+  /** Linhas da saída **inteira**, contadas antes do corte. */
+  readonly outputLines?: number;
+  /** Há cópia integral em disco, que o editor consegue abrir. */
+  readonly fullOutput?: boolean;
   readonly status: AgentStepStatus;
   readonly startedAt: number;
   /** Duração do passo; para `thought`, o tempo que o agente ficou pensando. */
@@ -73,14 +85,31 @@ export interface AgentStep {
  */
 export const MAX_STEP_OUTPUT_CHARS = 4096;
 
-/** Corta a saída de um passo no limite de persistência. */
+/**
+ * Corta a saída de um passo no limite de persistência.
+ *
+ * A contagem de linhas é do texto **inteiro**, medida antes do corte: é ela que
+ * responde "quanto isto tinha?" no rótulo do bloco, e medir depois responderia
+ * apenas o tamanho do limite.
+ */
 export function truncateStepOutput(output: string): {
   readonly output: string;
   readonly truncated: boolean;
+  readonly lines: number;
 } {
+  const lines = countLines(output);
   return output.length <= MAX_STEP_OUTPUT_CHARS
-    ? { output, truncated: false }
-    : { output: output.slice(0, MAX_STEP_OUTPUT_CHARS), truncated: true };
+    ? { output, truncated: false, lines }
+    : { output: output.slice(0, MAX_STEP_OUTPUT_CHARS), truncated: true, lines };
+}
+
+/** Linhas de um texto; a quebra final não conta como linha vazia a mais. */
+export function countLines(text: string): number {
+  if (text === '') {
+    return 0;
+  }
+  const normalized = text.endsWith('\n') ? text.slice(0, -1) : text;
+  return normalized.split('\n').length;
 }
 
 export interface ChatMessage {
@@ -125,6 +154,13 @@ export interface SendMessageInput {
   readonly workMode: WorkMode;
   readonly autonomy: Autonomy;
   readonly mainAgentId: string;
+  /** Modelo do Agent Profile principal; a conta não escolhe modelo. */
+  readonly model?: string;
+  /**
+   * Papel e índice de skills do agente principal, já montados. O chat repassa
+   * ao adaptador sem interpretar: quem conhece papéis e catálogo é o núcleo.
+   */
+  readonly systemPrompt?: string;
 }
 
 export type ChatEvent =
@@ -166,7 +202,24 @@ export type ChatEvent =
    * Tokens acumulados no run até agora. É estimativa em andamento: o número
    * que fica na mensagem é o do `message.completed`.
    */
-  | { readonly type: 'run.usage'; readonly runId: string; readonly usage: TokenUsage }
+  /**
+   * Modelo que o agente está usando de fato, como o CLI o reporta — a marca de
+   * janela no nome (`[1m]`) é o que dá o tamanho real do contexto.
+   */
+  | { readonly type: 'run.model'; readonly runId: string; readonly model: string }
+  | {
+      readonly type: 'run.usage';
+      readonly runId: string;
+      readonly usage: TokenUsage;
+      /**
+       * Maior entrada de um único turno neste run.
+       *
+       * Não é `usage.input`: aquele soma os turnos, porque é conta a pagar. Aqui
+       * a pergunta é outra — quanto do contexto está ocupado — e a resposta é o
+       * turno mais pesado, já que cada turno reenvia o histórico inteiro.
+       */
+      readonly contextTokens?: number;
+    }
   /** O agente parou para perguntar; a interface abre o modal e o run espera. */
   | {
       readonly type: 'question.asked';
@@ -189,6 +242,8 @@ export interface ChatService {
   listConversations(): Promise<ConversationSummary[]>;
   createConversation(input: CreateConversationInput): Promise<Conversation>;
   getMessages(conversationId: string): Promise<ChatMessage[]>;
+  /** Apaga a conversa inteira. Apagar o que não existe é um sucesso silencioso. */
+  deleteConversation(conversationId: string): Promise<void>;
   sendMessage(input: SendMessageInput): AsyncIterable<ChatEvent>;
   cancel(runId: string): Promise<void>;
 }

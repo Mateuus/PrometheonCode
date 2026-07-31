@@ -1,7 +1,14 @@
-import type { HubConnectionStatus } from '../core/types';
+import type { CustomAgentRole, HubConnectionStatus } from '../core/types';
 import { HubNotConfiguredError } from '../utils/errors';
 import { parseHubUrl } from './HubClient';
-import type { HubClient, HubConnectionConfig } from './types';
+import type {
+  HubClient,
+  HubConnectionConfig,
+  HubConversation,
+  HubMessage,
+  HubProject,
+  HubSubscription,
+} from './types';
 
 /**
  * Implementação usada enquanto o Hub não existe. Valida a URL informada — para
@@ -28,5 +35,47 @@ export class DisabledHubClient implements HubClient {
 
   isAuthenticated(): boolean {
     return false;
+  }
+
+  // Sem Hub não há projeto nem conversa. Falha em vez de devolver lista vazia:
+  // "nenhuma conversa" e "não perguntei a ninguém" são estados diferentes, e
+  // confundi-los faria o painel dizer que o histórico está vazio sem saber.
+  listProjects(): Promise<readonly HubProject[]> {
+    return Promise.reject(new HubNotConfiguredError());
+  }
+
+  listConversations(): Promise<readonly HubConversation[]> {
+    return Promise.reject(new HubNotConfiguredError());
+  }
+
+  getMessages(): Promise<readonly HubMessage[]> {
+    return Promise.reject(new HubNotConfiguredError());
+  }
+
+  /** Nada guardado, nada a esquecer — sair é sempre um sucesso silencioso. */
+  signOut(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  createConversation(): Promise<HubConversation> {
+    return Promise.reject(new HubNotConfiguredError());
+  }
+
+  postMessage(): Promise<HubMessage> {
+    return Promise.reject(new HubNotConfiguredError());
+  }
+
+  // Papéis da equipe vivem na organização do Hub. Sem Hub, o painel continua
+  // oferecendo os escopos de projeto e de máquina — só o de equipe fica fora.
+  listAgentRoles(): Promise<readonly CustomAgentRole[]> {
+    return Promise.reject(new HubNotConfiguredError());
+  }
+
+  saveAgentRoles(): Promise<readonly CustomAgentRole[]> {
+    return Promise.reject(new HubNotConfiguredError());
+  }
+
+  subscribe(): Promise<HubSubscription> {
+    return Promise.reject(new HubNotConfiguredError());
   }
 }

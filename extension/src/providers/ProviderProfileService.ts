@@ -90,6 +90,44 @@ export class ProviderProfileService {
   }
 
   /**
+   * Troca o nome que a conta mostra na interface.
+   *
+   * O identificador e o diretório de configuração **não** mudam: eles ancoram as
+   * credenciais em disco e o vínculo dos Agent Profiles. Renomear é corrigir o
+   * rótulo, e não pode custar o login nem quebrar quem aponta para a conta.
+   */
+  async rename(profileId: string, name: string): Promise<ProviderProfile> {
+    const trimmed = name.trim();
+    if (trimmed === '') {
+      throw new PrometheonError('Give the account a name.', 'provider.profile-name-required');
+    }
+    const profile = await this.require(profileId);
+    const updated: ProviderProfile = { ...profile, name: trimmed, updatedAt: Date.now() };
+    await this.store.save(updated);
+    this.logger.info(`Perfil ${profileId} renomeado para "${trimmed}".`);
+    return updated;
+  }
+
+  /**
+   * Troca o modelo que esta conta usa.
+   *
+   * String vazia devolve a escolha ao CLI, que é o padrão certo: o provedor
+   * lança modelo sem avisar, e a conta continua funcionando sem depender de
+   * uma atualização do Prometheon.
+   */
+  async setModel(profileId: string, model: string): Promise<ProviderProfile> {
+    const profile = await this.require(profileId);
+    const { model: _previous, ...rest } = profile;
+    const updated: ProviderProfile = {
+      ...rest,
+      ...(model === '' ? {} : { model }),
+      updatedAt: Date.now(),
+    };
+    await this.store.save(updated);
+    return updated;
+  }
+
+  /**
    * Remove o perfil da lista. O diretório com as credenciais é preservado — o
    * usuário decide apagá-lo, e nunca fazemos isso por conta própria.
    */

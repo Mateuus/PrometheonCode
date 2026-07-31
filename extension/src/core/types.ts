@@ -1,5 +1,6 @@
 /** Tipos centrais compartilhados entre extensão e webview. */
 
+import type { ModelChoice } from '../providers/types';
 import type { TokenUsage } from '../providers/UsageTracker';
 
 export type WorkMode = 'plan' | 'edit' | 'agent-team';
@@ -113,6 +114,15 @@ export interface HubConnectionStatus {
   readonly detail?: string;
 }
 
+/**
+ * Projeto do Hub como a interface o oferece. Conversa do Web Chat mora dentro
+ * de um projeto, então sem escolher um não há o que listar.
+ */
+export interface ProjectOption {
+  readonly id: string;
+  readonly name: string;
+}
+
 export interface WorkspaceStatus {
   /** Existe `.prometheon/prometheon.yaml` na pasta aberta. */
   readonly configured: boolean;
@@ -134,6 +144,8 @@ export interface AccountSummary {
   readonly providerId: string;
   readonly providerName: string;
   readonly configDirectory: string;
+  /** Modelo escolhido para esta conta; vazio deixa a decisão com o CLI. */
+  readonly model: string;
   readonly cliInstalled: boolean;
   readonly cliVersion?: string;
   readonly authenticated: boolean;
@@ -178,6 +190,79 @@ export interface ActivityStatus {
   readonly usage?: TokenUsage;
 }
 
+/**
+ * Quanto da janela de contexto o agente principal já está usando.
+ *
+ * O número é uma **estimativa medida**, não um valor que o provedor informa: o
+ * que se sabe é quantos tokens de entrada a última chamada consumiu, e isso
+ * inclui todo o histórico reenviado. É a melhor aproximação disponível de fora
+ * do CLI, e a interface diz que é aproximação em vez de fingir precisão.
+ */
+export interface ContextWindowStatus {
+  /** Tokens de entrada da última chamada. Zero antes da primeira resposta. */
+  readonly usedTokens: number;
+  /** Tamanho da janela do modelo em uso. */
+  readonly windowTokens: number;
+  /** Compactar sozinho ao cruzar o limite, antes da próxima mensagem. */
+  readonly autoCompact: boolean;
+  /** Fração da janela que dispara a compactação automática. */
+  readonly threshold: number;
+  /** Modelo considerado no cálculo, já pronto para exibir. */
+  readonly modelLabel: string;
+}
+
+/**
+ * Janela de contexto por modelo, em tokens.
+ *
+ * É o **plano B**. A fonte boa é o próprio CLI, que anuncia o modelo em uso no
+ * início do run e marca a janela no nome (`claude-opus-5[1m]`) — daí sai o
+ * número certo sem depender de tabela nenhuma. Esta aqui só cobre o instante
+ * antes da primeira resposta, quando ainda não houve run para perguntar.
+ *
+ * Um modelo fora da lista cai no padrão: uma barra aproximada é mais útil do
+ * que nenhuma, e o primeiro run corrige o valor.
+ */
+export const DEFAULT_CONTEXT_WINDOW = 200_000;
+
+export const CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
+  'claude-opus-5': 1_000_000,
+  'claude-fable-5': 1_000_000,
+  'claude-sonnet-5': 1_000_000,
+  'claude-opus-4-8': 1_000_000,
+  'claude-haiku-4-5-20251001': 200_000,
+};
+
+/** Fração da janela em que a compactação automática entra. */
+export const COMPACT_THRESHOLD = 0.85;
+
+/**
+ * Janela do modelo, em tokens.
+ *
+ * O sufixo entre colchetes vence a tabela: é o CLI dizendo com quantos tokens
+ * ele está rodando de fato. O mesmo modelo pode rodar com janelas diferentes, e
+ * quem sabe qual delas está valendo é ele, não esta lista.
+ */
+export function contextWindowFor(model: string | undefined): number {
+  if (model === undefined || model === '') {
+    return DEFAULT_CONTEXT_WINDOW;
+  }
+
+  const marked = /\[(\d+)(k|m)]\s*$/i.exec(model);
+
+  if (marked !== null) {
+    const amount = Number(marked[1]);
+    const scale = marked[2]?.toLowerCase() === 'm' ? 1_000_000 : 1_000;
+    return amount * scale;
+  }
+
+  return CONTEXT_WINDOWS[model] ?? DEFAULT_CONTEXT_WINDOW;
+}
+
+/** Nome do modelo sem a marca de janela, para exibir. */
+export function modelWithoutWindow(model: string): string {
+  return model.replace(/\[\d+[km]]\s*$/i, '');
+}
+
 export interface UiNotification {
   readonly level: 'info' | 'warning' | 'error';
   readonly message: string;
@@ -195,6 +280,10 @@ export interface SerializedError {
  * Papel de um agente (Docs/PROMETHEON_MULTI_PROVIDER_AGENT_PROFILES.md §6).
  * Não confundir com `ActiveAgentSummary.role`, que diz apenas quem lidera a
  * execução em andamento.
+ *
+ * `custom` é o guarda-chuva dos papéis nomeados pelo time: o perfil guarda
+ * `role: 'custom'` mais o `customRoleId`, e o papel em si vive em
+ * `.prometheon/agents/roles.yaml` ou no Hub — ver `CustomAgentRole`.
  */
 export type AgentRole =
   | 'orchestrator'
@@ -234,6 +323,68 @@ export const AGENT_ROLE_DESCRIPTIONS: Record<AgentRole, string> = {
   tester: 'Runs and writes tests for the change.',
   custom: 'A role you define through the system prompt.',
 };
+
+// ---------- Papéis nomeados pelo time ----------
+
+/**
+ * Onde um papel nomeado foi definido. A ordem também é a de precedência quando
+ * o mesmo id aparece em mais de um lugar: o projeto vence, porque é o que a
+ * equipe versiona; o Hub vem em seguida; a máquina é o rascunho pessoal.
+ */
+export type AgentRoleScope = 'project' | 'hub' | 'machine';
+
+export const AGENT_ROLE_SCOPES: readonly AgentRoleScope[] = ['project', 'hub', 'machine'];
+
+export const AGENT_ROLE_SCOPE_LABELS: Record<AgentRoleScope, string> = {
+  project: 'Project',
+  hub: 'Team',
+  machine: 'This machine',
+};
+
+export const AGENT_ROLE_SCOPE_DESCRIPTIONS: Record<AgentRoleScope, string> = {
+  project: 'Lives in .prometheon/agents/roles.yaml and reaches the team through Git.',
+  hub: 'Shared through the Hub with everyone in the organization.',
+  machine: 'Yours only. Never leaves this computer.',
+};
+
+/**
+ * Papel criado pelo time — "Gameplay PIE UE5 Test", por exemplo. Existe para
+ * dar nome e skills a uma especialidade que os sete papéis embutidos não
+ * cobrem, sem que cada agente tenha de repetir a mesma configuração.
+ *
+ * É configuração compartilhável: nada aqui é credencial.
+ */
+export interface CustomAgentRole {
+  /** Slug estável. É o que `AgentProfile.customRoleId` guarda. */
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+  /**
+   * Papel embutido de que este herda o ícone e a semântica de delegação. Um
+   * papel de teste continua sendo um `tester` para o orquestrador.
+   */
+  readonly basedOn: AgentRole;
+  /** Skills que um agente com este papel recebe já marcadas. */
+  readonly skills: readonly string[];
+  /** Instruções somadas ao system prompt do agente que usa este papel. */
+  readonly systemPrompt?: string;
+  readonly scope: AgentRoleScope;
+}
+
+/** O que a interface envia para criar ou editar um papel nomeado. */
+export interface CustomAgentRoleDraft {
+  readonly label: string;
+  readonly description: string;
+  readonly basedOn: AgentRole;
+  readonly skills: readonly string[];
+  readonly systemPrompt?: string;
+  readonly scope: AgentRoleScope;
+}
+
+export const MAX_ROLE_LABEL_LENGTH = 60;
+export const MAX_ROLE_DESCRIPTION_LENGTH = 240;
+export const MAX_CUSTOM_ROLES = 60;
+export const MAX_SKILLS_PER_ROLE = 40;
 
 /**
  * Autonomia de um Agent Profile. É a lista do documento (§6) e não a do
@@ -294,11 +445,19 @@ export interface AgentProfile {
   /** Binding obrigatório: um agente sem conta não executa (documento §15). */
   readonly providerProfileId: string;
   readonly role: AgentRole;
+  /**
+   * Papel nomeado, quando `role` é `custom`. Um id que não resolve vira aviso
+   * na interface — o agente não cai em outro papel sozinho, pela mesma razão
+   * que não cai em outra conta.
+   */
+  readonly customRoleId?: string;
   readonly model?: string;
   readonly systemPrompt?: string;
   readonly autonomyMode: AgentAutonomyMode;
   readonly allowedTools: readonly string[];
   readonly deniedTools: readonly string[];
+  /** Skills que este agente pode carregar, além das do papel. */
+  readonly skills: readonly string[];
   readonly maxConcurrentSessions: number;
   readonly contextStrategy: ContextStrategy;
   readonly enabled: boolean;
@@ -313,8 +472,22 @@ export interface AgentProfileSummary {
   readonly providerName: string | null;
   readonly accountName: string | null;
   readonly accountAuthenticated: boolean;
+  /** Papel nomeado já resolvido, quando o perfil aponta para um. */
+  readonly customRole: CustomAgentRole | null;
   /** Texto pronto quando o binding quebrou ou a conta não está autenticada. */
   readonly warning?: string;
+}
+
+/**
+ * Modelos conhecidos de um provedor.
+ *
+ * A lista é conveniência da interface, nunca um gate: o campo Model do Agent
+ * Profile continua aceitando texto livre. Quem manda no que existe é o CLI do
+ * provedor, e ele valida na hora de rodar.
+ */
+export interface ProviderModels {
+  readonly providerId: string;
+  readonly models: readonly ModelChoice[];
 }
 
 /** Provedor disponível para criar uma conta, como a interface o lista. */
@@ -324,6 +497,108 @@ export interface ProviderOption {
   /** Variável que isola a configuração, exibida ao criar a conta. */
   readonly configEnvironmentVariable: string;
 }
+
+// ---------- Skills ----------
+
+/**
+ * De onde a skill foi lida. A ordem é a de precedência: um mesmo `name` no
+ * projeto vence o da máquina, que vence o dos diretórios compatíveis lidos
+ * apenas para leitura (`.claude/skills/` e companhia).
+ */
+export type SkillScope = 'project' | 'machine' | 'compatible';
+
+export const SKILL_SCOPES: readonly SkillScope[] = ['project', 'machine', 'compatible'];
+
+export const SKILL_SCOPE_LABELS: Record<SkillScope, string> = {
+  project: 'Project',
+  machine: 'This machine',
+  compatible: 'Compatible folder',
+};
+
+/**
+ * Risco declarado pela skill. Vira teto de autonomia: uma skill que lida com
+ * segredo nunca roda sem aprovação, por mais permissivo que o perfil seja.
+ */
+export type SkillRiskLevel = 'none' | 'low' | 'medium' | 'high';
+
+export const SKILL_RISK_LEVELS: readonly SkillRiskLevel[] = ['none', 'low', 'medium', 'high'];
+
+export const SKILL_RISK_LABELS: Record<SkillRiskLevel, string> = {
+  none: 'No risk',
+  low: 'Low risk',
+  medium: 'Medium risk',
+  high: 'High risk',
+};
+
+/**
+ * Skill como o catálogo a mostra — o nível 1 do progressive disclosure: nome,
+ * gatilho e metadados de governança. O corpo só é lido quando alguém pede.
+ */
+export interface SkillSummary {
+  /** `name` do frontmatter; igual ao nome da pasta. É o identificador. */
+  readonly name: string;
+  /** Primeira linha `# Título` do corpo, ou o próprio nome quando não há. */
+  readonly title: string;
+  readonly description: string;
+  /** Categoria: a pasta acima da skill, ou `metadata.prometheon.category`. */
+  readonly category: string;
+  readonly scope: SkillScope;
+  readonly riskLevel: SkillRiskLevel;
+  readonly version: string | null;
+  readonly license: string | null;
+  readonly author: string | null;
+  /** Vazio quer dizer todas as plataformas. */
+  readonly platforms: readonly string[];
+  /** Nomes em `mcp_registry_entries` exigidos para a skill ser oferecida. */
+  readonly requiresMcp: readonly string[];
+  /** Teto de autonomia da skill; `handles_secrets` já o força a `manual`. */
+  readonly autonomyCeiling: AgentAutonomyMode;
+  /** Estimativa de tokens do corpo, para orçar o contexto antes de carregar. */
+  readonly bodyTokensEstimate: number;
+  /**
+   * Arquivos de apoio, relativos à pasta da skill (`references/x.md`). São o
+   * nível 3 do progressive disclosure: ficam fora do prompt até o corpo apontar
+   * e o modelo pedir, mas contam para o custo de quem for carregá-los.
+   */
+  readonly supportFiles: readonly string[];
+  /** Caminho do `SKILL.md`, para abrir no editor. */
+  readonly path: string;
+  /** Roda nesta plataforma. Falso mantém a skill visível, mas não oferecível. */
+  readonly supported: boolean;
+}
+
+/** Skill que não pôde ser lida. Reportada, nunca corrigida sozinha. */
+export interface SkillProblem {
+  /** Caminho relativo do que falhou, para quem for corrigir saber onde olhar. */
+  readonly path: string;
+  readonly detail: string;
+}
+
+export interface SkillCatalogStatus {
+  readonly skills: readonly SkillSummary[];
+  readonly problems: readonly SkillProblem[];
+  /** Raízes varridas, na ordem de precedência, para a interface explicar-se. */
+  readonly roots: readonly string[];
+}
+
+export const EMPTY_SKILL_CATALOG: SkillCatalogStatus = { skills: [], problems: [], roots: [] };
+
+/**
+ * Skills que cada papel embutido recebe marcadas ao criar um agente.
+ *
+ * Não é gate: é o ponto de partida que evita começar do zero toda vez. O nome
+ * é o da skill, e uma que não exista no catálogo simplesmente não aparece —
+ * a lista é sugestão, não promessa de instalação.
+ */
+export const DEFAULT_ROLE_SKILLS: Record<AgentRole, readonly string[]> = {
+  orchestrator: ['subagent-driven-development', 'plan', 'bug-triage'],
+  planner: ['plan', 'spike', 'code-wiki'],
+  implementer: ['test-driven-development', 'systematic-debugging', 'github-pr-workflow'],
+  reviewer: ['requesting-code-review', 'simplify-code', 'github-code-review'],
+  researcher: ['code-wiki', 'codebase-inspection', 'llm-wiki'],
+  tester: ['test-driven-development', 'systematic-debugging', 'dogfood'],
+  custom: [],
+};
 
 // ---------- MCP ----------
 
@@ -412,6 +687,68 @@ export interface McpStatus {
   readonly file: string | null;
   readonly servers: readonly McpServerSummary[];
   readonly problems: readonly McpProblem[];
+  /** Motivo já pronto para exibir quando `available` é falso. */
+  readonly message?: string;
+}
+
+/**
+ * Quando o grafo de conhecimento do projeto é reconstruído.
+ *
+ * `commit` é o padrão recomendado. O gatilho alternativo — "ao fim do run do
+ * agente" — depende de o agente declarar que terminou, e o agente que escreveu
+ * o código é o pior juiz de se ele funciona. O commit é a única declaração
+ * verificável de "isto está bom", e mantém grafo e código no mesmo commit em
+ * vez de N rebuilds dessincronizados para um commit só.
+ */
+export const GRAPH_REBUILD_TRIGGERS = ['manual', 'commit', 'run'] as const;
+export type GraphRebuildTrigger = (typeof GRAPH_REBUILD_TRIGGERS)[number];
+
+/** Grafo de conhecimento do projeto, do jeito que o painel precisa exibi-lo. */
+export interface GraphStatus {
+  /** Há uma pasta aberta; sem isso não existe grafo de projeto. */
+  readonly available: boolean;
+  /** Os agentes podem consultar o grafo e sabem que ele existe. */
+  readonly enabled: boolean;
+  /** Pasta do grafo, relativa à raiz do projeto. */
+  readonly outputDir: string;
+  /** A pasta do grafo existe em disco. */
+  readonly exists: boolean;
+  /** Idade do grafo em milissegundos; `null` quando ele ainda não existe. */
+  readonly ageMs: number | null;
+  /** Comando que reconstrói o grafo. Vazio significa "ainda não configurado". */
+  readonly rebuildCommand: string;
+  readonly rebuildOn: GraphRebuildTrigger;
+  /** Comando cujo código de saída 0 libera o rebuild. Vazio desliga o portão. */
+  readonly gate: string;
+  readonly blockOnHygieneFailure: boolean;
+  /** O CLI `graphify` respondeu no PATH desta máquina. */
+  readonly cliDetected: boolean;
+  /** Motivo já pronto para exibir quando `available` é falso. */
+  readonly message?: string;
+}
+
+/** Formato exigido da mensagem de commit. */
+export const COMMIT_STYLES = ['conventional', 'free'] as const;
+export type CommitStyle = (typeof COMMIT_STYLES)[number];
+
+/** Idioma das mensagens de commit. Independe do idioma do painel. */
+export const COMMIT_LANGUAGES = ['en', 'pt-br', 'es'] as const;
+export type CommitLanguage = (typeof COMMIT_LANGUAGES)[number];
+
+/** Política de commit do projeto e o estado dos hooks que a garantem. */
+export interface GitStatus {
+  /** A pasta aberta é um repositório Git. */
+  readonly available: boolean;
+  /** Permitir que uma IA seja creditada como coautora. Desligado por padrão. */
+  readonly coAuthoredBy: boolean;
+  readonly commitStyle: CommitStyle;
+  readonly commitLanguage: CommitLanguage;
+  /** Escopos aceitos no título quando o formato é Conventional Commits. */
+  readonly scopes: readonly string[];
+  /** `core.hooksPath` aponta para os hooks que o Prometheon escreveu. */
+  readonly hooksInstalled: boolean;
+  /** Valor atual de `core.hooksPath`, quando aponta para outro lugar. */
+  readonly hooksPath: string | null;
   /** Motivo já pronto para exibir quando `available` é falso. */
   readonly message?: string;
 }

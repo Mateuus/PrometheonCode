@@ -155,6 +155,8 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | null {
   const contextStrategy = oneOf<ContextStrategy>(value['contextStrategy'], CONTEXT_STRATEGIES);
   const allowedTools = toolList(value['allowedTools']);
   const deniedTools = toolList(value['deniedTools']);
+  // Perfil gravado antes das skills existirem é válido: a lista nasce vazia.
+  const skills = toolList(value['skills']);
   const maxConcurrentSessions = value['maxConcurrentSessions'];
 
   if (
@@ -166,6 +168,7 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | null {
     contextStrategy === null ||
     allowedTools === null ||
     deniedTools === null ||
+    skills === null ||
     typeof value['enabled'] !== 'boolean' ||
     typeof maxConcurrentSessions !== 'number' ||
     !Number.isInteger(maxConcurrentSessions) ||
@@ -181,7 +184,9 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | null {
     value['systemPrompt'] === undefined
       ? undefined
       : text(value['systemPrompt'], MAX_SYSTEM_PROMPT_LENGTH);
-  if (model === null || systemPrompt === null) {
+  const customRoleId =
+    value['customRoleId'] === undefined ? undefined : text(value['customRoleId'], 96);
+  if (model === null || systemPrompt === null || customRoleId === null) {
     return null;
   }
 
@@ -190,11 +195,15 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | null {
     name,
     providerProfileId,
     role,
+    // O vínculo só sobrevive junto do papel `custom`; em qualquer outro ele
+    // seria um ponteiro invisível que ninguém consegue ver nem corrigir.
+    ...(customRoleId === undefined || role !== 'custom' ? {} : { customRoleId }),
     ...(model === undefined ? {} : { model }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
     autonomyMode,
     allowedTools,
     deniedTools,
+    skills,
     maxConcurrentSessions,
     contextStrategy,
     enabled: value['enabled'],

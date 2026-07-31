@@ -42,6 +42,10 @@ interface RunningSession {
   readonly id: string;
   readonly profile: ProviderProfile;
   readonly workspaceFolder: string | undefined;
+  /** Modelo pedido pelo Agent Profile; a conta não escolhe modelo. */
+  readonly model: string | undefined;
+  /** Papel e índice de skills, já montados pelo núcleo. Vazio quando não há. */
+  readonly systemPrompt: string | undefined;
   /** Identificador que o CLI dá à conversa; é o que permite retomá-la. */
   cliSessionId: string | null;
   child: ChildProcessWithoutNullStreams | null;
@@ -109,6 +113,8 @@ export class ClaudeCodeAgentAdapter implements AgentAdapter {
       id,
       profile,
       workspaceFolder: input.workspaceFolder,
+      model: input.model,
+      systemPrompt: input.systemPrompt,
       cliSessionId: null,
       child: null,
       interrupted: false,
@@ -343,12 +349,74 @@ export function translateLine(line: string): TranslationResult {
       events.push(fromResult(event));
       break;
 
+    case 'system':
+      events.push(...fromSystem(event));
+      break;
+
     default:
       break;
   }
 
   return { events, cliSessionId };
 }
+
+/**
+ * Avisos do CLI que valem uma linha na timeline.
+ *
+ * Hoje é a compactação: ela pode levar dezenas de segundos e reescreve o
+ * histórico do agente. Sem isto o painel fica parado, sem nada acontecendo na
+ * tela, exatamente durante a operação mais longa que o CLI executa sozinho.
+ *
+ * O resto do que chega em `system` é ignorado de propósito — inventário de
+ * ferramentas e status de MCP são ruído dentro de uma conversa.
+ */
+function* fromSystem(event: Record<string, unknown>): Generator<AgentEvent> {
+  // O `init` abre todo run e diz com que modelo o CLI está rodando, com a
+  // janela marcada no nome. É a única fonte honesta desse número: o modelo
+  // pedido pode não ser o que respondeu, e a mesma versão roda com janelas
+  // diferentes conforme o plano e as flags da conta.
+  if (event['subtype'] === 'init') {
+    const model = event['model'];
+
+    if (typeof model === 'string' && model !== '') {
+      yield { type: 'model', model };
+    }
+    return;
+  }
+
+  if (event['subtype'] !== 'status') {
+    return;
+  }
+
+  if (event['status'] === 'compacting') {
+    yield {
+      type: 'tool.requested',
+      toolId: COMPACT_STEP_ID,
+      tool: 'Compact',
+      title: 'Summarizing the conversation',
+    };
+    return;
+  }
+
+  const result = event['compact_result'];
+
+  if (result === undefined) {
+    return;
+  }
+
+  const failed = result === 'failed';
+  const detail = event['compact_error'];
+
+  yield {
+    type: 'tool.completed',
+    toolId: COMPACT_STEP_ID,
+    ...(typeof detail === 'string' && detail !== '' ? { detail } : {}),
+    ...(failed ? { failed: true } : {}),
+  };
+}
+
+/** Um passo por run: a compactação acontece uma vez, no começo. */
+const COMPACT_STEP_ID = 'prometheon-compact';
 
 function* fromAssistant(event: Record<string, unknown>): Generator<AgentEvent> {
   const message = event['message'];
@@ -589,11 +657,21 @@ function argumentsFor(session: RunningSession, message: AgentInput): string[] {
     permissionModeFor(message),
   ];
 
-  // O modelo escolhido na conta. Ausente deixa a decisão com o CLI, que é o
-  // comportamento certo por padrão: ele acompanha os lançamentos do provedor
-  // sem depender de o Prometheon ser atualizado junto.
-  if (session.profile.model !== undefined && session.profile.model !== '') {
-    args.push('--model', session.profile.model);
+  // O modelo do Agent Profile. A conta é um login isolado e não escolhe modelo:
+  // o valor guardado nela é só o que o seletor do composer trocou, e serve de
+  // último recurso. Ausente nos dois, a decisão fica com o CLI — que é o certo
+  // por padrão, porque ele acompanha os lançamentos do provedor sem depender de
+  // o Prometheon ser atualizado junto.
+  const model = session.model ?? session.profile.model;
+  if (model !== undefined && model !== '') {
+    args.push('--model', model);
+  }
+
+  // `--append-system-prompt` acrescenta ao prompt do CLI em vez de substituí-lo:
+  // o papel e o índice de skills entram por cima do que o Claude Code já sabe
+  // fazer, e não no lugar disso.
+  if (session.systemPrompt !== undefined && session.systemPrompt !== '') {
+    args.push('--append-system-prompt', session.systemPrompt);
   }
 
   // Retomar a conversa é o que dá contexto à segunda mensagem. Sem isto, cada

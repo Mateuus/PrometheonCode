@@ -3,6 +3,7 @@ import {
   type AccountSummary,
   type AgentProfile,
   type AgentProfileSummary,
+  type CustomAgentRole,
 } from '../core/types';
 import type { Logger } from '../logger';
 import type { ProviderProfileService } from '../providers/ProviderProfileService';
@@ -46,11 +47,13 @@ export interface AgentProfileInput {
   readonly name: string;
   readonly providerProfileId: string;
   readonly role: AgentProfile['role'];
+  readonly customRoleId?: string;
   readonly model?: string;
   readonly systemPrompt?: string;
   readonly autonomyMode: AgentProfile['autonomyMode'];
   readonly allowedTools: readonly string[];
   readonly deniedTools: readonly string[];
+  readonly skills: readonly string[];
   readonly maxConcurrentSessions: number;
   readonly contextStrategy: AgentProfile['contextStrategy'];
   readonly enabled: boolean;
@@ -113,11 +116,15 @@ export class AgentProfileService {
   }
 
   /**
-   * Resolve o binding de cada agente contra as contas conhecidas. Nada é
-   * corrigido automaticamente: um binding quebrado vira aviso na interface.
+   * Resolve o binding de cada agente contra as contas e os papéis conhecidos.
+   * Nada é corrigido automaticamente: um vínculo quebrado vira aviso na
+   * interface, nunca uma troca silenciosa de conta ou de papel.
    */
-  async summaries(accounts: readonly AccountSummary[]): Promise<readonly AgentProfileSummary[]> {
-    return resolveAgentProfiles(await this.list(), accounts);
+  async summaries(
+    accounts: readonly AccountSummary[],
+    roles: readonly CustomAgentRole[] = [],
+  ): Promise<readonly AgentProfileSummary[]> {
+    return resolveAgentProfiles(await this.list(), accounts, roles);
   }
 
   /**
@@ -152,15 +159,20 @@ export class AgentProfileService {
 
     const model = input.model?.trim();
     const systemPrompt = input.systemPrompt?.trim();
+    const customRoleId = input.role === 'custom' ? input.customRoleId?.trim() : undefined;
     return {
       name,
       providerProfileId: bound.id,
       role: input.role,
+      // Só faz sentido junto de `role: 'custom'`; guardá-lo em outro papel
+      // deixaria um vínculo invisível esperando para confundir depois.
+      ...(customRoleId === undefined || customRoleId === '' ? {} : { customRoleId }),
       ...(model === undefined || model === '' ? {} : { model }),
       ...(systemPrompt === undefined || systemPrompt === '' ? {} : { systemPrompt }),
       autonomyMode: input.autonomyMode,
       allowedTools: uniqueTools(input.allowedTools),
       deniedTools: uniqueTools(input.deniedTools),
+      skills: uniqueTools(input.skills),
       maxConcurrentSessions: input.maxConcurrentSessions,
       contextStrategy: input.contextStrategy,
       enabled: input.enabled,
@@ -190,8 +202,13 @@ export class AgentProfileService {
 export function resolveAgentProfiles(
   profiles: readonly AgentProfile[],
   accounts: readonly AccountSummary[],
+  roles: readonly CustomAgentRole[] = [],
 ): readonly AgentProfileSummary[] {
   return profiles.map((profile) => {
+    const customRole =
+      profile.customRoleId === undefined
+        ? null
+        : (roles.find((role) => role.id === profile.customRoleId) ?? null);
     const account = accounts.find((item) => item.profileId === profile.providerProfileId);
     if (account === undefined) {
       return {
@@ -199,20 +216,26 @@ export function resolveAgentProfiles(
         providerName: null,
         accountName: null,
         accountAuthenticated: false,
+        customRole,
         warning: `No account matches "${profile.providerProfileId}". Bind this agent to an existing account — Prometheon never picks another one for you.`,
       };
     }
     const authenticated = account.authenticated;
+    // O papel perdido é avisado antes da conta desconectada: sem papel o agente
+    // não sabe o que é, e entrar em sessão assim é o pior dos dois casos.
+    const warning =
+      profile.customRoleId !== undefined && customRole === null
+        ? `The role "${profile.customRoleId}" does not exist here. Pick another one — Prometheon never falls back to a different role.`
+        : authenticated
+          ? undefined
+          : `"${account.name}" is not signed in. Sign in to that account before running this agent.`;
     return {
       profile,
       providerName: account.providerName,
       accountName: account.name,
       accountAuthenticated: authenticated,
-      ...(authenticated
-        ? {}
-        : {
-            warning: `"${account.name}" is not signed in. Sign in to that account before running this agent.`,
-          }),
+      customRole,
+      ...(warning === undefined ? {} : { warning }),
     };
   });
 }

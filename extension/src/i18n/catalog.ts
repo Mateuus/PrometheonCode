@@ -13,8 +13,9 @@ export const WEBVIEW_STRINGS = {
   // Cabeçalho
   'header.sessions': 'Sessions',
   'header.newChat': 'New chat',
-  'header.settings': 'Open settings',
-  'header.accounts': 'Accounts and usage',
+  // Uma engrenagem só, e ela abre o painel do Prometheon. O editor de
+  // configurações do VS Code virou um botão dentro da seção General.
+  'header.settings': 'Settings',
   'header.untitled': 'Untitled',
 
   // Histórico de sessões
@@ -71,6 +72,8 @@ export const WEBVIEW_STRINGS = {
   'settings.accounts': 'Accounts',
   'settings.agents': 'Agents',
   'settings.workspace': 'Workspace',
+  'settings.graph': 'Graph',
+  'settings.git': 'Git & Commits',
   'settings.mcp': 'MCP',
 
   // Idioma da interface
@@ -118,6 +121,9 @@ export const WEBVIEW_STRINGS = {
   'accounts.signIn': 'Sign in',
   'accounts.signInAgain': 'Sign in again',
   'accounts.signOut': 'Sign out',
+  'accounts.rename': 'Rename',
+  'accounts.renameSave': 'Save name',
+  'accounts.renameRequired': 'Give the account a name.',
   'accounts.remove': 'Remove',
   'accounts.note':
     'Token counts are measured by Prometheon on this machine. Subscription limits live in each provider account and are not read from here.',
@@ -139,6 +145,14 @@ export const WEBVIEW_STRINGS = {
   'web.description':
     'Web Chat keeps conversations and approved context synchronized through Prometheon Hub. Connect a Hub to continue.',
   'web.connect': 'Connect to Prometheon Hub',
+
+  // Conexão com o Hub, na seção General
+  'hub.title': 'Prometheon Hub',
+  'hub.description':
+    'Signing in authorizes this device through your browser. Prometheon never asks for your password, and the credential stays in the editor secret storage.',
+  'hub.signIn': 'Sign in to Prometheon Hub',
+  'hub.signOut': 'Sign out of Hub',
+  'hub.reconnect': 'Reconnect',
 
   // Formulários do modal de configuração
   'form.name': 'Name',
@@ -198,6 +212,114 @@ export const WEBVIEW_STRINGS = {
   'agents.nameRequired': 'Give the agent profile a name.',
   'agents.accountRequired': 'Pick the account this agent runs through.',
   'agents.sessionsRange': 'Max concurrent sessions must be between 1 and {0}.',
+
+  // Ajuda contextual dos campos do agente. A dica curta embaixo do controle diz
+  // como preencher; o `?` explica o que o campo significa e o que ele custa.
+  'help.about': 'About {0}',
+  'agents.nameHelp':
+    'Shown in the agent list and when the orchestrator delegates. It also derives the profile id at creation; renaming later keeps the original id.',
+  'agents.accountHelp':
+    'Each agent has its own CLI sign-in, isolated from the others. If the bound account is unavailable this agent simply does not run — Prometheon never borrows another one.',
+  'agents.roleHelp':
+    'The part this agent plays in a team run. The orchestrator delegates instead of implementing; the others receive a task and execute it. Custom leaves the behavior to the system prompt.',
+  'agents.modelHelp':
+    'The model id handed to the CLI, exactly as typed. Prometheon keeps no model list, so a wrong id only fails when the agent runs.',
+  'agents.systemPromptHelp':
+    'Standing instructions added to every session of this agent. The project rules and the task itself come on top of them.',
+  'agents.autonomyHelp':
+    'How far this agent goes before it stops and asks. Bypass is temporary by design: it lives in memory only, and restarting the extension or switching workspace drops it back to Manual.',
+  'agents.contextHelp':
+    'How much this agent gets to see: the task alone, the repository plus the Prometheon Brain, or the knowledge shared through the Hub.',
+  'agents.allowedHelp':
+    'Restricts this agent to these tools. Empty means whatever the provider allows by default.',
+  'agents.deniedHelp':
+    'Tools this agent may never use, even when they also appear in the allowed list. Denied always wins.',
+  'agents.maxSessionsHelp':
+    'How many tasks this agent runs at the same time. Each session is a separate CLI process, with its own context and its own cost, so four means four processes on this machine. Keep it at 1 when the tasks touch the same files.',
+  'agents.enabledHelp':
+    'A disabled agent keeps its configuration but is not offered for delegation and starts no new session.',
+
+  // Papéis nomeados: os que a equipe cria além dos sete embutidos.
+  'roles.new': 'New role',
+  'roles.newOption': 'New role…',
+  'roles.newOptionDescription': 'Name a specialty of your own and reuse it in other agents.',
+  'roles.edit': 'Edit role',
+  'roles.remove': 'Remove role',
+  'roles.create': 'Create role',
+  'roles.save': 'Save role',
+  'roles.description': 'Description',
+  'roles.basedOn': 'Based on',
+  'roles.sharedThrough': 'Shared through',
+  'roles.labelHelp': 'How this role appears in the Role list of every agent profile.',
+  'roles.descriptionHelp':
+    'One line saying what this role does. It is what the orchestrator reads when deciding whom to delegate to.',
+  'roles.basedOnHelp':
+    'Which built-in role this one behaves like when work is delegated. A test specialty is still a tester.',
+  'roles.scopeHelp':
+    'Where this role is stored, and therefore who else gets it. Team roles need a connected Hub; project roles travel with the repository.',
+  'roles.skillsHelp':
+    'Skills every agent with this role starts with. Each agent can still add its own.',
+  'roles.promptHelp':
+    'Added to the system prompt of every agent with this role, before the prompt of the agent itself.',
+  'roles.labelRequired': 'Give the role a name.',
+  'roles.descriptionRequired': 'Describe in one line what this role does.',
+  'roles.pickRole': 'Pick the role this agent plays.',
+  'roles.roleHelp':
+    'The part this agent plays in a team run. The orchestrator delegates instead of implementing; the others receive a task and execute it. A named role of your own carries its own skills.',
+  'roleScope.machine': 'This machine',
+  'roleScope.project.description':
+    'Lives in .prometheon/agents/roles.yaml and reaches the team through Git.',
+  'roleScope.hub.description': 'Shared through the Hub with everyone in the organization.',
+  'roleScope.machine.description': 'Yours only. Never leaves this computer.',
+
+  // Skills
+  'skills.field': 'Skills',
+  'skills.empty': 'No skill found yet. Add one under .prometheon/skills/ and refresh.',
+  'skills.available': '{0} skills available in this workspace.',
+  'skills.help':
+    'Procedures this agent may load during a run. Only the name and the trigger line stay in the prompt; the body is read when the agent asks for it.',
+  'skills.unsupported': '{0} — does not run on this platform.',
+
+  // Seção Skills: catálogo de leitura. Editar uma skill é editar o SKILL.md.
+  'skills.section': 'Skills',
+  'skills.sectionDescription':
+    'A skill is a procedure an agent follows. Only the name and the trigger line stay in the prompt; the body is read when the agent needs it.',
+  'skills.roots': 'Read from: {0}',
+  'skills.unreadable': '{0} skills could not be read',
+  'skills.refresh': 'Refresh',
+  'skills.risk': 'Risk',
+  'skills.body': 'Body',
+  'skills.bodyTokens': '~{0} tokens',
+  'skills.version': 'Version',
+  'skills.license': 'License',
+  'skills.author': 'Author',
+  'skills.supportFiles': 'Support files',
+  'skills.requiresMcp': 'Requires MCP',
+  'skills.wrongPlatform': 'This skill declares {0} and does not run here.',
+  'skills.capsAutonomy':
+    'This skill caps the agent at Manual: it asks for approval even in Auto or Bypass.',
+  'skills.open': 'Open SKILL.md',
+  'skillScope.project': 'Project',
+  'skillScope.machine': 'This machine',
+  'skillScope.compatible': 'Compatible folder',
+  'skillRisk.none': 'No risk',
+  'skillRisk.low': 'Low risk',
+  'skillRisk.medium': 'Medium risk',
+  'skillRisk.high': 'High risk',
+
+  // Modelos: a lista vem do provedor da conta vinculada e é conveniência —
+  // texto livre continua valendo, porque o provedor lança modelo sem avisar.
+  'models.freeText': 'Free text: the CLI validates it when the agent runs.',
+  'models.known': '{0} models known for this provider.',
+  'models.customHelp':
+    'The model id handed to the CLI, exactly as typed. A wrong id only fails when the agent runs.',
+  'models.pickFromList': 'Pick from the list',
+  'models.cliDefaultDescription': 'Whatever the CLI already uses for this account.',
+  'models.other': 'Other…',
+  'models.otherDescription': 'Type a model id the list does not have yet.',
+  'models.hint': 'The account only holds the sign-in. The model is this agent’s choice.',
+  'models.help':
+    'The model id handed to the CLI. The list comes from the provider of the bound account and is a convenience — pick Other… to type an id it does not have yet, or edit models.json to add it for good.',
   'role.orchestrator': 'Orchestrator',
   'role.planner': 'Planner',
   'role.implementer': 'Implementer',
@@ -216,6 +338,7 @@ export const WEBVIEW_STRINGS = {
   'agentAutonomy.bypass.description': 'No interactive approval; never persisted across restarts.',
   'context.isolated': 'Isolated',
   'context.project': 'Project',
+  'web.noProject': 'No project available for this account in the Hub.',
   'context.team': 'Team',
   'context.isolated.description': 'Only the task and the files handed to the agent.',
   'context.project.description': 'Repository context and the Prometheon Brain.',
@@ -299,7 +422,140 @@ export const WEBVIEW_STRINGS = {
   'a11y.message': 'Message',
   'attachments.remove': 'Remove {0}',
   'attachments.open': 'Open {0}',
+  // Painel de ações, contexto e histórico
+  'composer.add': 'Add to the message',
+  'composer.actions': 'Actions',
+  'commands.filter': 'Filter actions…',
+  'commands.noMatch': 'No action matches this search.',
+  'commands.upload': 'Upload from computer',
+  'commands.uploadHint': 'Attach images to the message.',
+  'commands.addContext': 'Add context',
+  'commands.addContextHint': 'Mention a file from this project.',
+  'commands.compact': 'Compact conversation',
+  'commands.compactHint': 'Ask the agent to summarize and continue from the summary.',
+  'commands.autoCompact': 'Auto-compact',
+  'commands.autoCompactHint': 'Compact on its own when the window is nearly full.',
+  'commands.on': 'On',
+  'commands.off': 'Off',
+  'commands.clearConversation': 'Clear conversation',
+  'commands.clearConversationHint': 'Erase the messages and keep the session.',
+  'commands.inUse': 'In use',
+  'commands.accountUsage': 'Account & usage',
+  'commands.noAccount': 'No account yet.',
+  'commands.accountsHint': 'CLI sign-ins available on this machine.',
+  'commands.agentsHint': 'Agent Profiles and their bindings.',
+  'commands.usageTotal': '{0} today · {1} total · {2} runs',
+  'commands.usageFooter': 'All accounts: {0} tokens across {1} runs. Counted by Prometheon on this machine, not by the provider.',
+  'context.window': 'Context window',
+  'context.used': 'Context window · {0}% used',
+  'context.numbers': '{0} of {1} tokens · {2}',
+  'context.estimate': 'Estimated from the last call. Compacting starts a shorter conversation.',
+  'context.compactNow': 'Compact now',
+  'sessions.delete': 'Delete this session',
+  'sessions.deleteNamed': 'Delete {0}',
+  'sessions.deleteConfirm': 'Delete?',
+  'general.openVsCodeSettings': 'Open VS Code settings',
+  'accounts.namePlaceholder': 'e.g. Personal, Work, Client X',
+
   'usage.tooltip': '{0} input tokens · {1} output tokens',
+
+  // Seção Graph — o grafo de conhecimento do projeto
+  'graph.note':
+    'A knowledge graph of this project, generated from the code and committed with it. Agents query it instead of reading file by file.',
+  'graph.unavailable':
+    'The project graph lives inside the open folder. Open a folder to configure it.',
+  'graph.found': 'Found in {0}/ · rebuilt {1}',
+  'graph.missing': 'Not found in {0}/',
+  'graph.cli': 'graphify CLI',
+  'graph.cliMissing': 'Not found on PATH',
+  'graph.hook': 'Commit hook',
+  'graph.hookInstalled': 'Installed',
+  'graph.hookMissing': 'Not installed',
+  'graph.enabled': 'Let agents query the project graph',
+  'graph.enabledHelp':
+    'Every agent is told the graph exists, where it is, and which commands read it. Without this they fall back to reading files one by one.',
+  'graph.folder': 'Graph folder',
+  'graph.folderHint': 'Relative to the project root.',
+  'graph.command': 'Rebuild command',
+  'graph.commandHint':
+    'Runs from the project root, in a shell. There is no default: the wrong command can rebuild the graph from a different corpus than the one your project curates.',
+  'graph.trigger': 'When to rebuild',
+  'graph.triggerHelp':
+    'On commit is the safest: the commit is the only verifiable statement that the work is good, and it keeps one rebuild per commit instead of many per task.',
+  'graph.triggerCommit': 'On commit (recommended)',
+  'graph.triggerCommitDescription':
+    'A Git hook rebuilds the graph when the commit touches code, so graph and code land together.',
+  'graph.triggerManualDescription':
+    'Nobody rebuilds it for you. Use the button below when you want to.',
+  'graph.triggerRun': 'After each run',
+  'graph.triggerRunDescription':
+    'Rebuilds when an agent finishes. Costs one rebuild per run, and the graph can be rebuilt mid-task.',
+  'graph.gate': 'Gate command',
+  'graph.gatePlaceholder': 'optional — e.g. npm test',
+  'graph.gateHint':
+    'The commit only proceeds when this command exits 0. Leave empty to skip the gate.',
+  'graph.gateHelp':
+    'A command, never an agent saying it finished: the agent that wrote the code is the worst judge of whether it works.',
+  'graph.hygiene': 'Block the commit when the hygiene check fails',
+  'graph.hygieneHelp':
+    'If the rebuild reports a hygiene failure — a machine path or a sensitive file inside the graph — the commit stops. Tracking a leak down later costs far more than stopping now.',
+  'graph.needsHooks':
+    'Rebuild on commit needs the Git hooks installed on this machine. They are not installed yet.',
+  'graph.needsCommand': 'Set the rebuild command before choosing an automatic trigger.',
+  'graph.rebuildNow': 'Rebuild now',
+  'graph.costCommit':
+    'Every commit that touches code waits for this command to finish. Time it before rolling this out to the team — a rebuild of a couple of minutes gets the hook disabled.',
+  'graph.costRun': 'Every run that changes code waits for this command to finish.',
+  'graph.ageNow': 'just now',
+  'graph.ageMinutes': '{0} min ago',
+  'graph.ageHour': '1 hour ago',
+  'graph.ageHours': '{0} hours ago',
+  'graph.ageDay': '1 day ago',
+  'graph.ageDays': '{0} days ago',
+
+  // Seção Git & Commits — política de commit e os hooks que a garantem
+  'git.note':
+    'Commit policy for this project. It is stored in .prometheon/prometheon.yaml, so whoever clones the repository gets the same rules.',
+  'git.unavailable': 'Commit policy belongs to a project. Open a folder to configure it.',
+  'git.coAuthored': 'Allow AI co-authorship in commits',
+  'git.coAuthoredHelp':
+    'Off by default. With this off, the installed hook strips Co-Authored-By trailers and tool signatures from every commit message — asking the model not to add them only reduces the noise.',
+  'git.style': 'Commit message format',
+  'git.styleConventional': 'Conventional Commits',
+  'git.styleConventionalDescription':
+    'type(scope): subject — for example, feat(extension): add the graph section.',
+  'git.styleFree': 'Free form',
+  'git.styleFreeDescription':
+    'No required format. The agent follows whatever the repository already does.',
+  'git.language': 'Commit message language',
+  'git.languageHint': 'Independent of the panel language.',
+  'git.scopes': 'Accepted scopes',
+  'git.scopesPlaceholder': 'e.g. extension, hub, docs',
+  'git.scopesHint': 'Comma separated. Leave empty to accept any scope.',
+  'git.hooks': 'Hooks',
+  'git.hooksNote':
+    'The files are versioned so the whole team gets them, but pointing Git at them is per machine — each person installs it once.',
+  'git.hooksPath': 'core.hooksPath',
+  'git.hooksPathUnset': 'Not set (Git uses .git/hooks)',
+  'git.hooksForeign':
+    'Git is currently using hooks from {0}. Installing points it at .githooks instead.',
+  'git.install': 'Install Git hooks',
+  'git.uninstall': 'Disable hooks on this machine',
+  'git.configureGraph': 'Configure the graph',
+  // Console por agente
+  'agents.main': 'Main',
+  'agents.openConsole': 'Open this agent’s console',
+  'agents.noTools': 'This agent has not run any tool yet.',
+  'agents.unnamed': 'Agent',
+
+  // Saída das ferramentas no chat
+  'step.output': '{0} tool output',
+  'step.outputLines': '{0} tool output ({1} lines)',
+  'step.outputTruncated': 'Showing the first {0} KB.',
+  'step.openOutput': 'Open full output',
+
+  'projectConfig.missing':
+    'These settings are stored in .prometheon/prometheon.yaml, which does not exist yet.',
 } as const satisfies Record<string, string>;
 
 export type WebviewStringKey = keyof typeof WEBVIEW_STRINGS;

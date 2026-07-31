@@ -90,6 +90,37 @@ suite('Contas de provedor', () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  test('renomear troca só o rótulo: id, diretório e login ficam onde estão', async () => {
+    const api = await getApi();
+    const profile = await api.profiles.create({
+      name: 'Nome Errado',
+      providerId: 'claude-code',
+    });
+
+    try {
+      const renamed = await api.profiles.rename(profile.id, '  MainAgent  ');
+      assert.equal(renamed.name, 'MainAgent', 'o nome sai sem os espaços das pontas');
+      assert.equal(renamed.id, profile.id, 'o identificador ancora o diretório e não muda');
+      assert.equal(renamed.configDirectory, profile.configDirectory);
+
+      const stored = (await api.profiles.list()).find((item) => item.id === profile.id);
+      assert.equal(stored?.name, 'MainAgent', 'o nome novo é o que fica gravado');
+
+      // Nome vazio apagaria a única forma de reconhecer a conta na lista.
+      await assert.rejects(
+        () => api.profiles.rename(profile.id, '   '),
+        (error: unknown) => {
+          assert.equal((error as { code?: string }).code, 'provider.profile-name-required');
+          return true;
+        },
+      );
+    } finally {
+      await api.profiles.remove(profile.id);
+      const { rmSync } = await import('node:fs');
+      rmSync(profile.configDirectory, { recursive: true, force: true });
+    }
+  });
+
   test('perfil desconhecido falha com erro tipado, sem cair em outra conta', async () => {
     const api = await getApi();
     await assert.rejects(

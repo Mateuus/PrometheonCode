@@ -31,6 +31,18 @@ export interface StartAgentInput {
   readonly workspaceFolder?: string;
   readonly role?: 'main' | 'worker';
   readonly task?: string;
+  /**
+   * Modelo pedido pelo Agent Profile. A conta é um login isolado e não escolhe
+   * modelo: o mesmo login serve a agentes que usam modelos diferentes. Ausente
+   * deixa a escolha com o CLI do provedor.
+   */
+  readonly model?: string;
+  /**
+   * Instruções somadas ao system prompt do CLI: o papel do agente, o índice de
+   * skills disponíveis e o prompt do próprio perfil, nessa ordem. É texto
+   * pronto — quem monta é o núcleo, que conhece papel, catálogo e perfil.
+   */
+  readonly systemPrompt?: string;
 }
 
 export interface AgentInput {
@@ -93,6 +105,14 @@ export type AgentEvent =
       readonly requestId: string;
       readonly outcome: AgentQuestionOutcome;
     }
+  /**
+   * Modelo que o CLI está de fato usando neste run.
+   *
+   * Não é o que foi pedido: é o que respondeu. O nome vem como o provedor o
+   * escreve, marca de janela inclusive (`claude-opus-5[1m]`) — é dele que sai
+   * o tamanho real do contexto, sem tabela nenhuma para manter.
+   */
+  | { readonly type: 'model'; readonly model: string }
   /** `usage` vem do CLI quando ele reporta; adaptadores sem isso omitem. */
   | { readonly type: 'completed'; readonly text: string; readonly usage?: TokenUsage }
   | { readonly type: 'failed'; readonly error: SerializedError }

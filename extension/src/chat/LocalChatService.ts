@@ -9,6 +9,7 @@ import type { LocalStateStore } from '../storage/LocalStateStore';
 import { PrometheonError, serializeError } from '../utils/errors';
 import { newId } from '../utils/ids';
 import type { TokenUsage } from '../providers/UsageTracker';
+import type { ToolOutputStore } from './ToolOutputStore';
 import { truncateStepOutput } from './types';
 import type {
   AgentStep,
@@ -49,6 +50,8 @@ export class LocalChatService implements ChatService {
     private readonly store: LocalStateStore,
     private readonly registry: AgentRegistry,
     private readonly logger: Logger,
+    /** Ausente nos testes: sem ele, a saída longa apenas não fica em disco. */
+    private readonly outputs?: ToolOutputStore,
   ) {}
 
   listConversations(): Promise<ConversationSummary[]> {
@@ -96,6 +99,26 @@ export class LocalChatService implements ChatService {
     });
   }
 
+  /**
+   * Apaga a conversa. Some do histórico e leva as mensagens junto — é o que
+   * "excluir" quer dizer, e nada disso saiu da máquina para haver o que limpar
+   * em outro lugar.
+   *
+   * Apagar uma conversa inexistente não é erro: quem clicou já queria que ela
+   * não estivesse ali, e falhar só atrapalharia quem tem duas janelas abertas.
+   */
+  async deleteConversation(conversationId: string): Promise<void> {
+    const remaining = this.store
+      .getConversations()
+      .filter((conversation) => conversation.id !== conversationId);
+
+    await this.store.setConversations(remaining);
+
+    if (this.store.getActiveConversationId() === conversationId) {
+      await this.store.setActiveConversationId(null);
+    }
+  }
+
   async rename(conversationId: string, title: string): Promise<void> {
     const conversation = this.find(conversationId);
     if (conversation === undefined) {
@@ -134,6 +157,8 @@ export class LocalChatService implements ChatService {
       autonomy: input.autonomy,
       role: 'main',
       task,
+      ...(input.model === undefined ? {} : { model: input.model }),
+      ...(input.systemPrompt === undefined ? {} : { systemPrompt: input.systemPrompt }),
     });
 
     const agentMessage = await this.append(conversation.id, {
@@ -170,6 +195,8 @@ export class LocalChatService implements ChatService {
     let content = '';
     /** Tokens somados enquanto o run acontece, para a interface ter o que contar. */
     let liveUsage: TokenUsage = { input: 0, output: 0 };
+    /** Turno mais pesado do run; é o que estima a ocupação da janela. */
+    let contextTokens = 0;
     /** Passos do agente nesta resposta, na ordem, prontos para persistir. */
     const steps: AgentStep[] = [];
 
@@ -234,6 +261,7 @@ export class LocalChatService implements ChatService {
           case 'tool.requested': {
             const step: AgentStep = {
               id: event.toolId,
+              sessionId: session.id,
               kind: 'tool',
               tool: event.tool,
               title: event.title,
@@ -251,8 +279,16 @@ export class LocalChatService implements ChatService {
             const startedAt = started?.startedAt ?? Date.now();
             const detail = event.detail ?? started?.detail;
             const output = event.output === undefined ? null : truncateStepOutput(event.output);
+            // A cópia integral só existe quando o histórico não deu conta. Se a
+            // saída coube inteira no passo, gravar um arquivo idêntico ao que já
+            // está ali seria só lixo em disco.
+            const full =
+              output !== null && output.truncated && this.outputs !== undefined
+                ? await this.outputs.save(event.toolId, event.output ?? '')
+                : false;
             const step: AgentStep = {
               id: event.toolId,
+              sessionId: session.id,
               kind: 'tool',
               tool: started?.tool ?? 'Tool',
               title: started?.title ?? '',
@@ -261,7 +297,9 @@ export class LocalChatService implements ChatService {
                 ? {}
                 : {
                     output: output.output,
+                    outputLines: output.lines,
                     ...(output.truncated ? { truncated: true } : {}),
+                    ...(full ? { fullOutput: true } : {}),
                   }),
               status: event.failed === true ? 'failed' : 'done',
               startedAt,
@@ -272,12 +310,17 @@ export class LocalChatService implements ChatService {
             break;
           }
 
+          case 'model':
+            yield { type: 'run.model', runId, model: event.model };
+            break;
+
           case 'usage':
             liveUsage = {
               input: liveUsage.input + Math.max(0, event.delta.input),
               output: liveUsage.output + Math.max(0, event.delta.output),
             };
-            yield { type: 'run.usage', runId, usage: liveUsage };
+            contextTokens = Math.max(contextTokens, event.delta.input);
+            yield { type: 'run.usage', runId, usage: liveUsage, contextTokens };
             break;
 
           case 'question.asked': {
@@ -286,6 +329,7 @@ export class LocalChatService implements ChatService {
             run.pendingQuestionId = event.request.requestId;
             const step: AgentStep = {
               id: event.request.requestId,
+              sessionId: session.id,
               kind: 'question',
               tool: 'Question',
               title: questionTitle(event.request),
@@ -311,6 +355,7 @@ export class LocalChatService implements ChatService {
             const startedAt = asked?.startedAt ?? Date.now();
             const step: AgentStep = {
               id: event.requestId,
+              sessionId: session.id,
               kind: 'question',
               tool: 'Question',
               title: asked?.title ?? '',
@@ -329,6 +374,7 @@ export class LocalChatService implements ChatService {
             // Raciocínio chega já concluído: só o par tempo/ordem interessa.
             const step: AgentStep = {
               id: newId('step'),
+              sessionId: session.id,
               kind: 'thought',
               tool: 'Thought',
               title: '',
