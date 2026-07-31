@@ -172,6 +172,62 @@ MIN_NEW_SPEECH_MS = 300
 MAX_UTTERANCE_MS = 30_000
 
 
+def looks_hallucinated(text: str) -> bool:
+    """
+    Reconhece os dois modos de alucinação do Whisper em áudio sem fala.
+
+    O primeiro é a **repetição**: a mesma palavra emendada dezenas de vezes,
+    como "Prometheon Prometheon Prometheon". Acontece em silêncio, e a assinatura
+    é um vocabulário minúsculo para um texto longo.
+
+    O segundo é a **frase de legenda**: "Thank you.", "Obrigado pela atenção.",
+    "Legendas pela comunidade". O modelo foi treinado com legendas de vídeo, e
+    essas frases encerram milhares delas — em trechos sem fala ele preenche com
+    o que mais viu naquela posição. São curtas e sempre as mesmas, então a lista
+    fechada resolve sem risco de descartar fala de verdade.
+
+    Fora esses dois casos o texto passa. Descartar demais é pior que deixar
+    passar: perder uma frase que a pessoa realmente disse é o defeito que faz
+    alguém desistir do ditado.
+    """
+    stripped = text.strip()
+
+    if stripped == "":
+        return True
+
+    lowered = stripped.lower().strip(" .,!?")
+
+    if lowered in HALLUCINATION_PHRASES:
+        return True
+
+    words = stripped.split()
+
+    # Poucas palavras distintas num texto longo é repetição. O corte em seis
+    # palavras evita reprovar respostas curtas legítimas — "sim", "pode ser".
+    if len(words) >= 6 and len(set(word.lower() for word in words)) <= len(words) // 3:
+        return True
+
+    return False
+
+
+# Frases que o Whisper produz em silêncio, herdadas do treino com legendas.
+HALLUCINATION_PHRASES = frozenset(
+    {
+        "thank you",
+        "thanks for watching",
+        "obrigado",
+        "obrigado pela atenção",
+        "obrigada",
+        "legendas pela comunidade amara org",
+        "amara org",
+        "gracias por ver el video",
+        "subtítulos realizados por la comunidad de amara org",
+        "tchau",
+        "até a próxima",
+    }
+)
+
+
 def emit(payload: dict) -> None:
     """
     Publica um evento.
@@ -380,7 +436,6 @@ class SpeechEngine:
         self._running = threading.Event()
         self._language: Optional[str] = None
         self._discard = False
-        self._vocabulary = ""
 
     # -- ciclo de vida -------------------------------------------------------
 
@@ -540,7 +595,13 @@ class SpeechEngine:
             if utterance and not self._discard:
                 text = self._transcribe(bytes(utterance), beam_size=5)
                 if text:
-                    emit({"type": "final", "text": text})
+                    if looks_hallucinated(text):
+                        # Enunciado que o detector de voz aceitou e o modelo não
+                        # soube transcrever: tosse, porta, um trecho de silêncio.
+                        # Publicá-lo poria no campo texto que ninguém disse.
+                        print(f"descartado (alucinação): {text!r}", file=sys.stderr)
+                    else:
+                        emit({"type": "final", "text": text})
 
             utterance = bytearray()
             transcribed = 0
@@ -586,7 +647,7 @@ class SpeechEngine:
                     # à tela. O texto definitivo sai no fechamento, com busca em
                     # feixe.
                     text = self._transcribe(bytes(utterance), beam_size=1)
-                    if text:
+                    if text and not looks_hallucinated(text):
                         emit({"type": "partial", "text": text})
 
         # Fecha o que ficou em aberto quando o `stop` chegou no meio da frase.
@@ -603,11 +664,21 @@ class SpeechEngine:
             segments, _info = self._model.transcribe(
                 audio,
                 language=self._language,
-                # Vocabulário do projeto. O Whisper usa este texto como
-                # contexto anterior e passa a reconhecer nomes que não existem
-                # em português corrente — "Fastify", "webview", "TypeScript" —
-                # e que hoje viram a palavra comum mais parecida.
-                initial_prompt=self._vocabulary or None,
+                # **Sem `initial_prompt`.** A ideia de alimentar o modelo com o
+                # vocabulário do projeto — nomes de arquivo, da pasta — melhora
+                # o reconhecimento de jargão e tem um efeito colateral que
+                # inviabiliza a técnica aqui: em silêncio ou ruído, o Whisper
+                # devolve o próprio prompt, e o campo enche de
+                # "Prometheon Prometheon Prometheon". Num ditado que fica aberto
+                # enquanto a pessoa pensa, isso acontece o tempo todo.
+                #
+                # Estes três limiares são a defesa contra alucinação em geral.
+                # O do meio é o que pega repetição: texto que se repete comprime
+                # muito melhor que fala real, e uma razão de compressão alta é o
+                # sinal mais confiável de que o modelo entrou em laço.
+                no_speech_threshold=0.6,
+                compression_ratio_threshold=2.4,
+                log_prob_threshold=-1.0,
                 beam_size=beam_size,
                 # O buffer já passou pelo `webrtcvad` e só tem fala.
                 vad_filter=False,
@@ -647,8 +718,6 @@ def main() -> None:
         kind = command.get("type")
 
         if kind == "start":
-            vocabulary = command.get("vocabulary")
-            engine._vocabulary = str(vocabulary) if vocabulary else ""
             engine.start(command.get("language"))
         elif kind == "stop":
             engine.stop()
