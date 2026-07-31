@@ -39,6 +39,23 @@ export function versionConflict(): ApiError {
   );
 }
 
+export function slugAlreadyTaken(slug: string): ApiError {
+  return conflict('CONFLICT', `The address "${slug}" already belongs to another organization.`);
+}
+
+/**
+ * A confirmação digitada não bateu.
+ *
+ * O slug é pedido de novo justamente porque excluir não tem volta rápida;
+ * aceitar a chamada sem ele transformaria um clique errado em perda de dados.
+ */
+export function slugConfirmationMismatch(): ApiError {
+  return badRequest(
+    'VALIDATION_FAILED',
+    'Type the organization address exactly as it appears to confirm the deletion.',
+  );
+}
+
 export function cannotOutrankSelf(): ApiError {
   return badRequest(
     'PERMISSION_DENIED',

@@ -29,6 +29,8 @@ export const CATALOG = {
   'nav.administration': 'Administration',
   'nav.plans': 'Plans',
   'nav.organization': 'Organizations',
+  'nav.organizations': 'Organizations',
+  'nav.organizationSettings': 'Settings',
   'nav.backToApp': 'Back to the app',
   'nav.breadcrumb': 'Breadcrumb',
 
@@ -480,6 +482,27 @@ export const CATALOG = {
   'devices.never': 'Never used',
   'devices.revoke': 'Disconnect',
 
+  // ------------------------------------------- configurações da organização
+  'organizationSettings.title': 'Organization settings',
+  'organizationSettings.subtitle': 'Name, address and deletion of this organization.',
+  'organizationSettings.general': 'Identity',
+  'organizationSettings.name': 'Organization name',
+  'organizationSettings.slug': 'Address',
+  'organizationSettings.slugHint':
+    'It appears in the URL. Changing it breaks the links people already saved.',
+  'organizationSettings.saved': 'Organization saved.',
+  'organizationSettings.dangerZone': 'Delete organization',
+  'organizationSettings.deleteWarning':
+    'Projects, conversations and the shared knowledge leave every screen. Only an owner can do this.',
+  'organizationSettings.confirmWith': 'Type {slug} to confirm',
+  'organizationSettings.delete': 'Delete this organization',
+  'organizationSettings.error.nameRequired': 'Give the organization a name.',
+  'organizationSettings.error.slugInvalid': 'Use lowercase letters, numbers and hyphens.',
+  'organizationSettings.error.slugTaken': 'This address already belongs to another organization.',
+  'organizationSettings.error.versionConflict':
+    'Someone changed this organization while you were editing. Reload and try again.',
+  'organizationSettings.error.confirmationMismatch': 'The address does not match.',
+
   // ------------------------------------------------------- administração
   'admin.title': 'Administration',
   'admin.subtitle': 'Plans and limits offered by this Hub.',
@@ -504,6 +527,48 @@ export const CATALOG = {
   'admin.plans.days.one': '{count} day',
   'admin.plans.statusActive': 'Active',
   'admin.plans.statusHidden': 'Hidden',
+  'admin.plans.limit.storageGib': 'Storage (GiB)',
+  'admin.plans.edit': 'Edit plan',
+  'admin.plans.create': 'Create plan',
+  'admin.plans.newTitle': 'New plan',
+  'admin.plans.created': 'Plan created.',
+  'admin.plans.saved': 'Plan saved.',
+  'admin.plans.form.name': 'Name',
+  'admin.plans.form.code': 'Code',
+  'admin.plans.form.price': 'Price',
+  'admin.plans.form.currency': 'Currency',
+  'admin.plans.form.billingPeriod': 'Billing period',
+  'admin.plans.form.description': 'Description',
+  'admin.plans.form.active': 'Available for subscription',
+  'admin.plans.form.default': 'Default for new organizations',
+  'admin.plans.form.zeroIsUnlimited': 'Use 0 for no limit at all.',
+  'admin.plans.period.none': 'No billing',
+  'admin.plans.period.monthly': 'Monthly',
+  'admin.plans.period.yearly': 'Yearly',
+  'admin.organizations.title': 'Organizations',
+  'admin.organizations.subtitle':
+    'Usage against the limit that actually applies to each organization.',
+  'admin.organizations.empty': 'No organization matches this search.',
+  'admin.organizations.search': 'Search',
+  'admin.organizations.searchPlaceholder': 'Name or address',
+  'admin.organizations.plan': 'Plan',
+  'admin.organizations.changePlan': 'Change plan',
+  'admin.organizations.assign': 'Assign plan',
+  'admin.organizations.planAssigned': 'Plan assigned.',
+  'admin.organizations.editLimits': 'Adjust limits',
+  'admin.organizations.limitsSaved': 'Limits saved.',
+  'admin.organizations.overridden': 'adjusted',
+  'admin.organizations.overrideHint':
+    'Leave a field empty to follow the plan again. 0 means no limit.',
+  'admin.organizations.allowOverLimit': 'Assign even above the limit',
+  'admin.organizations.allowOverLimitHint':
+    'The organization keeps what it already has, even if the new plan allows less.',
+  'admin.error.overLimit':
+    'The current usage exceeds this plan. Adjust the limits or assign it above the limit.',
+  'admin.error.nameRequired': 'Give the plan a name.',
+  'admin.error.codeInvalid': 'Use lowercase letters, numbers and hyphens.',
+  'admin.error.codeTaken': 'A plan with this code already exists.',
+  'admin.error.priceInvalid': 'Type the price with up to two decimals.',
 
   // ------------------------------------------------- ferramentas de dev
   'dev.forcedState': 'Forced state',

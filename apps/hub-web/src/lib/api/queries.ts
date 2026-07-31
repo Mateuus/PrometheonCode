@@ -5,6 +5,8 @@ import { hubRequest, type HubRequestOptions } from './client';
 import { failure, success, type ApiResult } from './result';
 import {
   activeAgentListSchema,
+  adminOrganizationPageSchema,
+  adminOrganizationResultSchema,
   auditPageSchema,
   conversationPageSchema,
   deviceSessionListSchema,
@@ -24,6 +26,7 @@ import {
 } from './schemas';
 import type {
   ActiveAgent,
+  AdminOrganization,
   AuditLog,
   Conversation,
   DashboardSummary,
@@ -89,6 +92,13 @@ export interface Viewer {
     /** Preferências editáveis em `/settings/account`. */
     locale: string;
     timeZone: string;
+    /**
+     * Administra a plataforma. É o que faz a área `/admin` aparecer no menu.
+     *
+     * Esconder o item não autoriza ninguém — a API nega de novo a cada
+     * chamada. O que a marca evita é oferecer uma porta que vai bater na cara.
+     */
+    isPlatformAdmin: boolean;
   };
   organizations: { id: string; name: string; slug: string; role: OrganizationRole }[];
   activeOrganizationId: string | null;
@@ -108,6 +118,7 @@ export async function getViewer(): Promise<ApiResult<Viewer>> {
             avatarUrl: result.data.user.avatarUrl,
             locale: result.data.user.locale,
             timeZone: result.data.user.timeZone,
+            isPlatformAdmin: result.data.user.isPlatformAdmin,
           },
           organizations: [...result.data.organizations],
           activeOrganizationId: result.data.activeOrganizationId,
@@ -265,11 +276,42 @@ export async function listAuditEvents(cursor?: string): Promise<ApiResult<Page<A
     : result;
 }
 
-// -------------------------------------------------------------------- planos
+// ------------------------------------------------------------ administração
 
+/**
+ * Catálogo de planos, incluindo os escondidos.
+ *
+ * A rota exige a marca de administrador da plataforma: quem não a tem recebe
+ * `forbidden`, e a tela trata isso como "esta área não é sua" — não como erro.
+ */
 export async function listPlans(): Promise<ApiResult<Plan[]>> {
   const result = await get('/v1/admin/plans', planListSchema);
   return result.ok ? { ...result, data: [...result.data.plans] } : result;
+}
+
+export async function listAdminOrganizations(
+  input: { search?: string | undefined; planCode?: string | undefined } = {},
+): Promise<ApiResult<AdminOrganization[]>> {
+  return items(
+    await get('/v1/admin/organizations', adminOrganizationPageSchema, {
+      query: {
+        limit: PAGE_LIMIT,
+        ...(input.search ? { search: input.search } : {}),
+        ...(input.planCode ? { planCode: input.planCode } : {}),
+      },
+    }),
+  );
+}
+
+export async function getAdminOrganization(
+  organizationId: string,
+): Promise<ApiResult<AdminOrganization>> {
+  const result = await get(
+    `/v1/admin/organizations/${encodeURIComponent(organizationId)}`,
+    adminOrganizationResultSchema,
+  );
+
+  return result.ok ? { ...result, data: result.data.organization } : result;
 }
 
 // ----------------------------------------------------------------- dashboard

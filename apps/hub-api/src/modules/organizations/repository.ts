@@ -154,6 +154,87 @@ export class OrganizationRepository {
     return rows[0];
   }
 
+  /** Verdadeiro quando o slug já pertence a outra organização viva. */
+  async slugTaken(slug: string, exceptOrganizationId: string): Promise<boolean> {
+    const count = await this.db.manager
+      .createQueryBuilder(organizations, 'organization')
+      .where('organization.slug = :slug', { slug })
+      .andWhere('organization.id <> :exceptOrganizationId', { exceptOrganizationId })
+      .getCount();
+
+    return count > 0;
+  }
+
+  /**
+   * Renomeia a organização, com concorrência otimista.
+   *
+   * Devolve `false` quando a versão não confere — o mesmo contrato de
+   * `updateMember`, para quem chama traduzir em `VERSION_CONFLICT` em vez de
+   * sobrescrever a edição de outra pessoa.
+   */
+  async updateOrganization(input: {
+    organizationId: string;
+    version: number;
+    name?: string | undefined;
+    slug?: string | undefined;
+  }): Promise<boolean> {
+    const changes: { name?: string; slug?: string } = {
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.slug === undefined ? {} : { slug: input.slug }),
+    };
+
+    if (Object.keys(changes).length === 0) {
+      return true;
+    }
+
+    const result = await this.db.manager
+      .createQueryBuilder()
+      .update(organizations)
+      .set({ ...changes, version: () => 'version + 1', updatedAt: new Date() })
+      .where('id = :organizationId', { organizationId: input.organizationId })
+      .andWhere('version = :version', { version: input.version })
+      .andWhere('deleted_at IS NULL')
+      .execute();
+
+    return affectedRows(result) > 0;
+  }
+
+  /**
+   * Marca a organização como excluída.
+   *
+   * Exclusão lógica, e a situação vai junto: `deleted_at` tira a organização de
+   * todas as listagens, e `pending_deletion` é o que o worker de retenção
+   * enxerga para apagar de vez depois da janela. Apagar a linha aqui levaria
+   * junto conversas, projetos e a auditoria que explica o que aconteceu.
+   *
+   * O slug é liberado no mesmo movimento: ele é único na tabela inteira, e uma
+   * organização apagada não pode segurar um endereço para sempre. O valor
+   * antigo continua legível no sufixo.
+   */
+  async softDeleteOrganization(input: {
+    organizationId: string;
+    version: number;
+    slug: string;
+  }): Promise<boolean> {
+    const now = new Date();
+    const result = await this.db.manager
+      .createQueryBuilder()
+      .update(organizations)
+      .set({
+        deletedAt: now,
+        status: 'pending_deletion',
+        slug: `${input.slug.slice(0, 40)}-deleted-${now.getTime().toString(36)}`,
+        version: () => 'version + 1',
+        updatedAt: now,
+      })
+      .where('id = :organizationId', { organizationId: input.organizationId })
+      .andWhere('version = :version', { version: input.version })
+      .andWhere('deleted_at IS NULL')
+      .execute();
+
+    return affectedRows(result) > 0;
+  }
+
   async listMembers(
     organizationId: string,
     limit: number,

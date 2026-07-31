@@ -3,14 +3,18 @@
  *
  * | Rota                                        | Permissão             | Quem passa    |
  * | ------------------------------------------- | --------------------- | ------------- |
- * | `GET  /admin/plans`                         | `organization.manage` | owner e admin |
  * | `GET  /organizations/:orgId/subscription`   | `chat.read`           | todo membro   |
  * | `PUT  /organizations/:orgId/plan`           | `organization.manage` | owner e admin |
  *
  * A leitura da assinatura é aberta a todo membro de propósito: o teto do plano
  * é o que explica por que uma criação falhou, e esconder isso de quem esbarra
- * no limite só gera chamado. Já a lista administrativa de planos e a troca são
- * de administrador — trocar o plano muda o que a organização inteira pode fazer.
+ * no limite só gera chamado. Já a troca é de administrador — mudar o plano muda
+ * o que a organização inteira pode fazer.
+ *
+ * O catálogo de planos saiu daqui: quem o lista e o edita é `modules/admin`,
+ * atrás da marca de administrador da plataforma. Enquanto a lista respondia a
+ * `organization.manage`, o dono de qualquer organização enxergava o catálogo
+ * inteiro — inclusive planos que ainda não foram anunciados.
  */
 
 import type { FastifyPluginCallbackZod } from 'fastify-type-provider-zod';
@@ -24,7 +28,6 @@ import {
   changePlanRequestSchema,
   organizationParamsSchema,
   planChangeEnvelope,
-  planListEnvelope,
   subscriptionOverviewEnvelope,
 } from './schemas.js';
 import type { BillingService } from './service.js';
@@ -42,21 +45,6 @@ export const billingRoutes: FastifyPluginCallbackZod<BillingRoutesOptions> = (
   done,
 ) => {
   const { service } = options;
-
-  app.get(
-    '/admin/plans',
-    {
-      preHandler: app.requirePermission('organization.manage', { resourceType: 'subscription' }),
-      schema: {
-        tags: ['billing'],
-        summary: 'List the plans available for subscription',
-        description: 'Administrative view. Inactive plans are hidden.',
-        security: [{ bearerAuth: [] }],
-        response: { 200: planListEnvelope, ...billingErrorResponses },
-      },
-    },
-    async (request) => ok(request, { plans: await service.listPlans() }),
-  );
 
   app.get(
     '/organizations/:orgId/subscription',

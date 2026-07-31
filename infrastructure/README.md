@@ -277,6 +277,33 @@ para quem hospeda fora de datacenter, não um remendo.
 
 ---
 
+## 6.5. Administrador da plataforma
+
+Quem edita planos, atribui plano a uma organização e ajusta o teto de um cliente
+precisa da marca de administrador da plataforma. Ela **não tem rota que a
+escreva**: é concedida com acesso ao banco, no servidor.
+
+```bash
+docker compose -f docker-compose.prod.yml exec api \
+  node dist/packages/database/src/grant-platform-admin.js voce@prometheoncode.xyz
+```
+
+Em desenvolvimento, direto do repositório:
+
+```bash
+pnpm --filter @prometheon/database db:grant-admin voce@exemplo.com
+# e para tirar:
+pnpm --filter @prometheon/database db:grant-admin voce@exemplo.com --revoke
+```
+
+A conta precisa existir antes — crie-a pelo cadastro normal do Hub. Feito isso,
+a área `/admin` aparece no menu da conta.
+
+A marca é lida do banco a cada requisição, e não do token: revogar tem efeito na
+chamada seguinte, sem esperar sessão vencer.
+
+---
+
 ## 7. Atualizar
 
 ```bash

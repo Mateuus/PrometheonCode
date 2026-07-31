@@ -6,12 +6,12 @@
  * operação de administração com concorrência otimista e auditoria.
  */
 
-import { PLAN_FEATURES, type Plan, type PlanFeature } from '@prometheon/contracts';
+import { PLAN_FEATURES, type Plan, type PlanFeature, type PlanLimits } from '@prometheon/contracts';
 import type { Database } from '@prometheon/database';
 
 import { toIso } from '../../shared/time.js';
 import { planLimitExceeded, planNotFound, subscriptionNotFound, versionConflict } from './errors.js';
-import { violationsAgainstPlan } from './limits.js';
+import { effectiveLimits, violationsAgainstPlan } from './limits.js';
 import { BillingRepository, type OrganizationPlanRow, type PlanRow, type UsageCounts } from './repository.js';
 
 export interface SubscriptionView {
@@ -124,6 +124,7 @@ export class BillingService {
     subscription: SubscriptionView;
     plan: Plan;
     usage: UsageCounts & { measuredAt: string };
+    limits: PlanLimits;
   }> {
     const row = await this.repository.findOrganizationPlan(organizationId);
 
@@ -137,6 +138,8 @@ export class BillingService {
       subscription: toSubscriptionView(row),
       plan: toPlanView(row.plan),
       usage: { ...usage, measuredAt: toIso(new Date()) },
+      // O que o servidor cobra nesta organização — o do plano, ou a exceção.
+      limits: effectiveLimits(row.plan, row.overrides),
     };
   }
 
@@ -165,6 +168,7 @@ export class BillingService {
         this.repository,
         input.organizationId,
         target,
+        current.overrides,
       );
       const first = violations[0];
 

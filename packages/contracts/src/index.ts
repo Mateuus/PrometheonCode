@@ -11,6 +11,7 @@
 export const API_VERSION = 'v1';
 export const API_PREFIX = '/v1';
 
+export * from './agent-roles.js';
 export * from './audit.js';
 export * from './auth.js';
 export * from './billing.js';

@@ -16,6 +16,7 @@
 import { z } from 'zod';
 
 import { publicUserSchema } from './auth.js';
+import { cursorPageQuerySchema, cursorPageSchema } from './pagination.js';
 import {
   isoDateTimeSchema,
   longTextSchema,
@@ -155,6 +156,15 @@ export const subscriptionOverviewSchema = z.object({
   subscription: subscriptionSchema,
   plan: planSchema,
   usage: usageSchema,
+  /**
+   * Tetos que o servidor cobra de verdade nesta organização.
+   *
+   * Normalmente iguais aos de `plan.limits`; diferentes quando a administração
+   * da plataforma combinou uma exceção. A tela precisa mostrar o que vale, não
+   * o que o plano diz — senão o número na tela discorda do erro que o servidor
+   * devolve.
+   */
+  limits: planLimitsSchema,
 });
 
 export type SubscriptionOverview = z.infer<typeof subscriptionOverviewSchema>;
@@ -166,6 +176,122 @@ export const changePlanRequestSchema = z.object({
 });
 
 export type ChangePlanRequest = z.infer<typeof changePlanRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// Administração da plataforma
+// ---------------------------------------------------------------------------
+
+/**
+ * Limites como quem administra os digita.
+ *
+ * Cada teto é opcional (o que não vier fica como está) e aceita `null` para
+ * "sem teto". A separação entre "não mexa" e "libere" precisa existir: sem ela,
+ * um formulário que envia o objeto inteiro apagaria em silêncio o limite que a
+ * pessoa nem tocou.
+ */
+export const planLimitsInputSchema = z.object({
+  maxMembers: limit().optional(),
+  maxProjects: limit().optional(),
+  maxKnowledgeItems: limit().optional(),
+  maxAgentRunsPerMonth: limit().optional(),
+  maxStorageBytes: limit().optional(),
+  retentionDays: limit().optional(),
+});
+
+export type PlanLimitsInput = z.infer<typeof planLimitsInputSchema>;
+
+export const createPlanRequestSchema = z.object({
+  code: slugSchema,
+  name: shortTextSchema,
+  description: longTextSchema.nullable().optional(),
+  /** Preço na menor unidade da moeda; zero é plano gratuito. */
+  priceCents: z.int().nonnegative().default(0),
+  currency: z.string().trim().length(3).default('USD'),
+  billingPeriod: billingPeriodSchema.default('none'),
+  limits: planLimitsInputSchema.default({}),
+  features: z.array(planFeatureSchema).default([]),
+  isActive: z.boolean().default(true),
+});
+
+export type CreatePlanRequest = z.infer<typeof createPlanRequestSchema>;
+
+/**
+ * Edição de plano. `code` não entra: ele é a chave que as organizações apontam
+ * e aparece em auditoria — renomear seria trocar a identidade do plano no meio
+ * do caminho.
+ */
+export const updatePlanRequestSchema = z.object({
+  name: shortTextSchema.optional(),
+  description: longTextSchema.nullable().optional(),
+  priceCents: z.int().nonnegative().optional(),
+  currency: z.string().trim().length(3).optional(),
+  billingPeriod: billingPeriodSchema.optional(),
+  limits: planLimitsInputSchema.optional(),
+  features: z.array(planFeatureSchema).optional(),
+  isDefault: z.boolean().optional(),
+  isActive: z.boolean().optional(),
+});
+
+export type UpdatePlanRequest = z.infer<typeof updatePlanRequestSchema>;
+
+/**
+ * Exceções de limite de uma organização.
+ *
+ * `null` numa chave significa "volte a valer o do plano" — diferente de `0`,
+ * que continua sendo "sem teto".
+ */
+export const organizationLimitOverridesSchema = z.object({
+  maxMembers: limit().optional(),
+  maxProjects: limit().optional(),
+  maxKnowledgeItems: limit().optional(),
+  maxAgentRunsPerMonth: limit().optional(),
+  maxStorageBytes: limit().optional(),
+  retentionDays: limit().optional(),
+});
+
+export type OrganizationLimitOverrides = z.infer<typeof organizationLimitOverridesSchema>;
+
+/** Uma organização na lista da administração da plataforma. */
+export const adminOrganizationSchema = z.object({
+  id: ulidSchema,
+  name: shortTextSchema,
+  slug: slugSchema,
+  status: z.enum(['active', 'suspended', 'pending_deletion']),
+  planCode: slugSchema,
+  planName: shortTextSchema,
+  ownerEmail: z.string().max(320).nullable(),
+  createdAt: isoDateTimeSchema,
+  /** Tetos que valem de fato: a exceção da organização, ou o do plano. */
+  limits: planLimitsSchema,
+  /** Só o que foi combinado caso a caso; `null` onde vale o plano. */
+  overrides: planLimitsSchema,
+  usage: usageSchema,
+  version: versionSchema,
+});
+
+export type AdminOrganization = z.infer<typeof adminOrganizationSchema>;
+
+export const adminOrganizationPageSchema = cursorPageSchema(adminOrganizationSchema);
+
+export const adminOrganizationListQuerySchema = cursorPageQuerySchema.extend({
+  search: z.string().trim().max(120).optional(),
+  planCode: slugSchema.optional(),
+});
+
+/** Atribuição manual de plano pela administração da plataforma. */
+export const assignPlanRequestSchema = z.object({
+  planCode: slugSchema,
+  /**
+   * Aceita a organização acima do teto do plano novo.
+   *
+   * Sem isto, rebaixar quem já passou do limite é recusado — o padrão certo
+   * para a troca feita pelo próprio cliente. Quem administra a plataforma
+   * às vezes precisa mesmo assim, e aí a exceção fica registrada.
+   */
+  allowOverLimit: z.boolean().default(false),
+});
+
+export type AssignPlanRequest = z.infer<typeof assignPlanRequestSchema>;
 
 export const planChangeResultSchema = z.object({
   subscription: subscriptionSchema,

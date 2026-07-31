@@ -30,6 +30,8 @@ import {
   memberAlreadyExists,
   memberNotFound,
   organizationNotFound,
+  slugAlreadyTaken,
+  slugConfirmationMismatch,
   versionConflict,
 } from './errors.js';
 import { OrganizationRepository, type MemberRow, type OrganizationRow } from './repository.js';
@@ -104,6 +106,84 @@ export class OrganizationService {
     }
 
     return { ...toOrganizationView(row), role, permissions: [...permissionsOf(role)] };
+  }
+
+  /**
+   * Renomeia a organização e, se pedido, troca o endereço dela.
+   *
+   * O slug é o que aparece em `/app/<slug>`: trocá-lo quebra o link que as
+   * pessoas têm salvo, e por isso ele só muda quando vem explicitamente no
+   * corpo. O conflito é verificado antes de escrever, para a resposta dizer
+   * "este endereço já é de outra organização" em vez de devolver um erro de
+   * chave duplicada do banco.
+   */
+  async update(input: {
+    organizationId: string;
+    version: number;
+    name?: string | undefined;
+    slug?: string | undefined;
+    role: Role;
+  }): Promise<OrganizationView & { role: Role; permissions: Permission[] }> {
+    const current = await this.repository.findById(input.organizationId);
+
+    if (current === undefined) {
+      throw organizationNotFound();
+    }
+
+    if (input.slug !== undefined && input.slug !== current.slug) {
+      if (await this.repository.slugTaken(input.slug, input.organizationId)) {
+        throw slugAlreadyTaken(input.slug);
+      }
+    }
+
+    const updated = await this.repository.updateOrganization({
+      organizationId: input.organizationId,
+      version: input.version,
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.slug === undefined ? {} : { slug: input.slug }),
+    });
+
+    if (!updated) {
+      throw versionConflict();
+    }
+
+    return this.get(input.organizationId, input.role);
+  }
+
+  /**
+   * Exclui a organização.
+   *
+   * Exige o slug digitado de novo e a versão lida: é a última porta antes de
+   * uma ação que leva junto projetos, conversas e o conhecimento da equipe. A
+   * exclusão é lógica — o worker de retenção apaga de vez depois da janela, e
+   * até lá o estrago é reversível.
+   */
+  async remove(input: {
+    organizationId: string;
+    version: number;
+    slug: string;
+  }): Promise<{ id: string; slug: string; name: string }> {
+    const current = await this.repository.findById(input.organizationId);
+
+    if (current === undefined) {
+      throw organizationNotFound();
+    }
+
+    if (current.slug !== input.slug) {
+      throw slugConfirmationMismatch();
+    }
+
+    const removed = await this.repository.softDeleteOrganization({
+      organizationId: input.organizationId,
+      version: input.version,
+      slug: current.slug,
+    });
+
+    if (!removed) {
+      throw versionConflict();
+    }
+
+    return { id: current.id, slug: current.slug, name: current.name };
   }
 
   async listMembers(

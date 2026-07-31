@@ -20,6 +20,55 @@ export const THEME_COOKIE = 'prometheon_theme';
 export const API_REFRESH_COOKIE = 'prom_refresh';
 export const API_CSRF_COOKIE = 'prom_csrf';
 
+/**
+ * Prefixo que a Hub API acrescenta aos próprios cookies quando roda em HTTPS:
+ * lá o nome é `__Host-prom_refresh`, e em desenvolvimento é `prom_refresh`.
+ *
+ * Quem fala com a API aqui é o servidor do Hub Web, não o navegador — então não
+ * existe ninguém para acertar o nome sozinho. Procurar apenas a grafia sem
+ * prefixo fazia o Hub Web não guardar o refresh em produção: a sessão morria no
+ * primeiro vencimento do access token, quinze minutos depois do login.
+ *
+ * A leitura aceita as duas grafias e a escrita manda as duas com o mesmo valor.
+ * Assim a sessão sobrevive com a API em http ou em https, sem o Hub Web ter de
+ * repetir a configuração de cookie que já existe do outro lado.
+ */
+export const HOST_COOKIE_PREFIX = '__Host-';
+
+/** Lê um cookie da API tolerando o prefixo `__Host-`. */
+export function readApiCookie(jar: Record<string, string>, name: string): string | undefined {
+  return jar[name] ?? jar[`${HOST_COOKIE_PREFIX}${name}`];
+}
+
+/** Cookies da API sob custódia, nas duas grafias. Valor vazio não vai. */
+export function apiCookieJar(
+  session: Pick<Session, 'refreshToken' | 'csrfToken'>,
+): Record<string, string> {
+  const jar: Record<string, string> = {};
+
+  for (const [name, value] of [
+    [API_REFRESH_COOKIE, session.refreshToken],
+    [API_CSRF_COOKIE, session.csrfToken],
+  ] as const) {
+    if (value === '') {
+      continue;
+    }
+    jar[name] = value;
+    jar[`${HOST_COOKIE_PREFIX}${name}`] = value;
+  }
+
+  return jar;
+}
+
+/** Os mesmos cookies já no formato do cabeçalho `cookie`. */
+export function apiCookieHeader(
+  session: Pick<Session, 'refreshToken' | 'csrfToken'>,
+): string {
+  return Object.entries(apiCookieJar(session))
+    .map(([name, value]) => `${name}=${value}`)
+    .join('; ');
+}
+
 export const sessionSchema = z.object({
   accessToken: z.string(),
   /** Momento em que o access token expira, ISO 8601 UTC. */

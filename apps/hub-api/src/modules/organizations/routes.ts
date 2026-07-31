@@ -10,6 +10,8 @@
  * | `GET /organizations`              | (só autenticação)    | qualquer conta                 |
  * | `POST /organizations`             | (só autenticação)    | qualquer conta verificada      |
  * | `GET /organizations/:orgId`       | `chat.read`          | todos os papéis                |
+ * | `PATCH /organizations/:orgId`     | `organization.manage`| owner                          |
+ * | `DELETE /organizations/:orgId`    | `organization.manage`| owner                          |
  * | `GET .../members`                 | `chat.read`          | todos os papéis                |
  * | `POST .../invitations`            | `members.invite`     | owner e admin                  |
  * | `POST /invitations/accept`        | (só autenticação)    | a conta convidada, verificada  |
@@ -43,17 +45,20 @@ import {
   createInvitationRequestSchema,
   createOrganizationRequestSchema,
   cursorPageQuerySchema,
+  deleteOrganizationRequestSchema,
   invitationEnvelope,
   memberEnvelope,
   memberListQuerySchema,
   memberPageEnvelope,
   memberParamsSchema,
+  organizationDeletedEnvelope,
   organizationEnvelope,
   organizationErrorResponses,
   organizationPageEnvelope,
   organizationParamsSchema,
   organizationWithAccessEnvelope,
   updateMemberRequestSchema,
+  updateOrganizationRequestSchema,
 } from './schemas.js';
 import { OrganizationRepository } from './repository.js';
 import type { OrganizationService } from './service.js';
@@ -168,6 +173,110 @@ export const organizationRoutes: FastifyPluginCallbackZod<OrganizationRoutesOpti
       }
 
       return ok(request, await service.get(request.params.orgId, access.role));
+    },
+  );
+
+  app.patch(
+    '/organizations/:orgId',
+    {
+      bodyLimit: PAYLOAD_LIMITS.auth,
+      preHandler: app.requirePermission('organization.manage', { resourceType: 'organization' }),
+      schema: {
+        tags: ['organizations'],
+        summary: 'Rename an organization or change its address',
+        description:
+          'Optimistic concurrency: send the version you read. Changing the slug changes the ' +
+          'address of every link that points to this organization.',
+        security: [{ bearerAuth: [] }],
+        params: organizationParamsSchema,
+        body: updateOrganizationRequestSchema,
+        response: { 200: organizationWithAccessEnvelope, ...organizationErrorResponses },
+      },
+    },
+    async (request) => {
+      const access = request.access;
+      const auth = request.auth;
+
+      if (access === undefined || auth === undefined) {
+        throw unauthenticated();
+      }
+
+      const updated = await service.update({
+        organizationId: request.params.orgId,
+        version: request.body.version,
+        ...(request.body.name === undefined ? {} : { name: request.body.name }),
+        ...(request.body.slug === undefined ? {} : { slug: request.body.slug }),
+        role: access.role,
+      });
+
+      const origin = requestOrigin(request);
+
+      await recordAudit(app.db, {
+        organizationId: request.params.orgId,
+        actorType: 'user',
+        actorId: auth.userId,
+        actorLabel: auth.email,
+        action: 'organization.updated',
+        resourceType: 'organization',
+        resourceId: request.params.orgId,
+        requestId: request.id,
+        ip: origin.ip,
+        userAgent: origin.userAgent,
+        metadata: { name: updated.name, slug: updated.slug },
+      });
+
+      return ok(request, updated);
+    },
+  );
+
+  app.delete(
+    '/organizations/:orgId',
+    {
+      bodyLimit: PAYLOAD_LIMITS.auth,
+      preHandler: app.requirePermission('organization.manage', { resourceType: 'organization' }),
+      schema: {
+        tags: ['organizations'],
+        summary: 'Delete an organization',
+        description:
+          'Requires the slug typed again and the version you read. The deletion is logical: ' +
+          'the organization disappears from every listing and the retention worker erases it ' +
+          'for good after the window.',
+        security: [{ bearerAuth: [] }],
+        params: organizationParamsSchema,
+        body: deleteOrganizationRequestSchema,
+        response: { 200: organizationDeletedEnvelope, ...organizationErrorResponses },
+      },
+    },
+    async (request) => {
+      const auth = request.auth;
+
+      if (auth === undefined) {
+        throw unauthenticated();
+      }
+
+      const removed = await service.remove({
+        organizationId: request.params.orgId,
+        version: request.body.version,
+        slug: request.body.slug,
+      });
+
+      const origin = requestOrigin(request);
+
+      await recordAudit(app.db, {
+        organizationId: request.params.orgId,
+        actorType: 'user',
+        actorId: auth.userId,
+        actorLabel: auth.email,
+        action: 'organization.deleted',
+        resourceType: 'organization',
+        resourceId: request.params.orgId,
+        requestId: request.id,
+        ip: origin.ip,
+        userAgent: origin.userAgent,
+        metadata: { slug: removed.slug, name: removed.name },
+      });
+
+      return ok(request, { organization: removed });
     },
   );
 

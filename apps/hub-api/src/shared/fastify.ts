@@ -35,6 +35,14 @@ export interface AuthContext {
   readonly deviceId: string | null;
   /** Organização ativa da credencial, quando houver. */
   readonly organizationId: string | null;
+  /**
+   * Administra a plataforma inteira.
+   *
+   * Fica ao lado do papel de organização, não dentro dele: é uma marca da
+   * conta, lida do banco a cada requisição, e nenhuma delas está no token —
+   * revogar a administração não pode depender de o access token vencer.
+   */
+  readonly isPlatformAdmin: boolean;
 }
 
 /** Resultado da autorização, anexado à requisição por `requirePermission`. */
@@ -72,6 +80,14 @@ declare module 'fastify' {
       permission: Permission,
       options?: RequirePermissionOptions,
     ) => PermissionGuard;
+    /**
+     * Exige a marca de administrador da plataforma.
+     *
+     * Não é `requirePermission` com outro nome: a tabela de permissões descreve
+     * o que cada papel faz **dentro** de uma organização, e o que estas rotas
+     * fazem é justamente atravessar todas elas.
+     */
+    requirePlatformAdmin: PermissionGuard;
   }
 
   interface FastifyRequest {

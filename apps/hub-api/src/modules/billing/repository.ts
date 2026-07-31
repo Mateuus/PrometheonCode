@@ -23,12 +23,54 @@ import { affectedRows } from '../../shared/query.js';
 
 export type PlanRow = Plan;
 
+/**
+ * Tetos que a organização carrega por conta própria.
+ *
+ * `null` é o normal e quer dizer "vale o do plano". Preenchido, é a exceção
+ * combinada com quem administra a plataforma — e é ela que o servidor cobra.
+ */
+export interface LimitOverrides {
+  readonly maxMembers: number | null;
+  readonly maxProjects: number | null;
+  readonly maxKnowledgeItems: number | null;
+  readonly maxAgentRunsPerMonth: number | null;
+  readonly maxStorageBytes: number | null;
+  readonly retentionDays: number | null;
+}
+
+export const EMPTY_OVERRIDES: LimitOverrides = {
+  maxMembers: null,
+  maxProjects: null,
+  maxKnowledgeItems: null,
+  maxAgentRunsPerMonth: null,
+  maxStorageBytes: null,
+  retentionDays: null,
+};
+
 export interface OrganizationPlanRow {
   readonly organizationId: string;
   readonly organizationStatus: 'active' | 'suspended' | 'pending_deletion';
   readonly organizationCreatedAt: Date;
   readonly organizationVersion: number;
   readonly plan: PlanRow;
+  readonly overrides: LimitOverrides;
+}
+
+/**
+ * Inteiro vindo do lado cru da consulta.
+ *
+ * O que sai do driver para `int` e `bigint` é número ou texto conforme a
+ * coluna, e `max_storage_bytes` é `bigint`. Converter aqui evita comparar um
+ * teto com uma string mais adiante — comparação que "funciona" e erra.
+ */
+function toNullableInt(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 export interface UsageCounts {
@@ -44,6 +86,23 @@ interface OrganizationColumns {
   organizationStatus: OrganizationPlanRow['organizationStatus'];
   organizationCreatedAt: Date;
   organizationVersion: number;
+  overrideMaxMembers: unknown;
+  overrideMaxProjects: unknown;
+  overrideMaxKnowledgeItems: unknown;
+  overrideMaxAgentRunsPerMonth: unknown;
+  overrideMaxStorageBytes: unknown;
+  overrideRetentionDays: unknown;
+}
+
+function toOverrides(row: OrganizationColumns): LimitOverrides {
+  return {
+    maxMembers: toNullableInt(row.overrideMaxMembers),
+    maxProjects: toNullableInt(row.overrideMaxProjects),
+    maxKnowledgeItems: toNullableInt(row.overrideMaxKnowledgeItems),
+    maxAgentRunsPerMonth: toNullableInt(row.overrideMaxAgentRunsPerMonth),
+    maxStorageBytes: toNullableInt(row.overrideMaxStorageBytes),
+    retentionDays: toNullableInt(row.overrideRetentionDays),
+  };
 }
 
 /** Primeiro instante do mês corrente em UTC. */
@@ -83,6 +142,12 @@ export class BillingRepository {
       .addSelect('organization.status', 'organizationStatus')
       .addSelect('organization.createdAt', 'organizationCreatedAt')
       .addSelect('organization.version', 'organizationVersion')
+      .addSelect('organization.maxMembers', 'overrideMaxMembers')
+      .addSelect('organization.maxProjects', 'overrideMaxProjects')
+      .addSelect('organization.maxKnowledgeItems', 'overrideMaxKnowledgeItems')
+      .addSelect('organization.maxAgentRunsPerMonth', 'overrideMaxAgentRunsPerMonth')
+      .addSelect('organization.maxStorageBytes', 'overrideMaxStorageBytes')
+      .addSelect('organization.retentionDays', 'overrideRetentionDays')
       .innerJoin(organizations.options.name, 'organization', 'organization.planId = plan.id')
       .where('organization.id = :organizationId', { organizationId })
       .limit(1)
@@ -101,6 +166,7 @@ export class BillingRepository {
       organizationCreatedAt: row.organizationCreatedAt,
       organizationVersion: row.organizationVersion,
       plan,
+      overrides: toOverrides(row),
     };
   }
 

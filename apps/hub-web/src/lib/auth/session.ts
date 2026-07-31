@@ -9,8 +9,10 @@ import {
   SESSION_COOKIE,
   THEME_COOKIE,
   accessTokenExpired,
+  apiCookieJar,
   decodeSession,
   encodeSession,
+  readApiCookie,
   sessionCookieOptions,
   type Session,
 } from './session-codec';
@@ -56,8 +58,11 @@ export function buildSession(
     accessExpiresAt: new Date(Date.now() + login.tokens.expiresIn * 1_000).toISOString(),
     // Com `Origin` do Hub Web o refresh vem no cookie; o corpo é o plano B.
     refreshToken:
-      apiCookies[API_REFRESH_COOKIE] ?? login.tokens.refreshToken ?? previous?.refreshToken ?? '',
-    csrfToken: apiCookies[API_CSRF_COOKIE] ?? previous?.csrfToken ?? '',
+      readApiCookie(apiCookies, API_REFRESH_COOKIE) ??
+      login.tokens.refreshToken ??
+      previous?.refreshToken ??
+      '',
+    csrfToken: readApiCookie(apiCookies, API_CSRF_COOKIE) ?? previous?.csrfToken ?? '',
     sessionId: login.sessionId,
     user: login.user,
   };
@@ -83,10 +88,7 @@ export async function refreshSession(session: Session): Promise<Session | null> 
       method: 'POST',
       body: {},
       browserOrigin: true,
-      apiCookies: {
-        [API_REFRESH_COOKIE]: session.refreshToken,
-        [API_CSRF_COOKIE]: session.csrfToken,
-      },
+      apiCookies: apiCookieJar(session),
       csrfToken: session.csrfToken,
     },
   );
@@ -100,8 +102,8 @@ export async function refreshSession(session: Session): Promise<Session | null> 
     ...session,
     accessToken: result.data.tokens.accessToken,
     accessExpiresAt: new Date(Date.now() + result.data.tokens.expiresIn * 1_000).toISOString(),
-    refreshToken: apiCookies[API_REFRESH_COOKIE] ?? session.refreshToken,
-    csrfToken: apiCookies[API_CSRF_COOKIE] ?? session.csrfToken,
+    refreshToken: readApiCookie(apiCookies, API_REFRESH_COOKIE) ?? session.refreshToken,
+    csrfToken: readApiCookie(apiCookies, API_CSRF_COOKIE) ?? session.csrfToken,
   };
 }
 
@@ -143,10 +145,7 @@ export async function revokeSession(session: Session, allSessions: boolean): Pro
     body: { allSessions },
     accessToken: session.accessToken,
     browserOrigin: true,
-    apiCookies: {
-      [API_REFRESH_COOKIE]: session.refreshToken,
-      [API_CSRF_COOKIE]: session.csrfToken,
-    },
+    apiCookies: apiCookieJar(session),
     csrfToken: session.csrfToken,
   });
 }

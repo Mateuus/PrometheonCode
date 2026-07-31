@@ -49,6 +49,8 @@ export interface UserRow {
   timezone: string;
   createdAt: Date;
   updatedAt: Date;
+  /** Administra o Hub inteiro; concedido fora da aplicação. */
+  isPlatformAdmin: boolean;
 }
 
 export interface MembershipRow {
@@ -84,6 +86,7 @@ const USER_COLUMNS = [
   'timezone',
   'createdAt',
   'updatedAt',
+  'isPlatformAdmin',
 ] as const;
 
 export class AuthRepository {

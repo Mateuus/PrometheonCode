@@ -9,5 +9,11 @@
 // Uma migration nova entra aqui **no fim**, com carimbo maior que o da anterior.
 
 import { BaselineSchema1785404582237 } from './1785404582237-BaselineSchema.js';
+import { AgentRoleDefinitions1785600000000 } from './1785600000000-AgentRoleDefinitions.js';
+import { PlatformAdminAndLimitOverrides1785700000000 } from './1785700000000-PlatformAdminAndLimitOverrides.js';
 
-export const MIGRATIONS = [BaselineSchema1785404582237] as const;
+export const MIGRATIONS = [
+  BaselineSchema1785404582237,
+  AgentRoleDefinitions1785600000000,
+  PlatformAdminAndLimitOverrides1785700000000,
+] as const;

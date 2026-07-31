@@ -53,6 +53,7 @@ import {
 } from './integrations.js';
 import {
   agentProfiles,
+  agentRoleDefinitions,
   projectAgentProfiles,
   projectMembers,
   projectRepositories,
@@ -138,6 +139,7 @@ export const ENTITIES = [
   projectRepositories,
   projectSettings,
   agentProfiles,
+  agentRoleDefinitions,
   projectAgentProfiles,
   // chat
   conversations,

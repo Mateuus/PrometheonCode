@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  adminOrganizationSchema,
   auditLogSchema,
   changePasswordResponseSchema,
   conversationSchema,
@@ -140,8 +141,30 @@ export const activeAgentSchema = z.object({
 
 export const activeAgentListSchema = z.object({ agents: z.array(activeAgentSchema) });
 
+// ------------------------------------------------------- administração
+
 /** `GET /v1/admin/plans` — objeto com a lista dentro, não a lista solta. */
 export const planListSchema = z.object({ plans: z.array(planSchema) });
+
+/** `POST /v1/admin/plans` e `PATCH /v1/admin/plans/:code`. */
+export const planResultSchema = z.object({ plan: planSchema });
+
+export const adminOrganizationPageSchema = cursorPageSchema(adminOrganizationSchema);
+
+/** Respostas que devolvem uma organização da visão administrativa. */
+export const adminOrganizationResultSchema = z.object({
+  organization: adminOrganizationSchema,
+});
+
+export { adminOrganizationSchema };
+
+/** `PATCH /v1/organizations/:id` devolve a organização com o papel de quem edita. */
+export const organizationUpdatedSchema = organizationWithAccessSchema;
+
+/** `DELETE /v1/organizations/:id` — o que foi apagado, não o estado atual. */
+export const organizationDeletedSchema = z.object({
+  organization: z.object({ id: z.string(), slug: z.string(), name: z.string() }),
+});
 
 // ------------------------------------------------------------------ realtime
 

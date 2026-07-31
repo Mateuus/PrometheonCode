@@ -37,6 +37,8 @@ export interface CurrentUserView extends PublicUserView {
   readonly timeZone: string;
   readonly createdAt: string;
   readonly updatedAt: string;
+  /** Administra a plataforma; é o que faz a área `/admin` aparecer. */
+  readonly isPlatformAdmin: boolean;
 }
 
 /** Estado do device flow, guardado no Redis enquanto o usuário decide. */

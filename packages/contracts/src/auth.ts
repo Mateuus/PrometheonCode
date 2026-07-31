@@ -51,6 +51,15 @@ export const currentUserSchema = publicUserSchema.extend({
   timeZone: z.string().min(1).max(64),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
+  /**
+   * Administra o Hub inteiro — planos, limites e a lista de organizações.
+   *
+   * Não é papel de organização: quem tem esta marca opera a plataforma, e a
+   * concessão acontece fora da aplicação (`db:grant-admin`). O padrão é falso
+   * para que um cliente conversando com uma API mais antiga nunca conclua que
+   * está diante de um administrador.
+   */
+  isPlatformAdmin: z.boolean().default(false),
 });
 
 export type CurrentUser = z.infer<typeof currentUserSchema>;

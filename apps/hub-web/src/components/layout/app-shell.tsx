@@ -85,7 +85,13 @@ export async function AppShell({
         <ConnectionIndicator />
         <ThemeToggle current={theme} />
         <LocaleSelect current={locale} />
-        {session ? <UserMenu name={session.user.name} email={session.user.email} /> : null}
+        {session ? (
+          <UserMenu
+            name={session.user.name}
+            email={session.user.email}
+            isPlatformAdmin={viewer.ok && viewer.data.user.isPlatformAdmin}
+          />
+        ) : null}
       </header>
 
       {/* Abaixo de `lg` a navegação vira uma faixa rolável — nada de menu que

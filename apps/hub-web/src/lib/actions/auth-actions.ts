@@ -20,7 +20,7 @@ import {
   revokeSession,
   writeSession,
 } from '@/lib/auth/session';
-import { API_CSRF_COOKIE, API_REFRESH_COOKIE } from '@/lib/auth/session-codec';
+import { apiCookieJar } from '@/lib/auth/session-codec';
 import { safeRedirect } from '@/lib/auth/safe-redirect';
 import { formError, formSuccess, type FormState } from './form-state';
 
@@ -289,10 +289,7 @@ export async function switchOrganizationAction(
       body: { organizationId },
       accessToken: token,
       browserOrigin: true,
-      apiCookies: {
-        [API_REFRESH_COOKIE]: session.refreshToken,
-        [API_CSRF_COOKIE]: session.csrfToken,
-      },
+      apiCookies: apiCookieJar(session),
       csrfToken: session.csrfToken,
     },
   );

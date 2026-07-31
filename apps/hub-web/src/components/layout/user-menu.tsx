@@ -10,8 +10,22 @@ import { logoutAction } from '@/lib/actions/auth-actions';
 const itemClass =
   'flex w-full cursor-pointer items-center gap-2 rounded-[6px] px-2 py-1.5 text-sm text-foreground outline-none data-[highlighted]:bg-accent-soft';
 
-/** Menu da conta. O Radix cuida do foco, do Escape e do anúncio do menu. */
-export function UserMenu({ name, email }: { name: string; email: string }) {
+/**
+ * Menu da conta. O Radix cuida do foco, do Escape e do anúncio do menu.
+ *
+ * O item de administração só aparece para quem administra a plataforma. Isso
+ * não é autorização — a Hub API nega de novo em toda rota `/admin` — mas evitar
+ * oferecer uma porta que bate na cara é o mínimo que a interface deve.
+ */
+export function UserMenu({
+  name,
+  email,
+  isPlatformAdmin = false,
+}: {
+  name: string;
+  email: string;
+  isPlatformAdmin?: boolean;
+}) {
   const t = useTranslate();
   const signOutForm = useRef<HTMLFormElement>(null);
   const initials = name
@@ -58,12 +72,14 @@ export function UserMenu({ name, email }: { name: string; email: string }) {
               {t('nav.sessions')}
             </Link>
           </DropdownMenu.Item>
-          <DropdownMenu.Item asChild>
-            <Link href="/admin/plans" className={itemClass}>
-              <Shield aria-hidden className="size-4 text-muted" />
-              {t('nav.administration')}
-            </Link>
-          </DropdownMenu.Item>
+          {isPlatformAdmin ? (
+            <DropdownMenu.Item asChild>
+              <Link href="/admin/plans" className={itemClass}>
+                <Shield aria-hidden className="size-4 text-muted" />
+                {t('nav.administration')}
+              </Link>
+            </DropdownMenu.Item>
+          ) : null}
 
           <DropdownMenu.Separator className="my-1 h-px bg-line" />
           {/*

@@ -133,8 +133,12 @@ export async function claudeIsAvailable(options: {
       windowsHide: true,
     });
 
-    child.on('error', () => resolve(false));
-    child.on('close', (code) => resolve(code === 0));
+    child.on('error', () => {
+      resolve(false);
+    });
+    child.on('close', (code) => {
+      resolve(code === 0);
+    });
   });
 }
 
@@ -155,7 +159,9 @@ export async function claudeVersion(options: {
       output += chunk.toString();
     });
 
-    child.on('error', () => resolve(null));
+    child.on('error', () => {
+      resolve(null);
+    });
     child.on('close', (code) => {
       // "2.1.198 (Claude Code)" — só a primeira palavra interessa.
       resolve(code === 0 ? (output.trim().split(/\s+/, 1)[0] ?? null) : null);
@@ -204,8 +210,10 @@ function stop(child: ChildProcessWithoutNullStreams): void {
   }, GRACEFUL_EXIT_MS);
 
   // `unref` para o temporizador não segurar o processo vivo se tudo já acabou.
-  timer.unref?.();
-  child.once('close', () => clearTimeout(timer));
+  timer.unref();
+  child.once('close', () => {
+    clearTimeout(timer);
+  });
 }
 
 function collectFailure(child: ChildProcessWithoutNullStreams): {
@@ -220,8 +228,12 @@ function collectFailure(child: ChildProcessWithoutNullStreams): {
   });
 
   const exitCode = new Promise<number | null>((resolve) => {
-    child.once('close', (code) => resolve(code));
-    child.once('error', () => resolve(-1));
+    child.once('close', (code) => {
+      resolve(code);
+    });
+    child.once('error', () => {
+      resolve(-1);
+    });
   });
 
   return { exitCode, stderr: () => stderr };

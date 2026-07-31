@@ -83,6 +83,9 @@ export function registerAuth(app: FastifyInstance): void {
       deviceId: credential.deviceId,
       // O escopo guarda a organização escolhida na autorização do dispositivo.
       organizationId: credential.scope,
+      // Credencial de dispositivo nunca administra a plataforma: ela vive 90
+      // dias num arquivo de máquina, e não é onde se decide o plano de ninguém.
+      isPlatformAdmin: false,
     };
   }
 
@@ -123,6 +126,7 @@ export function registerAuth(app: FastifyInstance): void {
       sessionId: claims.sessionId,
       deviceId: null,
       organizationId: claims.organizationId,
+      isPlatformAdmin: user.isPlatformAdmin,
     };
   }
 
@@ -151,6 +155,29 @@ export function registerAuth(app: FastifyInstance): void {
     );
 
     request.auth = auth;
+  });
+
+  /**
+   * Portaria das rotas `/admin`.
+   *
+   * Autentica, exige a marca da conta e registra a negativa. A auditoria aqui
+   * não tem organização: a tentativa é contra a plataforma, e prendê-la a um
+   * tenant qualquer contaria a história errada.
+   */
+  app.decorate('requirePlatformAdmin', async (request: FastifyRequest, reply: FastifyReply) => {
+    await app.authenticate(request, reply);
+
+    const auth = request.auth;
+
+    if (auth === undefined) {
+      throw unauthenticated();
+    }
+
+    if (!auth.isPlatformAdmin) {
+      logger.warn({ userId: auth.userId, url: request.url }, 'platform administration denied');
+
+      throw forbidden('This endpoint is restricted to platform administrators.', 'PERMISSION_DENIED');
+    }
   });
 
   app.decorate(

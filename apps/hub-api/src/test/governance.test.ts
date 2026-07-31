@@ -151,19 +151,16 @@ describe.skipIf(!probe.ok)('planos, limites e governança', () => {
   }
 
   it('lists plans and the subscription with measured usage', async () => {
+    // O catálogo é da administração da plataforma. Dono de organização não
+    // enxerga: se enxergasse, veria os planos ainda não anunciados — e, com a
+    // edição no mesmo lugar, escolheria o próprio teto.
     const catalogue = await harness.app.inject({
       method: 'GET',
       url: '/v1/admin/plans',
       headers: auth(owner.accessToken),
     });
 
-    expect(catalogue.statusCode).toBe(200);
-
-    const codes = body<{ data: { plans: { code: string }[] } }>(catalogue).data.plans.map(
-      (plan) => plan.code,
-    );
-
-    expect(codes).toContain('free');
+    expect(catalogue.statusCode).toBe(403);
 
     const overview = await harness.app.inject({
       method: 'GET',

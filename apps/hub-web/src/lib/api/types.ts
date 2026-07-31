@@ -23,6 +23,7 @@ import type {
 } from '@prometheon/contracts';
 
 export type {
+  AdminOrganization,
   AuditLog,
   Conversation,
   ConversationParticipant,

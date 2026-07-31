@@ -59,6 +59,18 @@ export const updateOrganizationRequestSchema = z.object({
   version: versionSchema,
 });
 
+/**
+ * Exclusão de organização.
+ *
+ * Pede o `slug` de novo de propósito: a confirmação digitada é o que separa
+ * "apagar o tenant" de um clique errado, e deixá-la só na interface faria a
+ * API aceitar por engano o que a tela protegia.
+ */
+export const deleteOrganizationRequestSchema = z.object({
+  slug: slugSchema,
+  version: versionSchema,
+});
+
 export const organizationPageSchema = cursorPageSchema(
   organizationWithAccessSchema,
 );

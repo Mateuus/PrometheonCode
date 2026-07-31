@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { FolderGit2, LayoutDashboard, ScrollText, Users } from 'lucide-react';
+import { FolderGit2, LayoutDashboard, ScrollText, Settings, Users } from 'lucide-react';
 import { getTranslate } from '@/i18n/server';
 import { AppShell, type NavItem } from '@/components/layout/app-shell';
 import { RealtimeConnection } from '@/components/states/connection';
@@ -32,6 +32,7 @@ export default async function OrganizationLayout({
     { href: `${base}/projects`, label: t('nav.projects'), icon: <FolderGit2 /> },
     { href: `${base}/members`, label: t('nav.members'), icon: <Users /> },
     { href: `${base}/audit`, label: t('nav.audit'), icon: <ScrollText /> },
+    { href: `${base}/settings`, label: t('nav.organizationSettings'), icon: <Settings /> },
   ];
 
   return (

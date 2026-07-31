@@ -20,7 +20,12 @@ import type { PlanLimitViolation } from '@prometheon/contracts';
 import type { Database } from '@prometheon/database';
 
 import { planLimitExceeded, subscriptionNotFound } from './errors.js';
-import { BillingRepository, type PlanRow } from './repository.js';
+import {
+  BillingRepository,
+  EMPTY_OVERRIDES,
+  type LimitOverrides,
+  type PlanRow,
+} from './repository.js';
 
 /**
  * Tetos que o servidor sabe contar.
@@ -47,9 +52,20 @@ export interface AssertPlanLimitInput {
   readonly now?: Date;
 }
 
-/** Valor do teto no plano. Zero ou negativo significa "sem teto". */
-function allowanceOf(plan: PlanRow, limit: CountablePlanLimit): number | null {
-  const value = plan[limit];
+/**
+ * Valor do teto que vale de fato. Zero ou negativo significa "sem teto".
+ *
+ * A exceção da organização vence o plano quando existe. É por isso que ela é
+ * consultada aqui, e não só na tela: um teto que a interface mostra e o
+ * servidor não cobra é decoração, e o inverso — servidor cobrando um teto que
+ * a pessoa combinou aumentar — é chamado de suporte.
+ */
+function allowanceOf(
+  plan: PlanRow,
+  limit: CountablePlanLimit,
+  overrides: LimitOverrides = EMPTY_OVERRIDES,
+): number | null {
+  const value = overrides[limit] ?? plan[limit];
 
   return value <= 0 ? null : value;
 }
@@ -106,7 +122,7 @@ export async function checkPlanLimit(
     throw subscriptionNotFound();
   }
 
-  const allowed = allowanceOf(organizationPlan.plan, input.limit);
+  const allowed = allowanceOf(organizationPlan.plan, input.limit, organizationPlan.overrides);
 
   if (allowed === null) {
     return null;
@@ -138,6 +154,7 @@ export async function violationsAgainstPlan(
   repository: BillingRepository,
   organizationId: string,
   plan: PlanRow,
+  overrides: LimitOverrides = EMPTY_OVERRIDES,
   now?: Date,
 ): Promise<PlanLimitViolation[]> {
   const usage = await repository.usage(organizationId, now);
@@ -151,7 +168,10 @@ export async function violationsAgainstPlan(
   const violations: PlanLimitViolation[] = [];
 
   for (const limit of COUNTABLE_PLAN_LIMITS) {
-    const allowed = allowanceOf(plan, limit);
+    // A exceção da organização sobrevive à troca de plano: quem já tinha
+    // autorização para passar do teto não perde a autorização por trocar de
+    // plano — só perde quando a exceção for retirada.
+    const allowed = allowanceOf(plan, limit, overrides);
 
     if (allowed !== null && used[limit] > allowed) {
       violations.push({ limit, planCode: plan.code, allowed, current: used[limit] });
@@ -159,4 +179,37 @@ export async function violationsAgainstPlan(
   }
 
   return violations;
+}
+
+/** Chaves de limite que aparecem no contrato, incluindo a retenção. */
+export const PLAN_LIMIT_FIELDS = [
+  'maxMembers',
+  'maxProjects',
+  'maxKnowledgeItems',
+  'maxAgentRunsPerMonth',
+  'maxStorageBytes',
+  'retentionDays',
+] as const;
+
+export type PlanLimitField = (typeof PLAN_LIMIT_FIELDS)[number];
+
+/**
+ * Os tetos que valem para a organização, no formato do contrato.
+ *
+ * `null` significa "sem teto", como no resto do módulo — e é o que a coluna
+ * zerada quer dizer.
+ */
+export function effectiveLimits(
+  plan: PlanRow,
+  overrides: LimitOverrides = EMPTY_OVERRIDES,
+): Record<PlanLimitField, number | null> {
+  const resolved = {} as Record<PlanLimitField, number | null>;
+
+  for (const field of PLAN_LIMIT_FIELDS) {
+    const value = overrides[field] ?? plan[field];
+
+    resolved[field] = value <= 0 ? null : value;
+  }
+
+  return resolved;
 }

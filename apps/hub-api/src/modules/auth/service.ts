@@ -1264,6 +1264,7 @@ export function toCurrentUser(user: {
   timezone: string;
   createdAt: Date;
   updatedAt: Date;
+  isPlatformAdmin?: boolean;
 }): CurrentUserView {
   return {
     id: user.id,
@@ -1275,6 +1276,7 @@ export function toCurrentUser(user: {
     timeZone: user.timezone,
     createdAt: toIso(user.createdAt),
     updatedAt: toIso(user.updatedAt),
+    isPlatformAdmin: user.isPlatformAdmin === true,
   };
 }
 

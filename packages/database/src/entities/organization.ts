@@ -12,6 +12,7 @@ import {
   deletedAt,
   enumColumn,
   jsonColumn,
+  nullableUnsignedBigint,
   organizationId,
   primaryId,
   requiredText,
@@ -109,6 +110,16 @@ export interface Organization extends AuditFields {
   settings: Record<string, unknown> | null;
   retentionDays: number | null;
   deletedAt: Date | null;
+  /**
+   * Tetos próprios desta organização. Nulo é o normal e significa "vale o do
+   * plano"; preenchido é a exceção combinada caso a caso, do mesmo jeito que
+   * `retentionDays` já funcionava. Zero continua sendo "sem teto".
+   */
+  maxMembers: number | null;
+  maxProjects: number | null;
+  maxKnowledgeItems: number | null;
+  maxAgentRunsPerMonth: number | null;
+  maxStorageBytes: number | null;
 }
 
 export const organizations = new EntitySchema<Organization>({
@@ -130,6 +141,12 @@ export const organizations = new EntitySchema<Organization>({
     ...auditColumns(),
     // Exclusão de organização é reversível dentro da janela de retenção.
     deletedAt: deletedAt(),
+    // Exceções de limite, na ordem física da tabela (migration `0002`).
+    maxMembers: { type: 'int', name: 'max_members', nullable: true },
+    maxProjects: { type: 'int', name: 'max_projects', nullable: true },
+    maxKnowledgeItems: { type: 'int', name: 'max_knowledge_items', nullable: true },
+    maxAgentRunsPerMonth: { type: 'int', name: 'max_agent_runs_per_month', nullable: true },
+    maxStorageBytes: nullableUnsignedBigint('max_storage_bytes'),
   },
   uniques: [{ name: 'uq_organizations_slug', columns: ['slug'] }],
   indices: [

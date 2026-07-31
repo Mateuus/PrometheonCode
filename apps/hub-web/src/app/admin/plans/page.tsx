@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, StatusBadge } from '@/components/ui/status-badge';
 import { DataView } from '@/components/states/data-view';
 import { ForcedStateNotice } from '@/components/states/forced-state-notice';
+import { AdminDisclosure, CreatePlanForm, UpdatePlanForm } from '@/components/forms/admin-forms';
 import { listPlans } from '@/lib/api/queries';
 import { applyForcedState, devForcedState } from '@/lib/api/state-override';
 import { formatBytes, formatMoney, formatNumber } from '@/lib/format';
@@ -68,6 +69,8 @@ export default async function PlansPage({
       <ForcedStateNotice forced={forced} />
 
       <PageHeader title={t('admin.plans.title')} description={t('admin.plans.subtitle')} />
+
+      <CreatePlanForm />
 
       <DataView
         result={plans}
@@ -146,6 +149,10 @@ export default async function PlansPage({
                         </ul>
                       )}
                     </div>
+
+                    <AdminDisclosure label={t('admin.plans.edit')}>
+                      <UpdatePlanForm plan={plan} />
+                    </AdminDisclosure>
                   </CardContent>
                 </Card>
               </li>

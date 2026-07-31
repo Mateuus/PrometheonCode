@@ -77,7 +77,12 @@ export default tseslint.config(
   {
     // Ferramentas de linha de comando falam com a pessoa pelo stdout: é a
     // interface delas, não um `console.log` esquecido.
-    files: ['**/src/seed.ts', '**/src/migrate.ts', '**/src/cli/**'],
+    files: [
+      '**/src/seed.ts',
+      '**/src/migrate.ts',
+      '**/src/grant-platform-admin.ts',
+      '**/src/cli/**',
+    ],
     rules: { 'no-console': 'off' },
   },
 );

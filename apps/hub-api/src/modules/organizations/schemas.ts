@@ -7,15 +7,19 @@ import {
   createOrganizationRequestSchema,
   cursorPageQuerySchema,
   cursorPageSchema,
+  deleteOrganizationRequestSchema,
   errorEnvelopeSchema,
   invitationSchema,
   memberListQuerySchema,
   organizationMemberSchema,
   organizationSchema,
   organizationWithAccessSchema,
+  slugSchema,
   successEnvelope,
+  shortTextSchema,
   ulidSchema,
   updateMemberRequestSchema,
+  updateOrganizationRequestSchema,
 } from '@prometheon/contracts';
 import { z } from 'zod';
 
@@ -24,8 +28,10 @@ export {
   createInvitationRequestSchema,
   createOrganizationRequestSchema,
   cursorPageQuerySchema,
+  deleteOrganizationRequestSchema,
   memberListQuerySchema,
   updateMemberRequestSchema,
+  updateOrganizationRequestSchema,
 };
 
 export const organizationParamsSchema = z.object({ orgId: ulidSchema });
@@ -46,6 +52,18 @@ export const memberPageEnvelope = successEnvelope(
   cursorPageSchema(organizationMemberSchema),
 );
 export const memberEnvelope = successEnvelope(organizationMemberSchema);
+
+/**
+ * Resposta da exclusão: o que foi apagado, não o estado atual.
+ *
+ * Devolver a organização inteira depois de excluí-la faria a tela desenhar algo
+ * que já não existe; o identificador e o nome bastam para a mensagem de saída.
+ */
+export const organizationDeletedEnvelope = successEnvelope(
+  z.object({
+    organization: z.object({ id: ulidSchema, slug: slugSchema, name: shortTextSchema }),
+  }),
+);
 
 /**
  * Convite devolvido sem o token.

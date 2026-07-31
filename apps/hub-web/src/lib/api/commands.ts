@@ -9,16 +9,29 @@ import { accessToken } from '@/lib/auth/session';
 import { hubRequest, type HubRequestOptions } from './client';
 import { failure, type ApiResult } from './result';
 import {
+  adminOrganizationResultSchema,
   changePasswordResponseSchema,
   conversationSchema,
   messageSchema,
+  organizationDeletedSchema,
+  organizationUpdatedSchema,
+  planResultSchema,
   projectSchema,
   revokeDeviceResultSchema,
   revokeSessionResultSchema,
   taskSchema,
   updateProfileResponseSchema,
 } from './schemas';
-import type { Conversation, Message, OrganizationRole, Project, Task, TaskPriority, TaskStatus } from './types';
+import type {
+  Conversation,
+  Message,
+  OrganizationRole,
+  PlanLimits,
+  Project,
+  Task,
+  TaskPriority,
+  TaskStatus,
+} from './types';
 
 /**
  * Escritas no domínio.
@@ -250,4 +263,102 @@ export async function createOrganization(name: string): Promise<ApiResult<{ id: 
     method: 'POST',
     body: { name },
   });
+}
+
+/**
+ * Renomeia a organização e, quando pedido, troca o endereço.
+ *
+ * O slug só vai no corpo quando muda de verdade: reenviar o mesmo valor faria a
+ * API conferir conflito à toa, e mandar um slug diferente muda a URL de todo
+ * link salvo.
+ */
+export async function updateOrganization(
+  organizationId: string,
+  input: { name?: string | undefined; slug?: string | undefined; version: number },
+): Promise<ApiResult<z.infer<typeof organizationUpdatedSchema>>> {
+  return send(`/v1/organizations/${encodeURIComponent(organizationId)}`, organizationUpdatedSchema, {
+    method: 'PATCH',
+    body: {
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.slug === undefined ? {} : { slug: input.slug }),
+      version: input.version,
+    },
+  });
+}
+
+/** Exclui a organização. O slug vai de novo como confirmação, e a API confere. */
+export async function deleteOrganization(
+  organizationId: string,
+  input: { slug: string; version: number },
+): Promise<ApiResult<z.infer<typeof organizationDeletedSchema>>> {
+  return send(`/v1/organizations/${encodeURIComponent(organizationId)}`, organizationDeletedSchema, {
+    method: 'DELETE',
+    body: { slug: input.slug, version: input.version },
+  });
+}
+
+// ------------------------------------------------------------ administração
+
+/** Limites como o formulário os envia; `null` é "sem teto". */
+export type PlanLimitsInput = Partial<Record<keyof PlanLimits, number | null>>;
+
+export async function createPlan(input: {
+  code: string;
+  name: string;
+  description?: string | null;
+  priceCents: number;
+  currency: string;
+  billingPeriod: 'none' | 'monthly' | 'yearly';
+  limits: PlanLimitsInput;
+  isActive: boolean;
+}): Promise<ApiResult<z.infer<typeof planResultSchema>>> {
+  return send('/v1/admin/plans', planResultSchema, { method: 'POST', body: input });
+}
+
+export async function updatePlan(
+  code: string,
+  input: {
+    name?: string | undefined;
+    description?: string | null | undefined;
+    priceCents?: number | undefined;
+    currency?: string | undefined;
+    billingPeriod?: 'none' | 'monthly' | 'yearly' | undefined;
+    limits?: PlanLimitsInput | undefined;
+    isDefault?: boolean | undefined;
+    isActive?: boolean | undefined;
+  },
+): Promise<ApiResult<z.infer<typeof planResultSchema>>> {
+  return send(`/v1/admin/plans/${encodeURIComponent(code)}`, planResultSchema, {
+    method: 'PATCH',
+    body: input,
+  });
+}
+
+/**
+ * Atribui um plano a uma organização.
+ *
+ * `allowOverLimit` existe para o caso em que o tenant já passou do teto do
+ * plano novo: sem a marca a API recusa, que é o certo por padrão.
+ */
+export async function assignPlan(
+  organizationId: string,
+  input: { planCode: string; allowOverLimit?: boolean },
+): Promise<ApiResult<z.infer<typeof adminOrganizationResultSchema>>> {
+  return send(
+    `/v1/admin/organizations/${encodeURIComponent(organizationId)}/plan`,
+    adminOrganizationResultSchema,
+    { method: 'PUT', body: { planCode: input.planCode, allowOverLimit: input.allowOverLimit ?? false } },
+  );
+}
+
+/** Sobe ou devolve ao plano os limites de uma organização. */
+export async function updateOrganizationLimits(
+  organizationId: string,
+  overrides: PlanLimitsInput,
+): Promise<ApiResult<z.infer<typeof adminOrganizationResultSchema>>> {
+  return send(
+    `/v1/admin/organizations/${encodeURIComponent(organizationId)}/limits`,
+    adminOrganizationResultSchema,
+    { method: 'PATCH', body: overrides },
+  );
 }

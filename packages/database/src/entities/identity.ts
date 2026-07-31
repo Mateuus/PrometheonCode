@@ -41,6 +41,8 @@ export interface User extends TimestampFields {
   lastLoginAt: Date | null;
   version: number;
   deletedAt: Date | null;
+  /** Opera o Hub inteiro: planos, limites e a lista de organizações. */
+  isPlatformAdmin: boolean;
 }
 
 export const users = new EntitySchema<User>({
@@ -64,9 +66,21 @@ export const users = new EntitySchema<User>({
     version: version(),
     // Exclusão de conta tem janela de recuperação (`deletion_jobs`).
     deletedAt: deletedAt(),
+    // Quem administra a plataforma, não um tenant. Concedido à mão, a poucas
+    // contas; nenhuma rota da aplicação escreve esta coluna. Declarado por
+    // último porque acompanha a ordem física da tabela.
+    isPlatformAdmin: {
+      type: 'boolean',
+      name: 'is_platform_admin',
+      nullable: false,
+      default: false,
+    },
   },
   uniques: [{ name: 'uq_users_email', columns: ['email'] }],
-  indices: [{ name: 'idx_users_status_created_at', columns: ['status', 'createdAt'] }],
+  indices: [
+    { name: 'idx_users_status_created_at', columns: ['status', 'createdAt'] },
+    { name: 'idx_users_platform_admin', columns: ['isPlatformAdmin'] },
+  ],
 });
 
 /** Provedores de identidade aceitos. `password` é a credencial local. */

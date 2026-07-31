@@ -41,12 +41,16 @@ import { createMailService } from './mail/index.js';
 import type { MailService } from './mail/types.js';
 import { accountRoutes } from './modules/account/routes.js';
 import { AccountService } from './modules/account/service.js';
+import { adminRoutes } from './modules/admin/routes.js';
+import { AdminService } from './modules/admin/service.js';
 import { createGovernanceQueues } from './modules/audit/queue.js';
 import { auditRoutes } from './modules/audit/routes.js';
 import { AuditService } from './modules/audit/service.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { DeviceRepository } from './modules/devices/repository.js';
 import { deviceRoutes } from './modules/devices/routes.js';
+import { agentRoleRoutes } from './modules/agent-roles/routes.js';
+import { AgentRoleService } from './modules/agent-roles/service.js';
 import { DeviceService } from './modules/devices/service.js';
 import type { GitHubClient } from './modules/auth/github.js';
 import { AuthService } from './modules/auth/service.js';
@@ -205,6 +209,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<BuiltApp>
 
   const knowledgeService = new KnowledgeService(app.db);
   const billingService = new BillingService(app.db);
+  const adminService = new AdminService(app.db);
 
   // As filas de governança usam conexão própria: o BullMQ administra o próprio
   // prefixo de chave e exige `maxRetriesPerRequest: null`, o que o `app.redis`
@@ -218,6 +223,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<BuiltApp>
   const auditService = new AuditService(app.db, governanceQueues);
 
   const projectService = new ProjectService({ db: app.db });
+  const agentRoleService = new AgentRoleService(app.db);
   const conversationService = new ConversationService({ db: app.db });
   const messageService = new MessageService({ db: app.db });
   const taskService = new TaskService({ db: app.db });
@@ -232,9 +238,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<BuiltApp>
       await scope.register(organizationRoutes, { service: organizationService });
       await scope.register(knowledgeRoutes, { service: knowledgeService });
       await scope.register(billingRoutes, { service: billingService });
+      await scope.register(adminRoutes, { service: adminService });
       await scope.register(auditRoutes, { service: auditService });
 
       await scope.register(projectRoutes, { service: projectService });
+      await scope.register(agentRoleRoutes, { service: agentRoleService });
       await scope.register(conversationRoutes, {
         service: conversationService,
         messages: messageService,

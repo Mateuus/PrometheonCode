@@ -23,7 +23,7 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import { cookieProfile } from '../config/index.js';
+import { AUTH_SETTINGS, cookieProfile } from '../config/index.js';
 import { randomToken, safeEqual } from '../shared/crypto.js';
 import { forbidden } from '../shared/errors.js';
 
@@ -112,6 +112,10 @@ export async function registerSecurity(app: FastifyInstance): Promise<void> {
   // Garante o cookie legível do double-submit. Ele não é segredo compartilhado
   // com o servidor: o valor só precisa ser imprevisível para um site terceiro,
   // que não consegue lê-lo por causa da política de mesma origem.
+  //
+  // O prazo acompanha o do refresh de propósito. Um CSRF que vence antes da
+  // credencial que ele protege não encurta ataque nenhum — só derruba quem
+  // estava logado, porque a requisição seguinte chega sem o par para conferir.
   app.addHook('onRequest', (request, reply, done) => {
     if (request.cookies[cookies.csrfName] === undefined) {
       void reply.setCookie(cookies.csrfName, randomToken(16), {
@@ -119,7 +123,7 @@ export async function registerSecurity(app: FastifyInstance): Promise<void> {
         secure: cookies.secure,
         sameSite: cookies.sameSite,
         path: cookies.path,
-        maxAge: 60 * 60 * 12,
+        maxAge: AUTH_SETTINGS.refreshTokenTtlSeconds,
       });
     }
 

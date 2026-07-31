@@ -5,6 +5,7 @@ import { EntitySchema } from 'typeorm';
 
 import {
   auditColumns,
+  createdBy,
   deletedAt,
   enumColumn,
   jsonColumn,
@@ -265,6 +266,73 @@ export const agentProfiles = new EntitySchema<AgentProfile>({
   uniques: [{ name: 'uq_agent_profiles_org_slug', columns: ['organizationId', 'slug'] }],
   indices: [
     { name: 'idx_agent_profiles_org_created_at', columns: ['organizationId', 'createdAt'] },
+  ],
+});
+
+/**
+ * Papel nomeado da organização — "Gameplay PIE UE5 Test", por exemplo.
+ *
+ * Os sete papéis embutidos são o enum `agentRole` acima: existem em toda
+ * instalação e não moram em tabela. Aqui ficam só os que a equipe cria, e
+ * `based_on` é o que diz ao orquestrador como tratá-los na delegação.
+ *
+ * O `id` é slug e não ULID: ele é escrito no `.prometheon/agents/roles.yaml` do
+ * projeto e no perfil do agente em cada máquina, e um identificador legível é o
+ * que torna esses arquivos revisáveis num diff.
+ */
+/**
+ * Papéis embutidos de que um papel nomeado pode herdar.
+ *
+ * Lista própria, e não `agentRole` acima: aquele enum é o do perfil de agente do
+ * Hub (`main`, `documenter`), enquanto este é o vocabulário que a extensão
+ * mostra ao usuário (`orchestrator`, sem `custom`, que é o guarda-chuva destes).
+ * Unificar os dois exigiria migrar dados existentes para ganhar nada.
+ */
+export const agentRoleBase = [
+  'orchestrator',
+  'planner',
+  'implementer',
+  'reviewer',
+  'researcher',
+  'tester',
+] as const;
+export type AgentRoleBase = (typeof agentRoleBase)[number];
+
+export interface AgentRoleDefinition extends TimestampFields {
+  id: string;
+  organizationId: string;
+  label: string;
+  description: string;
+  basedOn: AgentRoleBase;
+  skills: string[];
+  systemPrompt: string | null;
+  createdBy: string | null;
+  version: number;
+}
+
+export const agentRoleDefinitions = new EntitySchema<AgentRoleDefinition>({
+  name: 'agent_role_definitions',
+  tableName: 'agent_role_definitions',
+  columns: {
+    // Chave composta com a organização: o id é um slug legível, escrito no
+    // `.prometheon/agents/roles.yaml` do projeto e no perfil de cada máquina —
+    // um ULID ali tornaria o arquivo irrevisável num diff. Duas organizações
+    // podem ter o mesmo slug sem se enxergarem.
+    organizationId: { ...organizationId(), primary: true },
+    id: { type: 'varchar', length: 64, primary: true, name: 'id' },
+    label: requiredText('label', 160),
+    description: requiredText('description', 240),
+    basedOn: enumColumn('based_on', agentRoleBase, { default: 'implementer' }),
+    // Lista ordenada e curta de nomes de skill. JSON porque uma tabela de
+    // junção aqui só serviria para consultar o que ninguém consulta.
+    skills: jsonColumn('skills'),
+    systemPrompt: { type: 'text', name: 'system_prompt', nullable: true },
+    createdBy: createdBy(),
+    ...timestamps(),
+    version: version(),
+  },
+  indices: [
+    { name: 'idx_agent_role_definitions_org_updated_at', columns: ['organizationId', 'updatedAt'] },
   ],
 });
 

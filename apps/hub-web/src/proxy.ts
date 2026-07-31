@@ -4,8 +4,10 @@ import {
   API_REFRESH_COOKIE,
   SESSION_COOKIE,
   accessTokenExpired,
+  apiCookieHeader,
   decodeSession,
   encodeSession,
+  readApiCookie,
   sessionCookieOptions,
   type Session,
 } from '@/lib/auth/session-codec';
@@ -91,7 +93,7 @@ async function renew(session: Session, origin: string): Promise<Session | null> 
       headers: {
         'content-type': 'application/json',
         origin,
-        cookie: `${API_REFRESH_COOKIE}=${session.refreshToken}; ${API_CSRF_COOKIE}=${session.csrfToken}`,
+        cookie: apiCookieHeader(session),
         'x-csrf-token': session.csrfToken,
       },
       body: '{}',
@@ -127,8 +129,8 @@ async function renew(session: Session, origin: string): Promise<Session | null> 
     ...session,
     accessToken: tokens.accessToken,
     accessExpiresAt: new Date(Date.now() + tokens.expiresIn * 1_000).toISOString(),
-    refreshToken: rotated[API_REFRESH_COOKIE] ?? session.refreshToken,
-    csrfToken: rotated[API_CSRF_COOKIE] ?? session.csrfToken,
+    refreshToken: readApiCookie(rotated, API_REFRESH_COOKIE) ?? session.refreshToken,
+    csrfToken: readApiCookie(rotated, API_CSRF_COOKIE) ?? session.csrfToken,
   };
 }
 

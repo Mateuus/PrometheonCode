@@ -15,7 +15,9 @@ import {
   updateProfileRequestSchema,
 } from './auth.js';
 import {
+  assignPlanRequestSchema,
   changePlanRequestSchema,
+  planLimitsInputSchema,
   planLimitViolationSchema,
   planListSchema,
   planSchema,
@@ -800,12 +802,40 @@ describe('plans and subscription', () => {
           agentRunsThisMonth: 12,
           measuredAt: NOW,
         },
+        // Os tetos que valem de fato. Aqui são os do plano; quando a
+        // administração da plataforma combina uma exceção, é ela que aparece —
+        // e a tela precisa mostrar o que o servidor cobra, não o que o plano diz.
+        limits: freePlan.limits,
       }).success,
     ).toBe(true);
 
     expect(
       changePlanRequestSchema.safeParse({ planCode: 'team', version: 1 }).success,
     ).toBe(true);
+  });
+
+  it('reads the limits an administrator types, including "no limit"', () => {
+    // Campo ausente é "não mexa"; `null` é "sem teto". A diferença precisa
+    // sobreviver ao contrato: sem ela, um formulário que envia o objeto inteiro
+    // apagaria em silêncio o limite que ninguém tocou.
+    const parsed = planLimitsInputSchema.safeParse({ maxProjects: 5, maxMembers: null });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.maxProjects).toBe(5);
+    expect(parsed.data?.maxMembers).toBeNull();
+    expect('maxKnowledgeItems' in (parsed.data ?? {})).toBe(false);
+
+    expect(planLimitsInputSchema.safeParse({ maxProjects: -1 }).success).toBe(false);
+  });
+
+  it('assigns a plan without a version, and only skips the limit when asked', () => {
+    // A troca feita pelo cliente exige a versão lida (`changePlanRequestSchema`).
+    // A atribuição da plataforma não: quem administra decide, e a versão só
+    // faria a operação falhar porque alguém convidou um membro no mesmo minuto.
+    const parsed = assignPlanRequestSchema.safeParse({ planCode: 'studio' });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.allowOverLimit).toBe(false);
   });
 
   it('describes which limit was hit', () => {

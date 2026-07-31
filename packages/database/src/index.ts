@@ -13,4 +13,9 @@ export * from './permissions.js';
 export { MIGRATIONS } from './migrations/index.js';
 export { runMigrations, type MigrationResult } from './migrate.js';
 export { runSeed, seedDatabase, type SeedResult } from './seed.js';
+export {
+  grantPlatformAdmin,
+  runGrantPlatformAdmin,
+  type GrantPlatformAdminResult,
+} from './grant-platform-admin.js';
 export { readDatabaseEnv, readSecretsMasterKey, envValue, type DatabaseEnv } from './env.js';

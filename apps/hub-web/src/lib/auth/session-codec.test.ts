@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  API_CSRF_COOKIE,
+  API_REFRESH_COOKIE,
   accessTokenExpired,
+  apiCookieHeader,
+  apiCookieJar,
   decodeSession,
   encodeSession,
+  readApiCookie,
   sessionCookieOptions,
   type Session,
 } from './session-codec';
@@ -58,6 +63,36 @@ describe('renovação do access token', () => {
 
   it('data ilegível conta como vencida', () => {
     expect(accessTokenExpired({ ...session, accessExpiresAt: 'ontem' })).toBe(true);
+  });
+});
+
+describe('cookies da Hub API', () => {
+  it('lê a grafia com e sem o prefixo __Host-', () => {
+    // Em produção a API emite `__Host-prom_refresh`; em desenvolvimento, sem o
+    // prefixo. Quem guarda o valor é o servidor do Hub Web, então as duas
+    // grafias precisam ser reconhecidas — foi o que fazia a sessão morrer em
+    // quinze minutos no ar.
+    expect(readApiCookie({ [`__Host-${API_REFRESH_COOKIE}`]: 'r' }, API_REFRESH_COOKIE)).toBe('r');
+    expect(readApiCookie({ [API_REFRESH_COOKIE]: 'r' }, API_REFRESH_COOKIE)).toBe('r');
+    expect(readApiCookie({}, API_REFRESH_COOKIE)).toBeUndefined();
+  });
+
+  it('devolve o par nas duas grafias para a API achar a que espera', () => {
+    const jar = apiCookieJar({ refreshToken: 'r', csrfToken: 'c' });
+    expect(jar).toEqual({
+      [API_REFRESH_COOKIE]: 'r',
+      [`__Host-${API_REFRESH_COOKIE}`]: 'r',
+      [API_CSRF_COOKIE]: 'c',
+      [`__Host-${API_CSRF_COOKIE}`]: 'c',
+    });
+    expect(apiCookieHeader({ refreshToken: 'r', csrfToken: 'c' })).toContain(
+      `__Host-${API_REFRESH_COOKIE}=r`,
+    );
+  });
+
+  it('valor vazio não vira cookie', () => {
+    expect(apiCookieJar({ refreshToken: '', csrfToken: '' })).toEqual({});
+    expect(apiCookieHeader({ refreshToken: '', csrfToken: '' })).toBe('');
   });
 });
 
