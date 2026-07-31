@@ -2058,6 +2058,8 @@ export class PrometheonCore implements vscode.Disposable {
    * do motivo, em vez de ficar com um botão que não faz nada.
    */
   async startDictation(): Promise<void> {
+    this.deps.logger.info('Ditado: pedido de início recebido da interface.');
+
     if (!(await this.refreshSpeechStatus())) {
       this.deps.bus.emit('notification', {
         level: 'warning',
@@ -2102,11 +2104,19 @@ export class PrometheonCore implements vscode.Disposable {
   /** Reavalia disponibilidade e estado do motor. Devolve se dá para ditar. */
   private async refreshSpeechStatus(): Promise<boolean> {
     const available = await this.deps.speech.isAvailable();
+    // O motivo do próprio motor vem primeiro: ele sabe o que faltou. A frase
+    // genérica só vale quando não há motor nenhum registrado.
+    const reason = this.deps.speech.unavailableReason();
     this.speechStatus = {
       available,
       state: this.deps.speech.state,
-      ...(available ? {} : { detail: NO_SPEECH_ENGINE }),
+      ...(available ? {} : { detail: reason ?? NO_SPEECH_ENGINE }),
     };
+
+    if (!available) {
+      this.deps.logger.info(`Ditado indisponível: ${reason ?? NO_SPEECH_ENGINE}`);
+    }
+
     return available;
   }
 

@@ -447,5 +447,12 @@
   "Writes and changes code inside the allowed scope.": "Escribe y cambia código dentro del ámbito permitido.",
   "Yes": "Sí",
   "You": "Tú",
-  "Yours only. Never leaves this computer.": "Solo tuyo. Nunca sale de este ordenador."
+  "Yours only. Never leaves this computer.": "Solo tuyo. Nunca sale de este ordenador.",
+  "Dictation needs Python 3.9 or newer installed.": "El dictado necesita Python 3.9 o más nuevo instalado.",
+  "Preparing the dictation engine…": "Preparando el motor de dictado…",
+  "Creating the Python environment": "Creando el entorno de Python",
+  "Downloading the speech model dependencies": "Descargando las dependencias del modelo de voz",
+  "Could not prepare the dictation engine.": "No se pudo preparar el motor de dictado.",
+  "Dictation needs Python 3.9 or newer on this machine.": "El dictado necesita Python 3.9 o más nuevo en esta máquina.",
+  "The dictation engine could not be checked.": "No se pudo verificar el motor de dictado."
 }

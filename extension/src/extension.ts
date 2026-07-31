@@ -24,6 +24,8 @@ import { initializeLanguage } from './i18n';
 import { LiveHubClient } from './hub/LiveHubClient';
 import { Logger } from './logger';
 import { PermissionService } from './permissions/PermissionService';
+import { LocalWhisperProvider } from './speech/LocalWhisperProvider';
+import { SpeechEnvironment } from './speech/SpeechEnvironment';
 import { SpeechService } from './speech/SpeechService';
 import { ClaudeCodeAdapter } from './providers/ClaudeCodeAdapter';
 import { ProviderProfileService } from './providers/ProviderProfileService';
@@ -80,9 +82,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
   const workspace = new WorkspaceService(settings, localState);
   const permissions = new PermissionService(logger);
   const initializer = new WorkspaceInitializer(settings, permissions, logger);
-  // Nenhum motor de voz registrado ainda: a interface mostra o microfone
-  // desabilitado com o motivo, e o serviço aceita um provider quando existir.
+  // Ditado por voz, inteiramente local: um processo Python com faster-whisper,
+  // usando a GPU da máquina quando houver. O áudio não sai daqui.
+  //
+  // O ambiente Python é preparado no primeiro uso, não agora: são centenas de
+  // megabytes, e quem nunca clicar no microfone não deve pagar por eles.
   const speech = new SpeechService(logger);
+  const speechEnvironment = new SpeechEnvironment(context, logger);
+  const speechProvider = new LocalWhisperProvider(
+    {
+      resolvePython: () => speechEnvironment.ensure(),
+      canUse: () => speechEnvironment.canUse(),
+      scriptPath: vscode.Uri.joinPath(
+        context.extensionUri,
+        'media',
+        'speech',
+        'prometheon_speech.py',
+      ).fsPath,
+      language: () =>
+        vscode.workspace.getConfiguration('prometheon').get<string>('speech.language') ?? 'auto',
+    },
+    logger,
+  );
+  context.subscriptions.push(speechProvider);
+  void speech.register(speechProvider);
+  // O texto vai para a webview enquanto a pessoa fala, e não só no fim.
+  speech.onPartial((text) => bus.emit('speech.partial', text));
 
   // Contas locais dos CLIs. O Claude Code é o primeiro adaptador; os demais
   // entram no mesmo registro sem tocar no núcleo.
@@ -213,6 +238,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
     bus.on('composer.insert', (payload) => provider.post({ type: 'composer.insert', payload })),
     bus.on('speech.transcript', (text) =>
       provider.post({ type: 'speech.transcript', payload: { text } }),
+    ),
+    bus.on('speech.partial', (text) =>
+      provider.post({ type: 'speech.partial', payload: { text } }),
     ),
     bus.on('notification', (payload) => provider.post({ type: 'notification', payload })),
   );

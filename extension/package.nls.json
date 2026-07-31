@@ -14,6 +14,8 @@
   "command.openSettings": "Open Settings",
   "command.showDiagnostics": "Show Diagnostics",
   "configuration.language": "Interface language of the Prometheon panel. Menus contributed to VS Code always follow the editor.",
+  "configuration.speech.language": "Language spoken during dictation, as a two-letter code such as pt, en or es. Leave 'auto' to let the model detect it — accurate for long sentences, less so for short ones.",
+  "configuration.speech.pythonPath": "Python used to create the dictation environment. Leave empty to search the system for Python 3.9 or newer. The engine runs entirely on this machine and needs no network.",
   "configuration.language.auto": "Follow the display language of VS Code.",
   "configuration.language.en": "English, the source language of the interface.",
   "configuration.language.ptbr": "Brazilian Portuguese.",

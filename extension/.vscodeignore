@@ -20,3 +20,6 @@ media/prometheon-icon-512.png
 media/prometheon-icon-64.png
 media/prometheon-logo-horizontal.png
 media/*-source.svg
+
+# Cache do Python, gerado ao rodar o motor de ditado a partir de media/speech.
+__pycache__/

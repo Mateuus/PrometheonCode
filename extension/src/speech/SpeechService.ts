@@ -20,6 +20,8 @@ import type { SpeechProvider, SpeechState } from './types';
 export class SpeechService {
   private provider: SpeechProvider | null = null;
   private currentState: SpeechState = 'idle';
+  private partialSubscription: { dispose(): void } | null = null;
+  private partialListener: ((text: string) => void) | null = null;
 
   constructor(private readonly logger: Logger) {}
 
@@ -28,14 +30,54 @@ export class SpeechService {
     if (this.currentState !== 'idle') {
       await this.cancel();
     }
+    this.partialSubscription?.dispose();
+    this.partialSubscription = null;
     this.provider = provider;
+    this.subscribeToPartials();
     this.logger.info(
       provider === null ? 'Ditado sem motor registrado.' : `Motor de ditado: ${provider.id}.`,
     );
   }
 
+  /**
+   * Escuta o texto provisório, revisado enquanto a pessoa fala.
+   *
+   * Só chega alguma coisa quando o motor registrado sabe produzi-lo — o
+   * `onPartial` é opcional no contrato. Com um motor que só transcreve no fim,
+   * este ouvinte simplesmente nunca é chamado, e a interface se vira com o
+   * texto que vem do `stop`.
+   */
+  onPartial(listener: (text: string) => void): void {
+    this.partialListener = listener;
+    this.subscribeToPartials();
+  }
+
+  private subscribeToPartials(): void {
+    if (this.partialSubscription !== null || this.provider === null) {
+      return;
+    }
+
+    const listener = this.partialListener;
+    if (listener === null || this.provider.onPartial === undefined) {
+      return;
+    }
+
+    this.partialSubscription = this.provider.onPartial(listener);
+  }
+
   get state(): SpeechState {
     return this.currentState;
+  }
+
+  /**
+   * Motivo concreto de o ditado não estar disponível.
+   *
+   * A interface mostrava sempre "nenhum motor configurado", que descreve o
+   * estado e esconde a causa. Com um motor registrado que apenas não consegue
+   * subir, essa frase manda a pessoa procurar uma configuração que já existe.
+   */
+  unavailableReason(): string | undefined {
+    return this.provider?.unavailableReason?.();
   }
 
   async isAvailable(): Promise<boolean> {
