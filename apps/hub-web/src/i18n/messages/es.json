@@ -440,5 +440,16 @@
   "The current usage exceeds this plan. Adjust the limits or assign it above the limit.": "El consumo actual supera este plan. Ajusta los límites o asígnalo por encima del límite.",
   "Give the plan a name.": "Ponle un nombre al plan.",
   "A plan with this code already exists.": "Ya existe un plan con este código.",
-  "Type the price with up to two decimals.": "Escribe el precio con hasta dos decimales."
+  "Type the price with up to two decimals.": "Escribe el precio con hasta dos decimales.",
+  "Dictate message": "Dictar mensaje",
+  "Stop dictating": "Dejar de dictar",
+  "Opening the microphone…": "Abriendo el micrófono…",
+  "Listening — speak and the text appears here.": "Escuchando — habla y el texto aparece aquí.",
+  "Finishing the last sentence…": "Terminando la última frase…",
+  "Microphone access was denied. Allow it in your browser settings to dictate.": "Se denegó el acceso al micrófono. Permítelo en la configuración del navegador para dictar.",
+  "No microphone was found on this device.": "No se encontró ningún micrófono en este dispositivo.",
+  "This browser cannot capture audio for dictation.": "Este navegador no puede capturar audio para el dictado.",
+  "Could not start dictation. Try again.": "No se pudo iniciar el dictado. Inténtalo de nuevo.",
+  "The dictation connection dropped.": "Se cortó la conexión del dictado.",
+  "The transcription service is unavailable right now.": "El servicio de transcripción no está disponible ahora."
 }

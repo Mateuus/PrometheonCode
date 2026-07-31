@@ -305,6 +305,21 @@ export const CATALOG = {
   'chat.noCoreOnline': 'No authorized Core is online. Messages are stored and wait.',
   'chat.sentBy': 'Sent by {author}',
 
+  // -------------------------------------------------------- ditado por voz
+  'chat.dictation.start': 'Dictate message',
+  'chat.dictation.stop': 'Stop dictating',
+  'chat.dictation.starting': 'Opening the microphone…',
+  'chat.dictation.listening': 'Listening — speak and the text appears here.',
+  'chat.dictation.stopping': 'Finishing the last sentence…',
+  'chat.dictation.error.permissionDenied':
+    'Microphone access was denied. Allow it in your browser settings to dictate.',
+  'chat.dictation.error.noMicrophone': 'No microphone was found on this device.',
+  'chat.dictation.error.unsupported': 'This browser cannot capture audio for dictation.',
+  'chat.dictation.error.ticketFailed': 'Could not start dictation. Try again.',
+  'chat.dictation.error.connectionFailed': 'The dictation connection dropped.',
+  'chat.dictation.error.serviceUnavailable':
+    'The transcription service is unavailable right now.',
+
   // --------------------------------------------------------------- tarefas
   'tasks.title': 'Tasks',
   'tasks.empty': 'No task in this project.',

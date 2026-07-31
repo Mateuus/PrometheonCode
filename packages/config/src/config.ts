@@ -65,6 +65,20 @@ export interface GitHubOAuthConfig {
   readonly scopes: string;
 }
 
+/**
+ * Ditado por voz.
+ *
+ * `enabled` é derivado como no GitHub acima: ligar a funcionalidade sem dizer
+ * onde o serviço está não descreve nada que possa funcionar, e resolver isso
+ * aqui evita que cada ponto do código repita a mesma dupla verificação.
+ */
+export interface TranscriptionConfig {
+  readonly enabled: boolean;
+  readonly url: string | undefined;
+  readonly apiKey: string | undefined;
+  readonly language: string;
+}
+
 export interface ConfigMeta {
   /** Arquivos `.env` lidos, em ordem de precedência crescente. */
   readonly envFiles: readonly string[];
@@ -89,6 +103,7 @@ export interface AppConfig {
   readonly secrets: SecretsConfig;
   readonly smtp: SmtpConfig;
   readonly github: GitHubOAuthConfig;
+  readonly transcription: TranscriptionConfig;
   readonly meta: ConfigMeta;
 }
 
@@ -167,6 +182,14 @@ export function buildConfig(
       clientSecret: parsed.GITHUB_OAUTH_CLIENT_SECRET,
       callbackUrl: parsed.GITHUB_OAUTH_CALLBACK_URL,
       scopes: parsed.GITHUB_OAUTH_SCOPES,
+    },
+    transcription: {
+      // Ligado sem endereço não descreve nada: o botão apareceria na tela e a
+      // conexão morreria no primeiro clique.
+      enabled: parsed.TRANSCRIPTION_ENABLED && parsed.TRANSCRIPTION_URL !== undefined,
+      url: parsed.TRANSCRIPTION_URL,
+      apiKey: parsed.TRANSCRIPTION_API_KEY,
+      language: parsed.TRANSCRIPTION_LANGUAGE,
     },
     meta,
   } satisfies AppConfig);
