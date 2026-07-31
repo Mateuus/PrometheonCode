@@ -63,6 +63,7 @@ import { createRealtimeModule } from './modules/realtime/module.js';
 import { realtimeRoutes } from './modules/realtime/routes.js';
 import { organizationRoutes } from './modules/organizations/routes.js';
 import { OrganizationService } from './modules/organizations/service.js';
+import { transcriptionRoutes } from './modules/transcription/routes.js';
 
 import { conversationRoutes } from './modules/conversations/routes.js';
 import { ConversationService } from './modules/conversations/service.js';
@@ -253,6 +254,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<BuiltApp>
       });
       await scope.register(taskRoutes, { service: taskService });
       await scope.register(realtimeRoutes, { module: realtime });
+      await scope.register(transcriptionRoutes);
       await scope.register(deviceRoutes, { service: deviceService });
     },
     { prefix: API_PREFIX },

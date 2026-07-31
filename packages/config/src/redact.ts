@@ -59,6 +59,17 @@ export interface RedactedConfigShape {
     readonly callbackUrl: string | undefined;
     readonly scopes: string;
   };
+  readonly transcription: {
+    readonly enabled: boolean;
+    /**
+     * O endereço é interno e diagnóstico — saber para onde a API aponta é o
+     * primeiro passo quando o ditado para de funcionar. A chave não: dela só
+     * se registra a presença.
+     */
+    readonly url: string | undefined;
+    readonly apiKey: RedactedValue;
+    readonly language: string;
+  };
   readonly meta: ConfigMeta;
 }
 
@@ -137,6 +148,12 @@ export function redactedConfig(config: AppConfig): RedactedConfigShape {
       clientSecret: presence(config.github.clientSecret),
       callbackUrl: config.github.callbackUrl,
       scopes: config.github.scopes,
+    },
+    transcription: {
+      enabled: config.transcription.enabled,
+      url: config.transcription.url,
+      apiKey: presence(config.transcription.apiKey),
+      language: config.transcription.language,
     },
     meta: config.meta,
   } satisfies RedactedConfigShape);
