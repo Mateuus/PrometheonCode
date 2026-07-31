@@ -285,7 +285,15 @@ escreva**: é concedida com acesso ao banco, no servidor.
 
 ```bash
 docker compose -f docker-compose.prod.yml exec api \
-  node dist/packages/database/src/grant-platform-admin.js voce@prometheoncode.xyz
+  node packages/database/dist/grant-platform-admin.js voce@prometheoncode.xyz
+```
+
+Com a API fora do ar, o mesmo vale pelo serviço das migrations, que fala com o
+banco pela rede interna:
+
+```bash
+docker compose -f docker-compose.prod.yml run --rm migrate \
+  node packages/database/dist/grant-platform-admin.js voce@prometheoncode.xyz
 ```
 
 Em desenvolvimento, direto do repositório:
