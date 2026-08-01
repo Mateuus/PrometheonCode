@@ -1,0 +1,44 @@
+/* Tema do preview: os valores que o VS Code (Dark Modern) injetaria como
+   variáveis na webview. Só existe no navegador — dentro do editor quem fornece
+   isto é o próprio tema do usuário. Cobre todas as `--vscode-*` que o
+   styles.css consome (lista via grep; ao usar uma nova, acrescente aqui). */
+:root {
+  --vscode-font-family: 'Segoe WPC', 'Segoe UI', system-ui, sans-serif;
+  --vscode-font-size: 13px;
+  --vscode-editor-font-family: Consolas, 'Courier New', monospace;
+
+  --vscode-foreground: #cccccc;
+  --vscode-descriptionForeground: #9d9d9d;
+  --vscode-errorForeground: #f85149;
+  --vscode-icon-foreground: #cccccc;
+
+  --vscode-editor-background: #1f1f1f;
+  --vscode-editorWidget-background: #202020;
+  --vscode-widget-shadow: rgba(0, 0, 0, 0.36);
+  --vscode-panel-border: #2b2b2b;
+
+  --vscode-input-background: #313131;
+  --vscode-input-foreground: #cccccc;
+  --vscode-input-border: #3c3c3c;
+  --vscode-input-placeholderForeground: #989898;
+  --vscode-inputValidation-errorBackground: #5a1d1d;
+  --vscode-inputValidation-warningBorder: #b89500;
+
+  --vscode-button-background: #0078d4;
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-border: transparent;
+  --vscode-button-secondaryBackground: #313131;
+  --vscode-button-secondaryForeground: #cccccc;
+  --vscode-button-secondaryHoverBackground: #3c3c3c;
+
+  --vscode-list-hoverBackground: #2a2d2e;
+  --vscode-list-activeSelectionBackground: #04395e;
+  --vscode-toolbar-hoverBackground: #5a5d5e50;
+  --vscode-textBlockQuote-background: #2b2b2b;
+}
+
+/* No editor o body é transparente sobre o fundo do painel; aqui o fundo é
+   nosso. */
+html {
+  background: var(--vscode-editor-background);
+}

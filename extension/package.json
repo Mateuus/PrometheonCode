@@ -266,7 +266,8 @@
     "compile-tests": "tsc -p . --outDir out",
     "lint": "eslint src",
     "test": "npm run compile-tests && npm run compile && vscode-test",
-    "vsix": "node -e \"require('node:fs').mkdirSync('../dist',{recursive:true})\" && vsce package --no-dependencies --out ../dist/"
+    "vsix": "node -e \"require('node:fs').mkdirSync('../dist',{recursive:true})\" && vsce package --no-dependencies --out ../dist/",
+    "preview": "node preview/server.mjs"
   },
   "dependencies": {
     "yaml": "^2.8.1"
