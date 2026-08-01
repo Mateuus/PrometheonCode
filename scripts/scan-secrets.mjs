@@ -118,7 +118,12 @@ const PLACEHOLDERS = [
 ];
 
 /** Arquivos de teste e fixtures, onde valor inventado é esperado. */
-const TEST_PATH = /(^|\/)(?:src\/)?(?:test|tests|__tests__|fixtures)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/;
+// As duas alternativas são deliberadamente diferentes: a primeira procura um
+// diretório de teste em qualquer ponto do caminho, a segunda exige o sufixo no
+// fim do nome. Os parênteses deixam essa intenção explícita — sem eles, o `$`
+// parece valer para a expressão toda.
+const TEST_PATH =
+  /(?:(?:^|\/)(?:src\/)?(?:test|tests|__tests__|fixtures)\/)|(?:\.(?:test|spec)\.[cm]?[jt]sx?$)/;
 
 const EXEMPT_PATHS = [
   /(^|\/)\.env\.example$/,
