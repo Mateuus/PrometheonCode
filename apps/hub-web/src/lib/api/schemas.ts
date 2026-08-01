@@ -5,7 +5,10 @@ import {
   changePasswordResponseSchema,
   conversationSchema,
   cursorPageSchema,
+  deviceDecisionRequestSchema,
   deviceSessionSchema,
+  deviceVerificationRequestSchema,
+  deviceVerificationSchema,
   knowledgeItemSummarySchema,
   messageSchema,
   meResponseSchema,
@@ -107,6 +110,26 @@ export const deviceSessionListSchema = z.object({ items: z.array(deviceSessionSc
 
 /** `DELETE /v1/devices/:id`. */
 export const revokeDeviceResultSchema = z.object({ revoked: z.boolean() });
+
+// --------------------------------------------------------------- device flow
+
+/**
+ * Passo 3 do device flow (`Docs/09`): a página `/device` mostra o pedido e
+ * grava a decisão. Os schemas do pedido vêm prontos do contrato; o da resposta
+ * da decisão é declarado aqui porque a API o define inline na rota
+ * (`deviceDecisionEnvelope` em `apps/hub-api/src/modules/auth/schemas.ts`).
+ */
+export { deviceDecisionRequestSchema, deviceVerificationRequestSchema, deviceVerificationSchema };
+
+export type DeviceVerification = z.infer<typeof deviceVerificationSchema>;
+
+/**
+ * `POST /v1/auth/device/decision`. O `status` é o estado que **ficou**, não um
+ * eco da decisão enviada: repetir a chamada devolve o que já estava gravado.
+ */
+export const deviceDecisionResultSchema = z.object({
+  status: z.enum(['approved', 'denied']),
+});
 
 // ------------------------------------------------------------------ domínio
 

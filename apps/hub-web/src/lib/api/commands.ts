@@ -12,6 +12,7 @@ import {
   adminOrganizationResultSchema,
   changePasswordResponseSchema,
   conversationSchema,
+  deviceDecisionResultSchema,
   messageSchema,
   organizationDeletedSchema,
   organizationUpdatedSchema,
@@ -124,6 +125,30 @@ export async function revokeAccountDevice(
 ): Promise<ApiResult<z.infer<typeof revokeDeviceResultSchema>>> {
   return send(`/v1/devices/${encodeURIComponent(deviceId)}`, revokeDeviceResultSchema, {
     method: 'DELETE',
+  });
+}
+
+/**
+ * Aprova ou nega o pedido de um dispositivo
+ * (`POST /v1/auth/device/decision`, passo 3b do device flow, `Docs/09`).
+ *
+ * A decisão fixa a organização: a credencial que a extensão vai recolher só
+ * alcança o tenant escolhido aqui, e não troca depois — a API confere na hora
+ * se quem decide é membro ativo dele (`ORGANIZATION_ACCESS_DENIED` quando não
+ * é, num 401 que **não** significa sessão vencida).
+ *
+ * Sem `idempotencyKey`: a rota já é naturalmente idempotente — repetir a
+ * chamada devolve o `status` que ficou gravado, seja ele qual for. É por isso
+ * que a resposta importa mais que a decisão enviada.
+ */
+export async function decideDevice(input: {
+  userCode: string;
+  decision: 'approve' | 'deny';
+  organizationId: string;
+}): Promise<ApiResult<z.infer<typeof deviceDecisionResultSchema>>> {
+  return send('/v1/auth/device/decision', deviceDecisionResultSchema, {
+    method: 'POST',
+    body: input,
   });
 }
 
