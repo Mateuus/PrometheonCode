@@ -187,11 +187,17 @@ export type WebviewToExtensionMessage =
     }
   | { readonly type: 'agentRoles.remove'; readonly payload: { readonly id: string } }
   | { readonly type: 'skills.refresh' }
+  /** Cria a pasta e o SKILL.md de template no escopo pedido e abre no editor. */
+  | {
+      readonly type: 'skills.create';
+      readonly payload: { readonly name: string; readonly scope: 'project' | 'machine' };
+    }
   /** Abre um `SKILL.md` no editor. A webview manda o nome; o Core resolve o caminho. */
   | { readonly type: 'skills.open'; readonly payload: { readonly name: string } }
   | { readonly type: 'mcp.refresh' }
   /** Escolher e mesclar outro `.mcp.json` — a leitura acontece na extensão. */
   | { readonly type: 'mcp.import' }
+  | { readonly type: 'mcp.probe' }
   | { readonly type: 'mcp.save'; readonly payload: { readonly server: McpServerDraft } }
   | { readonly type: 'mcp.remove'; readonly payload: { readonly name: string } }
   | {
@@ -219,8 +225,10 @@ export type WebviewToExtensionMessage =
   | { readonly type: 'agents.stop'; readonly payload: { readonly sessionId: string } }
   /** Grava um ou mais campos do grafo; só o que veio no patch é tocado. */
   | { readonly type: 'graph.update'; readonly payload: { readonly patch: GraphPatch } }
+  | { readonly type: 'workspace.update'; readonly payload: { readonly patch: WorkspacePatch } }
   /** Dispara o comando de rebuild num terminal do editor. */
   | { readonly type: 'graph.rebuild' }
+  | { readonly type: 'graph.createScript' }
   | { readonly type: 'git.update'; readonly payload: { readonly patch: GitPatch } }
   /** Escreve os hooks e aponta `core.hooksPath` para eles nesta máquina. */
   | { readonly type: 'git.installHooks' }
@@ -237,6 +245,19 @@ export interface GraphPatch {
   readonly rebuildOn?: GraphRebuildTrigger;
   readonly gate?: string;
   readonly blockOnHygieneFailure?: boolean;
+}
+
+/**
+ * Campos do `prometheon.yaml` que a webview pode gravar pelo diálogo do
+ * workspace. Bypass fica de fora por desenho: autonomia persistida no projeto
+ * é só `manual` ou `auto`.
+ */
+export interface WorkspacePatch {
+  readonly defaultType?: ChatType;
+  readonly workMode?: WorkMode;
+  readonly autonomy?: 'manual' | 'auto';
+  readonly mainAgent?: string;
+  readonly maxWorkers?: number;
 }
 
 /** Campos da política de commit que a webview pode gravar. */
@@ -695,6 +716,58 @@ export const MAX_SCOPE_LENGTH = 40;
  * daqui precisa ser exatamente o que o usuário digitou — nada de "corrigir" um
  * valor estranho e executar a correção.
  */
+function parseWorkspacePatch(raw: unknown): WorkspacePatch | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const patch: {
+    defaultType?: ChatType;
+    workMode?: WorkMode;
+    autonomy?: 'manual' | 'auto';
+    mainAgent?: string;
+    maxWorkers?: number;
+  } = {};
+
+  if (raw['defaultType'] !== undefined) {
+    const value = CHAT_TYPES.find((entry) => entry === raw['defaultType']);
+    if (value === undefined) {
+      return null;
+    }
+    patch.defaultType = value;
+  }
+  if (raw['workMode'] !== undefined) {
+    const value = WORK_MODES.find((entry) => entry === raw['workMode']);
+    if (value === undefined) {
+      return null;
+    }
+    patch.workMode = value;
+  }
+  if (raw['autonomy'] !== undefined) {
+    // Bypass nunca entra em configuração persistida — a lista fechada garante.
+    const value = (['manual', 'auto'] as const).find((entry) => entry === raw['autonomy']);
+    if (value === undefined) {
+      return null;
+    }
+    patch.autonomy = value;
+  }
+  if (raw['mainAgent'] !== undefined) {
+    const value = nonEmptyString(raw['mainAgent'], 96);
+    if (value === null) {
+      return null;
+    }
+    patch.mainAgent = value;
+  }
+  if (raw['maxWorkers'] !== undefined) {
+    const value = raw['maxWorkers'];
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 16) {
+      return null;
+    }
+    patch.maxWorkers = value;
+  }
+
+  return Object.keys(patch).length === 0 ? null : patch;
+}
+
 function parseGraphPatch(raw: unknown): GraphPatch | null {
   if (!isRecord(raw)) {
     return null;
@@ -822,10 +895,12 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
     case 'skills.refresh':
     case 'mcp.refresh':
     case 'mcp.import':
+    case 'mcp.probe':
     case 'settings.openEditor':
     case 'context.addFile':
     case 'context.compact':
     case 'graph.rebuild':
+    case 'graph.createScript':
     case 'git.installHooks':
     case 'git.uninstallHooks':
     case 'hub.signOut':
@@ -835,6 +910,11 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
     case 'graph.update': {
       const patch = payload === undefined ? null : parseGraphPatch(payload['patch']);
       return patch === null ? null : { type: 'graph.update', payload: { patch } };
+    }
+
+    case 'workspace.update': {
+      const patch = payload === undefined ? null : parseWorkspacePatch(payload['patch']);
+      return patch === null ? null : { type: 'workspace.update', payload: { patch } };
     }
 
     case 'git.update': {
@@ -944,6 +1024,16 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
       // leitura arbitrária de disco; aqui o Core resolve pelo catálogo.
       const name = payload === undefined ? null : nonEmptyString(payload['name'], 64);
       return name === null ? null : { type: 'skills.open', payload: { name } };
+    }
+
+    case 'skills.create': {
+      // Mesmo princípio do open: nome curto e escopo de uma lista fechada —
+      // quem transforma isso em caminho de disco é o Core, nunca a webview.
+      const name = payload === undefined ? null : nonEmptyString(payload['name'], 64);
+      const scope = payload === undefined ? null : oneOf(payload['scope'], ['project', 'machine'] as const);
+      return name === null || scope === null
+        ? null
+        : { type: 'skills.create', payload: { name, scope } };
     }
 
     case 'mcp.save': {

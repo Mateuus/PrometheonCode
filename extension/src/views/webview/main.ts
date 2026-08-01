@@ -69,6 +69,7 @@ import {
   type McpServerDraft,
   type McpServerSummary,
   type McpTransport,
+  type WorkMode,
 } from '../../core/types';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -481,6 +482,38 @@ const menus = {
     (agentId) => post({ type: 'settings.selectMainAgent', payload: { agentId } }),
   ),
 };
+
+/**
+ * Opções de agente principal: os perfis criados vêm primeiro — são eles que
+ * carregam papel, conta, modelo e prompt — e os adaptadores crus fecham a
+ * lista, para quem ainda não montou perfil nenhum.
+ */
+function mainAgentOptions(snapshot: PrometheonViewState): readonly MenuOption[] {
+  const profiles = snapshot.agentProfiles
+    .filter((summary) => summary.profile.enabled)
+    // Só quem lidera entra: orquestradores — inclusive funções nomeadas
+    // baseadas em orquestrador. Os outros papéis recebem tarefa, não a dão.
+    .filter(
+      (summary) => (summary.customRole?.basedOn ?? summary.profile.role) === 'orchestrator',
+    )
+    .map((summary) => ({
+      value: summary.profile.id,
+      label: summary.profile.name,
+      description: `${summary.customRole?.label ?? s(AGENT_ROLE_LABELS[summary.profile.role])} · ${
+        summary.accountName ?? s('unknown provider')
+      }`,
+      icon: ROLE_ICONS[summary.profile.role],
+    }));
+  const engines = snapshot.agents.map((agent) => ({
+    value: agent.id,
+    label: agent.displayName,
+    description: agent.available
+      ? sf('Available · {0}', agent.transport)
+      : sf('Unavailable · {0}', agent.transport),
+    icon: 'agent',
+  }));
+  return [...profiles, ...engines];
+}
 
 function closeAllMenus(except?: OptionMenu): void {
   for (const menu of openMenus) {
@@ -1482,12 +1515,18 @@ const expandedAgents = new Set<string>();
 /** O gerenciador de papéis é um diálogo; aberto, sobrevive aos redesenhos. */
 let rolesDialogOpen = false;
 
+/** Servidores MCP com o card expandido, pelo nome. */
+const expandedMcp = new Set<string>();
+
 /** Lista de agentes agrupada por papel — um modo de ver, guardado à parte. */
 let agentsGroupByRole = false;
 
 /** Dono do seletor de skills aberto: o rascunho de agente ou o de papel. */
 let skillsPickerTarget: 'agent' | 'role' | null = null;
 let skillsPickerFilter = '';
+
+/** O diálogo de configurações do workspace está aberto. */
+let workspaceDialogOpen = false;
 let agentDraft: AgentDraft | null = null;
 /** Papel em edição. Abre por cima do formulário de agente, que fica guardado. */
 let roleDraft: RoleDraft | null = null;
@@ -1545,10 +1584,14 @@ function closeSettings(): void {
   roleDraft = null;
   agentDraft = null;
   skillsPickerTarget = null;
+  workspaceDialogOpen = false;
+  mcpDraft = null;
   document.getElementById('account-dialog')?.remove();
   document.getElementById('roles-dialog')?.remove();
   document.getElementById('agent-dialog')?.remove();
   document.getElementById('skills-dialog')?.remove();
+  document.getElementById('workspace-dialog')?.remove();
+  document.getElementById('mcp-dialog')?.remove();
   dom.settingsModal.hidden = true;
   dom.openSettingsModal.setAttribute('aria-expanded', 'false');
   for (const menu of sectionMenus) {
@@ -1594,6 +1637,8 @@ function renderSettings(): void {
   renderAgentDialog();
   renderRolesDialog();
   renderSkillsDialog();
+  renderWorkspaceDialog();
+  renderMcpDialog();
 
   if (focusedField !== null && focusedField.field !== null) {
     // No documento, não só no pane: os campos podem morar num diálogo
@@ -2900,16 +2945,94 @@ function groupAgentsByRole(
  * cartão abre o arquivo no editor em vez de oferecer um formulário: o arquivo é
  * a fonte, e um formulário por cima dele criaria duas.
  */
+/** Skills com o card aberto — mesma memória de expansão de contas e agentes. */
+const expandedSkills = new Set<string>();
+
+/**
+ * Diálogo de skill nova: nome e onde ela vive. Criar abre o SKILL.md no
+ * editor — o arquivo é a skill; o diálogo só escolhe o lugar do arquivo.
+ */
+function newSkillDialog(): void {
+  const card = openUiDialog(s('New skill'));
+  let scope: 'project' | 'machine' = 'project';
+  let name = '';
+
+  const submit = (): void => {
+    const trimmed = name.trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(trimmed)) {
+      showNotification(
+        s('Skill names use lowercase letters, numbers and dashes — it is also the folder name.'),
+        'warning',
+      );
+      return;
+    }
+    closeUiDialog();
+    post({ type: 'skills.create', payload: { name: trimmed, scope } });
+  };
+
+  const input = textInput({
+    name: 'skill-name',
+    value: '',
+    placeholder: 'unreal-build-check',
+    maxLength: 64,
+    onInput: (value) => {
+      name = value;
+    },
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      submit();
+    }
+  });
+
+  const machineOnly = document.createElement('label');
+  machineOnly.className = 'field field-inline';
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.addEventListener('change', () => {
+    scope = checkbox.checked ? 'machine' : 'project';
+  });
+  const checkboxLabel = document.createElement('span');
+  checkboxLabel.className = 'field-label';
+  checkboxLabel.textContent = s('Only on this machine');
+  machineOnly.append(checkbox, checkboxLabel);
+
+  const body = document.createElement('div');
+  body.className = 'confirm-body';
+  body.append(
+    field(
+      s('Name'),
+      input,
+      s('Lowercase, numbers and dashes. Project skills live in .prometheon/skills/ and travel with the repository.'),
+    ),
+    machineOnly,
+  );
+  card.append(
+    body,
+    dialogActions(
+      actionButton(s('Create skill'), 'primary', submit),
+      actionButton(s('Cancel'), 'ghost', () => closeUiDialog()),
+    ),
+  );
+  input.focus();
+}
+
 function renderSkillsSection(): readonly Node[] {
   const catalog = state?.skills ?? { skills: [], problems: [], roots: [] };
-  const blocks: Node[] = [
+
+  const headingRow = document.createElement('div');
+  headingRow.className = 'settings-heading-row';
+  headingRow.append(
     sectionHeading(
       s('Skills'),
       s(
         'A skill is a procedure an agent follows. Only the name and the trigger line stay in the prompt; the body is read when the agent needs it.',
       ),
     ),
-  ];
+    actionButton(s('New skill'), 'primary', newSkillDialog),
+  );
+  const blocks: Node[] = [headingRow];
 
   if (catalog.roots.length > 0) {
     blocks.push(emptyNote(sf('Read from: {0}', catalog.roots.join(' · '))));
@@ -2957,21 +3080,41 @@ function renderSkillsSection(): readonly Node[] {
 }
 
 function renderSkill(skill: SkillSummary): HTMLElement {
-  const card = document.createElement('section');
+  // Colapsável como contas e agentes: fechada é uma linha — nome, gatilho e
+  // escopo — e um catálogo de trinta skills cabe na tela sem rolagem infinita.
+  const card = document.createElement('details');
   card.className = `account skill-card${skill.supported ? '' : ' disabled'}`;
+  card.open = expandedSkills.has(skill.path);
+  card.addEventListener('toggle', () => {
+    if (card.open) {
+      expandedSkills.add(skill.path);
+    } else {
+      expandedSkills.delete(skill.path);
+    }
+  });
 
-  const header = document.createElement('header');
+  const header = document.createElement('summary');
+  header.className = 'account-summary';
+
+  const text = document.createElement('div');
+  text.className = 'account-summary-text';
   const name = document.createElement('span');
   name.className = 'account-name';
   name.textContent = skill.name;
+  const trigger = document.createElement('span');
+  trigger.className = 'account-subtitle';
+  trigger.textContent = skill.description;
+  trigger.title = skill.description;
+  text.append(name, trigger);
 
   const scope = document.createElement('span');
   scope.className = 'account-state';
   scope.textContent = s(SKILL_SCOPE_LABELS[skill.scope]);
 
-  header.append(name, scope);
+  header.append(text, scope);
   card.append(header);
 
+  // O gatilho completo mora no corpo; o resumo mostra só o que cabe na linha.
   const description = document.createElement('p');
   description.className = 'agent-chain';
   description.textContent = skill.description;
@@ -3138,7 +3281,10 @@ function renderAgentForm(
   form.className = 'settings-form';
 
   const update = (patch: Partial<AgentDraft>, redraw = false): void => {
-    agentDraft = { ...draft, ...patch };
+    // Sobre o estado ATUAL, nunca sobre o snapshot deste render: cada campo
+    // guarda o próprio closure, e espalhar o snapshot faria a edição de um
+    // campo apagar o que foi digitado nos outros desde o último redesenho.
+    agentDraft = { ...(agentDraft ?? draft), ...patch };
     if (redraw) {
       renderSettings();
     }
@@ -3681,7 +3827,8 @@ function renderRoleForm(draft: RoleDraft): HTMLElement {
   );
 
   const update = (patch: Partial<RoleDraft>, redraw = false): void => {
-    roleDraft = { ...draft, ...patch };
+    // Mesmo cuidado do formulário de agente: o estado atual, não o snapshot.
+    roleDraft = { ...(roleDraft ?? draft), ...patch };
     if (redraw) {
       renderSettings();
     }
@@ -3874,41 +4021,246 @@ function submitAgentDraft(): void {
 
 function renderWorkspaceSection(): readonly Node[] {
   const workspace = state?.workspace;
-  const blocks: Node[] = [
+  const configured = workspace?.configured === true;
+
+  const headingRow = document.createElement('div');
+  headingRow.className = 'settings-heading-row';
+  headingRow.append(
     sectionHeading(
       s('Workspace'),
       s(
         'The shared Prometheon workspace lives in .prometheon/ inside the open folder. Local Chat works without it.',
       ),
     ),
-  ];
-
-  if (workspace !== undefined) {
-    blocks.push(
-      definitionList([
-        [s('Folder'), workspace.folderName ?? s('None open')],
-        [s('Configured'), workspace.configured ? s('Yes') : s('No')],
-        [s('Git repository'), workspace.hasGit ? s('Detected') : s('Not detected')],
-        [s('External folder'), workspace.externalFolder ?? s('None')],
-        [s('Setup skipped'), workspace.skipped ? s('Yes') : s('No')],
-      ]),
+  );
+  if (configured) {
+    headingRow.append(
+      actionButton(s('Workspace settings'), 'primary', () => {
+        workspaceDialogOpen = true;
+        renderSettings();
+      }),
     );
   }
+  const blocks: Node[] = [headingRow];
 
-  blocks.push(
-    actionRow(
+  // Sem workspace, a seção é o convite: o que ele dá, o estado da pasta, e a
+  // inicialização como o único destaque — no mesmo desenho do vazio de agentes.
+  if (!configured) {
+    const hero = document.createElement('div');
+    hero.className = 'settings-hero';
+
+    const tile = document.createElement('span');
+    tile.className = 'settings-hero-icon';
+    const glyph = icon('folder');
+    if (glyph !== null) {
+      tile.append(glyph);
+    }
+
+    const title = document.createElement('h4');
+    title.className = 'settings-hero-title';
+    title.textContent = s('Set up the shared workspace');
+
+    const text = document.createElement('p');
+    text.className = 'settings-hero-body';
+    text.textContent = s(
+      'Skills, roles and the commit policy live in .prometheon/ and reach the whole team through Git.',
+    );
+
+    const chips = document.createElement('div');
+    chips.className = 'settings-hero-chain';
+    const folderChip = document.createElement('span');
+    folderChip.className = 'settings-hero-chip';
+    const folderGlyph = icon('folder');
+    if (folderGlyph !== null) {
+      folderChip.append(folderGlyph);
+    }
+    const folderLabel = document.createElement('span');
+    folderLabel.textContent = workspace?.folderName ?? s('None open');
+    folderChip.append(folderLabel);
+    const gitChip = document.createElement('span');
+    gitChip.className = `settings-hero-chip ${workspace?.hasGit === true ? 'is-ok' : 'is-warn'}`;
+    const gitGlyph = icon('git');
+    if (gitGlyph !== null) {
+      gitChip.append(gitGlyph);
+    }
+    const gitLabel = document.createElement('span');
+    gitLabel.textContent =
+      workspace?.hasGit === true ? s('Git repository detected') : s('No Git repository');
+    gitChip.append(gitLabel);
+    chips.append(folderChip, gitChip);
+
+    const actions = document.createElement('div');
+    actions.className = 'settings-hero-actions';
+    actions.append(
       actionButton(s('Initialize in current workspace'), 'primary', () =>
         post({ type: 'workspace.initialize', payload: { choice: 'current' } }),
       ),
       actionButton(s('Choose Prometheon workspace folder'), 'ghost', () =>
         post({ type: 'workspace.initialize', payload: { choice: 'external' } }),
       ),
-      actionButton(s('Continue without shared workspace'), 'link', () =>
-        post({ type: 'workspace.initialize', payload: { choice: 'skip' } }),
+    );
+    const skip = actionButton(s('Continue without shared workspace'), 'link', () =>
+      post({ type: 'workspace.initialize', payload: { choice: 'skip' } }),
+    );
+
+    hero.append(tile, title, text, chips, actions, skip);
+    blocks.push(hero);
+    return blocks;
+  }
+
+  // Configurado: o resumo do que está valendo e o vínculo com o Hub.
+  const summaryCard = document.createElement('section');
+  summaryCard.className = 'settings-form';
+  const rows: [string, string][] = [
+    [s('Folder'), workspace?.folderName ?? s('None open')],
+    [s('Git repository'), workspace?.hasGit === true ? s('Detected') : s('Not detected')],
+  ];
+  if (workspace?.externalFolder !== null && workspace?.externalFolder !== undefined) {
+    rows.push([s('External folder'), workspace.externalFolder]);
+  }
+  summaryCard.append(definitionList(rows));
+  blocks.push(summaryCard, renderHubProjectCard());
+  return blocks;
+}
+
+/**
+ * Vínculo do workspace com um projeto do Hub: onde o Web Chat grava as
+ * conversas e de onde a estratégia de contexto de equipe lê conhecimento.
+ */
+function renderHubProjectCard(): HTMLElement {
+  const card = document.createElement('section');
+  card.className = 'settings-form';
+
+  const title = document.createElement('span');
+  title.className = 'usage-title';
+  title.textContent = s('Prometheon Hub project');
+  card.append(title);
+
+  const hub = state?.hub ?? { state: 'local-only' as const };
+  if (hub.state !== 'connected') {
+    card.append(
+      emptyNote(s('Connect to the Hub to bind this workspace to a team project.')),
+      actionRow(
+        actionButton(s('Sign in to Prometheon Hub'), 'ghost', () =>
+          post({ type: 'hub.connect.request' }),
+        ),
       ),
+    );
+    return card;
+  }
+
+  const projects = state?.webProjects ?? [];
+  if (projects.length === 0) {
+    card.append(emptyNote(s('No project available for this account in the Hub.')));
+    return card;
+  }
+
+  card.append(
+    menuField(
+      s('Project'),
+      projects.map((project) => ({
+        value: project.id,
+        label: project.name,
+        description: '',
+        icon: 'cloud',
+      })),
+      state?.webProjectId ?? '',
+      (value) => post({ type: 'chat.selectProject', payload: { projectId: value } }),
+      s('Web Chat conversations live inside this project; team context is read from it.'),
     ),
   );
-  return blocks;
+  return card;
+}
+
+/**
+ * Configurações do workspace num diálogo: cada escolha grava na hora no
+ * `prometheon.yaml` — o arquivo que o time inteiro compartilha — e vale já.
+ */
+function renderWorkspaceDialog(): void {
+  document.getElementById('workspace-dialog')?.remove();
+  if (!workspaceDialogOpen || !isSettingsOpen()) {
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.id = 'workspace-dialog';
+  overlay.className = 'modal account-dialog workspace-dialog';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', s('Workspace settings'));
+  overlay.addEventListener('mousedown', (event) => {
+    // Tudo aqui grava na hora: fechar por fora não perde escolha nenhuma.
+    if (event.target === overlay) {
+      closeWorkspaceDialog();
+    }
+  });
+
+  const card = document.createElement('div');
+  card.className = 'modal-card dialog-card roles-card';
+
+  const header = document.createElement('header');
+  header.className = 'modal-header';
+  const heading = document.createElement('h2');
+  heading.textContent = s('Workspace settings');
+  header.append(heading);
+  card.append(header);
+
+  const body = document.createElement('div');
+  body.className = 'roles-body';
+  body.append(
+    emptyNote(
+      s('Changes apply as you pick them and are written to .prometheon/prometheon.yaml — the file the whole team shares.'),
+    ),
+    menuField(
+      s('Default chat'),
+      [
+        { value: 'local', label: s('Local'), description: s('Conversations stay on this machine.'), icon: 'folder' },
+        { value: 'web', label: s('Web'), description: s('Conversations live in the Hub project.'), icon: 'globe' },
+      ],
+      state?.chatType ?? 'local',
+      (value) => post({ type: 'workspace.update', payload: { patch: { defaultType: value as ChatType } } }),
+    ),
+    menuField(
+      s('Work mode'),
+      WORK_MODES.map((mode) => ({
+        value: mode,
+        label: s(WORK_MODE_LABELS[mode]),
+        description: s(WORK_MODE_DESCRIPTIONS[mode]),
+        icon: mode,
+      })),
+      state?.workMode ?? 'plan',
+      (value) => post({ type: 'workspace.update', payload: { patch: { workMode: value as WorkMode } } }),
+    ),
+    menuField(
+      s('Autonomy'),
+      (['manual', 'auto'] as const).map((level) => ({
+        value: level,
+        label: s(AUTONOMY_LABELS[level]),
+        description: s(AUTONOMY_DESCRIPTIONS[level]),
+        icon: level,
+      })),
+      state?.autonomy === 'auto' ? 'auto' : 'manual',
+      (value) =>
+        post({ type: 'workspace.update', payload: { patch: { autonomy: value as 'manual' | 'auto' } } }),
+      undefined,
+      s('Bypass is never a persisted default: it stays local, temporary and per session.'),
+    ),
+    menuField(
+      s('Main agent'),
+      state === null ? [] : [...mainAgentOptions(state)],
+      state?.mainAgentId ?? '',
+      (value) => post({ type: 'workspace.update', payload: { patch: { mainAgent: value } } }),
+    ),
+  );
+  card.append(body, dialogActions(actionButton(s('Done'), 'primary', closeWorkspaceDialog)));
+  overlay.append(card);
+  document.body.append(overlay);
+}
+
+function closeWorkspaceDialog(): void {
+  workspaceDialogOpen = false;
+  renderSettings();
+  dom.settingsPane.focus();
 }
 
 // ---------- Seção Graph ----------
@@ -4037,16 +4389,34 @@ function formatGraphAge(ms: number): string {
  * um corpus diferente do curado — inclusive arrastando caminho de máquina para
  * dentro de um arquivo versionado.
  */
+/** Chip de estado do grafo: verde-ciano quando pronto, âmbar quando falta. */
+function graphStatusChip(iconName: string, label: string, ok: boolean): HTMLElement {
+  const chip = document.createElement('span');
+  chip.className = `settings-hero-chip ${ok ? 'is-ok' : 'is-warn'}`;
+  const glyph = icon(iconName);
+  if (glyph !== null) {
+    chip.append(glyph);
+  }
+  const text = document.createElement('span');
+  text.textContent = label;
+  chip.append(text);
+  return chip;
+}
+
 function renderGraphSection(): readonly Node[] {
   const graph = state?.graph;
-  const blocks: Node[] = [
+
+  const headingRow = document.createElement('div');
+  headingRow.className = 'settings-heading-row';
+  headingRow.append(
     sectionHeading(
       s('Graph'),
       s(
         'A knowledge graph of this project, generated from the code and committed with it. Agents query it instead of reading file by file.',
       ),
     ),
-  ];
+  );
+  const blocks: Node[] = [headingRow];
 
   if (graph === undefined || !graph.available) {
     blocks.push(
@@ -4061,22 +4431,44 @@ function renderGraphSection(): readonly Node[] {
     return blocks;
   }
 
+  // Sem comando não há o que reconstruir: o botão diz o porquê em vez de
+  // deixar o clique terminar num erro.
+  const rebuildNow = actionButton(s('Rebuild now'), 'ghost', () =>
+    post({ type: 'graph.rebuild' }),
+  );
+  if (graph.rebuildCommand === '') {
+    rebuildNow.disabled = true;
+    rebuildNow.title = s('Set the rebuild command before choosing an automatic trigger.');
+  }
+  headingRow.append(rebuildNow);
+
   blocks.push(...configRequiredNote());
 
+  // O estado em três selos, legível de relance: o grafo, a ferramenta, o hook.
+  const status = document.createElement('div');
+  status.className = 'settings-hero-chain graph-status';
+  status.append(
+    graphStatusChip(
+      'graph',
+      graph.exists && graph.ageMs !== null
+        ? sf('Found in {0}/ · rebuilt {1}', graph.outputDir, formatGraphAge(graph.ageMs))
+        : sf('Not found in {0}/', graph.outputDir),
+      graph.exists,
+    ),
+    graphStatusChip(
+      'beaker',
+      graph.cliDetected ? s('Detected') : s('Not found on PATH'),
+      graph.cliDetected,
+    ),
+    graphStatusChip(
+      'git',
+      state?.git.hooksInstalled === true ? s('Installed') : s('Not installed'),
+      state?.git.hooksInstalled === true,
+    ),
+  );
+  blocks.push(status);
+
   blocks.push(
-    definitionList([
-      [
-        s('Graph'),
-        graph.exists && graph.ageMs !== null
-          ? sf('Found in {0}/ · rebuilt {1}', graph.outputDir, formatGraphAge(graph.ageMs))
-          : sf('Not found in {0}/', graph.outputDir),
-      ],
-      [s('graphify CLI'), graph.cliDetected ? s('Detected') : s('Not found on PATH')],
-      [
-        s('Commit hook'),
-        state?.git.hooksInstalled === true ? s('Installed') : s('Not installed'),
-      ],
-    ]),
     checkboxField(
       s('Let agents query the project graph'),
       graph.enabled,
@@ -4111,6 +4503,17 @@ function renderGraphSection(): readonly Node[] {
         'Runs from the project root, in a shell. There is no default: the wrong command can rebuild the graph from a different corpus than the one your project curates.',
       ),
     ),
+    // Sem comando, o Prometheon oferece o primeiro: gera o script versionado
+    // em .prometheon/scripts/ e aponta o campo para ele.
+    ...(graph.rebuildCommand === ''
+      ? [
+          actionRow(
+            actionButton(s('Create rebuild script'), 'primary', () =>
+              post({ type: 'graph.createScript' }),
+            ),
+          ),
+        ]
+      : []),
     menuField(
       s('When to rebuild'),
       REBUILD_TRIGGER_OPTIONS.map((option) => ({
@@ -4186,11 +4589,6 @@ function renderGraphSection(): readonly Node[] {
     );
   }
 
-  blocks.push(
-    actionRow(
-      actionButton(s('Rebuild now'), 'ghost', () => post({ type: 'graph.rebuild' })),
-    ),
-  );
   return blocks;
 }
 
@@ -4231,14 +4629,18 @@ const COMMIT_LANGUAGE_OPTIONS: readonly {
  */
 function renderGitSection(): readonly Node[] {
   const git = state?.git;
-  const blocks: Node[] = [
+
+  const headingRow = document.createElement('div');
+  headingRow.className = 'settings-heading-row';
+  headingRow.append(
     sectionHeading(
       s('Git & Commits'),
       s(
         'Commit policy for this project. It is stored in .prometheon/prometheon.yaml, so whoever clones the repository gets the same rules.',
       ),
     ),
-  ];
+  );
+  const blocks: Node[] = [headingRow];
 
   if (git === undefined || !git.available) {
     blocks.push(
@@ -4252,6 +4654,16 @@ function renderGitSection(): readonly Node[] {
     );
     return blocks;
   }
+
+  // A ação da seção mora no topo: instalar (ou desligar) os hooks é o que
+  // transforma a política escrita em política aplicada.
+  headingRow.append(
+    git.hooksInstalled
+      ? actionButton(s('Disable hooks on this machine'), 'ghost', () =>
+          post({ type: 'git.uninstallHooks' }),
+        )
+      : actionButton(s('Install Git hooks'), 'primary', () => post({ type: 'git.installHooks' })),
+  );
 
   blocks.push(...configRequiredNote());
 
@@ -4333,14 +4745,30 @@ function renderGitSection(): readonly Node[] {
         'The files are versioned so the whole team gets them, but pointing Git at them is per machine — each person installs it once.',
       ),
     ),
-    definitionList([
-      [s('Status'), git.hooksInstalled ? s('Installed') : s('Not installed')],
-      [
-        s('core.hooksPath'),
-        git.hooksPath ?? s('Not set (Git uses .git/hooks)'),
-      ],
-    ]),
   );
+
+  // O estado dos hooks em selos, como no Grafo: instalado é verde; um Git
+  // apontando para outro lugar é âmbar com o caminho à vista.
+  const hookStatus = document.createElement('div');
+  hookStatus.className = 'settings-hero-chain graph-status';
+  hookStatus.append(
+    graphStatusChip(
+      'git',
+      git.hooksInstalled ? s('Installed') : s('Not installed'),
+      git.hooksInstalled,
+    ),
+  );
+  const pathChip = document.createElement('span');
+  pathChip.className = `settings-hero-chip${
+    !git.hooksInstalled && git.hooksPath !== null ? ' is-warn' : ''
+  }`;
+  const pathLabel = document.createElement('span');
+  pathLabel.className = 'graph-status-path';
+  pathLabel.textContent = git.hooksPath ?? s('Not set (Git uses .git/hooks)');
+  pathLabel.title = git.hooksPath ?? '';
+  pathChip.append(pathLabel);
+  hookStatus.append(pathChip);
+  blocks.push(hookStatus);
 
   if (!git.hooksInstalled && git.hooksPath !== null) {
     blocks.push(
@@ -4354,14 +4782,7 @@ function renderGitSection(): readonly Node[] {
   }
 
   blocks.push(
-    actionRow(
-      git.hooksInstalled
-        ? actionButton(s('Disable hooks on this machine'), 'ghost', () =>
-            post({ type: 'git.uninstallHooks' }),
-          )
-        : actionButton(s('Install Git hooks'), 'primary', () => post({ type: 'git.installHooks' })),
-      actionButton(s('Configure the graph'), 'link', () => selectSection('graph')),
-    ),
+    actionRow(actionButton(s('Configure the graph'), 'link', () => selectSection('graph'))),
   );
   return blocks;
 }
@@ -4425,14 +4846,18 @@ const MCP_SECRET_NOTE =
 
 function renderMcpSection(): readonly Node[] {
   const mcp = state?.mcp;
-  const blocks: Node[] = [
+
+  const headingRow = document.createElement('div');
+  headingRow.className = 'settings-heading-row';
+  headingRow.append(
     sectionHeading(
       s('MCP servers'),
       s(
         'Model Context Protocol servers of this project, read from .mcp.json — the same file Claude Code, Cursor and VS Code use.',
       ),
     ),
-  ];
+  );
+  const blocks: Node[] = [headingRow];
 
   if (mcp === undefined || !mcp.available) {
     blocks.push(
@@ -4446,6 +4871,20 @@ function renderMcpSection(): readonly Node[] {
     );
     return blocks;
   }
+
+  headingRow.append(
+    // A sonda responde "dá para falar com ele?" — não roda servidor nenhum.
+    ...(mcp.servers.length > 0
+      ? [actionButton(s('Test servers'), 'ghost', () => post({ type: 'mcp.probe' }))]
+      : []),
+    // A leitura do arquivo escolhido acontece na extensão: a webview só pede.
+    actionButton(s('Import from .mcp.json'), 'ghost', () => post({ type: 'mcp.import' })),
+    actionButton(s('Add server'), 'primary', () => {
+      mcpDraft = newMcpDraft();
+      renderSettings();
+      firstInputFor('mcp')?.focus();
+    }),
+  );
 
   if (mcp.file !== null) {
     const path = document.createElement('code');
@@ -4465,38 +4904,55 @@ function renderMcpSection(): readonly Node[] {
       ? emptyNote(s('No MCP server configured yet.'))
       : fragment(mcp.servers.map(renderMcpServer)),
   );
-
-  if (mcpDraft === null) {
-    blocks.push(
-      actionRow(
-        actionButton(s('Add server'), 'primary', () => {
-          mcpDraft = newMcpDraft();
-          renderSettings();
-        }),
-        // A leitura do arquivo escolhido acontece na extensão: a webview só pede.
-        actionButton(s('Import from .mcp.json'), 'ghost', () => post({ type: 'mcp.import' })),
-      ),
-    );
-  } else {
-    blocks.push(renderMcpForm(mcpDraft));
-  }
   return blocks;
 }
 
 function renderMcpServer(server: McpServerSummary): HTMLElement {
-  const card = document.createElement('section');
+  // Colapsável como o resto do painel: fechado é uma linha — nome, alvo e
+  // estado —, e a lista inteira de servidores cabe na tela.
+  const card = document.createElement('details');
   card.className = `account mcp-server ${server.enabled ? 'enabled' : 'disabled'}`;
+  card.open = expandedMcp.has(server.name);
+  card.addEventListener('toggle', () => {
+    if (card.open) {
+      expandedMcp.add(server.name);
+    } else {
+      expandedMcp.delete(server.name);
+    }
+  });
 
-  const header = document.createElement('header');
+  const header = document.createElement('summary');
+  header.className = 'account-summary';
+
+  const text = document.createElement('div');
+  text.className = 'account-summary-text';
   const name = document.createElement('span');
   name.className = 'account-name';
   name.textContent = server.name;
+  const target = server.transport === 'stdio' ? server.command : server.url;
+  const subtitle = document.createElement('span');
+  subtitle.className = 'account-subtitle';
+  subtitle.textContent = [s(MCP_TRANSPORT_LABELS[server.transport]), target]
+    .filter((part): part is string => part !== undefined && part !== '')
+    .join(' · ');
+  text.append(name, subtitle);
+
+  // A sonda fala primeiro quando existe: alcançável é o que importa saber.
+  const probe = state?.mcp.probes?.[server.name];
+  if (probe !== undefined) {
+    const probeBadge = document.createElement('span');
+    probeBadge.className = `account-state ${probe === 'ok' ? 'probe-ok' : 'probe-warn'}`;
+    probeBadge.textContent =
+      probe === 'ok' ? s('Reachable') : probe === 'missing' ? s('Command not found') : s('Unreachable');
+    header.append(text, probeBadge);
+  } else {
+    header.append(text);
+  }
 
   const status = document.createElement('span');
   status.className = 'account-state';
   status.textContent = server.enabled ? s('Enabled') : s('Disabled');
-
-  header.append(name, status);
+  header.append(status);
   card.append(header);
 
   const rows: [string, string][] = [
@@ -4536,22 +4992,63 @@ function renderMcpServer(server: McpServerSummary): HTMLElement {
         post({ type: 'mcp.setEnabled', payload: { name: server.name, enabled: !server.enabled } }),
       ),
       actionButton(s('Remove'), 'ghost', () =>
-        post({ type: 'mcp.remove', payload: { name: server.name } }),
+        confirmDialog({
+          title: s('Remove MCP server'),
+          body: [s('The entry is removed from .mcp.json. Other tools that read the same file lose it too.')],
+          confirmLabel: s('Remove'),
+          danger: true,
+          onConfirm: () => post({ type: 'mcp.remove', payload: { name: server.name } }),
+        }),
       ),
     ),
   );
   return card;
 }
 
+/** Criar e editar servidor MCP acontecem num diálogo, como agentes e funções. */
+function renderMcpDialog(): void {
+  document.getElementById('mcp-dialog')?.remove();
+  const draft = mcpDraft;
+  if (draft === null || !isSettingsOpen()) {
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.id = 'mcp-dialog';
+  overlay.className = 'modal account-dialog mcp-dialog';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute(
+    'aria-label',
+    draft.original === null ? s('New MCP server') : sf('Edit {0}', draft.original),
+  );
+
+  const card = document.createElement('div');
+  card.className = 'modal-card dialog-card roles-card agent-card';
+
+  const header = document.createElement('header');
+  header.className = 'modal-header';
+  const title = document.createElement('h2');
+  title.textContent = draft.original === null ? s('New MCP server') : sf('Edit {0}', draft.original);
+  header.append(title);
+  card.append(header);
+
+  const body = document.createElement('div');
+  body.className = 'roles-body';
+  body.append(renderMcpForm(draft));
+  card.append(body);
+
+  overlay.append(card);
+  document.body.append(overlay);
+}
+
 function renderMcpForm(draft: McpDraft): HTMLElement {
   const form = document.createElement('section');
   form.className = 'settings-form';
-  form.append(
-    sectionHeading(draft.original === null ? s('New MCP server') : sf('Edit {0}', draft.original)),
-  );
 
   const update = (patch: Partial<McpDraft>, redraw = false): void => {
-    mcpDraft = { ...draft, ...patch };
+    // Mesmo cuidado do formulário de agente: o estado atual, não o snapshot.
+    mcpDraft = { ...(mcpDraft ?? draft), ...patch };
     if (redraw) {
       renderSettings();
     }
@@ -5769,17 +6266,7 @@ function render(next: PrometheonViewState): void {
     })),
     next.autonomy,
   );
-  menus.mainAgent.update(
-    next.agents.map((agent) => ({
-      value: agent.id,
-      label: agent.displayName,
-      description: agent.available
-        ? sf('Available · {0}', agent.transport)
-        : sf('Unavailable · {0}', agent.transport),
-      icon: 'agent',
-    })),
-    next.mainAgentId,
-  );
+  menus.mainAgent.update(mainAgentOptions(next), next.mainAgentId);
 
   renderAgents(next.activeAgents);
 
@@ -5892,17 +6379,35 @@ function applyChatEvent(event: Extract<ExtensionToWebviewMessage, { type: 'chat.
   }
 }
 
+/** Quanto tempo um aviso fica na tela antes de sair sozinho. */
+const TOAST_LIFETIME_MS = 6_000;
+
+/**
+ * Aviso flutuante, acima de qualquer diálogo aberto.
+ *
+ * Antes, a mensagem era anexada ao feed do chat — invisível atrás dos modais,
+ * que é exatamente onde nascem as validações que mais precisam ser vistas:
+ * "dê um nome ao agente" atrás de dois overlays parecia botão quebrado.
+ */
 function showNotification(text: string, level: 'info' | 'warning' | 'error'): void {
-  const item = document.createElement('article');
-  item.className = `message message-system status-sent notification-${level}`;
-  const body = document.createElement('div');
-  body.className = 'content';
-  body.textContent = text;
-  item.append(body);
-  dom.messages.append(item);
-  messageCount += 1;
-  updateEmptyState();
-  scrollToEnd();
+  let stack = document.getElementById('toasts');
+  if (stack === null) {
+    stack = document.createElement('div');
+    stack.id = 'toasts';
+    stack.className = 'toasts';
+    document.body.append(stack);
+  }
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${level}`;
+  toast.setAttribute('role', level === 'info' ? 'status' : 'alert');
+  toast.textContent = text;
+  toast.addEventListener('click', () => {
+    toast.remove();
+  });
+  stack.append(toast);
+  setTimeout(() => {
+    toast.remove();
+  }, TOAST_LIFETIME_MS);
 }
 
 function send(): void {
@@ -6127,6 +6632,15 @@ document.addEventListener('keydown', (event) => {
   if (agentDraft !== null && isSettingsOpen()) {
     agentDraft = null;
     renderSettings();
+    return;
+  }
+  if (mcpDraft !== null && isSettingsOpen()) {
+    mcpDraft = null;
+    renderSettings();
+    return;
+  }
+  if (workspaceDialogOpen && isSettingsOpen()) {
+    closeWorkspaceDialog();
     return;
   }
   if (accountFormOpen && isSettingsOpen()) {

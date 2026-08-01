@@ -12,7 +12,9 @@ import {
   type SkillScope,
   type SkillSummary,
 } from '../core/types';
+import { t } from '../i18n';
 import type { Logger } from '../logger';
+import { PrometheonError } from '../utils/errors';
 import type { WorkspaceService } from '../workspace/WorkspaceService';
 import {
   estimateTokens,
@@ -24,6 +26,42 @@ import {
 } from './frontmatter';
 
 const decoder = new TextDecoder();
+
+/**
+ * Esqueleto de uma skill nova, já no formato que o scan aceita. A descrição é
+ * o gatilho — é a única parte que fica permanentemente no prompt — e o corpo
+ * segue o padrão Passos + Pronto-quando, que evita os dois defeitos clássicos:
+ * lista de desejos vaga e ausência de critério de parada.
+ */
+function skillTemplate(name: string): string {
+  const title = name
+    .split('-')
+    .map((word) => (word.length === 0 ? word : word[0]?.toUpperCase() + word.slice(1)))
+    .join(' ');
+  return `---
+name: ${name}
+description: "Describe in one line when an agent should reach for this skill."
+version: 0.1.0
+metadata:
+  prometheon:
+    category: general
+    risk_level: low
+---
+
+# ${title}
+
+Explain the procedure step by step. Agents read this body only when the skill
+is loaded — the description above is the trigger, keep it sharp.
+
+## Steps
+
+1. …
+
+## Done when
+
+- …
+`;
+}
 
 /** Subdiretórios que pertencem a uma skill e nunca são varridos como skill. */
 export const SKILL_SUPPORT_DIRS: ReadonlySet<string> = new Set([
@@ -96,6 +134,40 @@ export class SkillRegistry {
       });
     }
     return roots;
+  }
+
+  /**
+   * Cria a pasta e o `SKILL.md` de template no escopo pedido e devolve o
+   * arquivo. Se a skill já existe, devolve o arquivo existente sem tocá-lo —
+   * criar de novo não pode virar sobrescrita do trabalho de alguém.
+   */
+  async createSkill(name: string, scope: 'project' | 'machine'): Promise<vscode.Uri> {
+    if (!isValidSkillName(name)) {
+      throw new PrometheonError(
+        t('Skill names use lowercase letters, numbers and dashes — it is also the folder name.'),
+        'skills.invalid-name',
+      );
+    }
+    const root = this.roots().find((candidate) => candidate.scope === scope);
+    if (root === undefined) {
+      // Só o escopo de projeto pode faltar: sem pasta aberta não há onde criar.
+      throw new PrometheonError(
+        t('Open a folder (or configure the workspace) before creating a project skill.'),
+        'skills.no-project',
+      );
+    }
+
+    const file = vscode.Uri.joinPath(root.uri, name, 'SKILL.md');
+    try {
+      await vscode.workspace.fs.stat(file);
+      return file;
+    } catch {
+      // Não existe: é o caminho normal da criação.
+    }
+    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root.uri, name));
+    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(skillTemplate(name)));
+    this.logger.info(`Skill ${name} criada em ${file.fsPath}.`);
+    return file;
   }
 
   async status(): Promise<SkillCatalogStatus> {

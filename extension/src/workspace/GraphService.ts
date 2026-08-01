@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as vscode from 'vscode';
 import type { GraphStatus } from '../core/types';
+import { t } from '../i18n';
 import type { Logger } from '../logger';
 import { PrometheonError } from '../utils/errors';
 import type { GraphifyConfig } from './types';
@@ -13,7 +14,7 @@ const run = promisify(execFile);
 export class GraphCommandMissingError extends PrometheonError {
   constructor() {
     super(
-      'Set the rebuild command first: each project has its own, and there is no safe default.',
+      t('Set the rebuild command first: each project has its own, and there is no safe default.'),
       'graph.command-missing',
     );
   }
@@ -21,12 +22,46 @@ export class GraphCommandMissingError extends PrometheonError {
 
 export class GraphWorkspaceRequiredError extends PrometheonError {
   constructor() {
-    super('The project graph lives inside the open folder. Open a folder first.', 'graph.workspace-required');
+    super(
+      t('The project graph lives inside the open folder. Open a folder first.'),
+      'graph.workspace-required',
+    );
   }
 }
 
 /** Nome do terminal reaproveitado entre rebuilds, para não acumular abas. */
 const TERMINAL_NAME = 'Prometheon · graph';
+
+/** Onde os scripts gerados moram, relativo à raiz do projeto. */
+const SCRIPTS_DIR = ['scripts'] as const;
+
+/**
+ * Conteúdo dos scripts de rebuild gerados. Ambos são criados — o time pode ser
+ * misto — e ambos dizem a mesma coisa: o comando dentro deles é um ponto de
+ * partida, não uma verdade. O corpus certo é decisão do projeto.
+ */
+function powershellScript(outputDir: string): string {
+  return `# Reconstrói o grafo de conhecimento do projeto (graphify).
+# Gerado pelo Prometheon. Ajuste o comando ao corpus deste projeto: o comando
+# errado reconstrói o grafo a partir de um corpus diferente do que vocês curam.
+# A saída esperada fica em "${outputDir}/" (knowledge.graphify.outputDir).
+$ErrorActionPreference = 'Stop'
+
+graphify update .
+`;
+}
+
+function shellScript(outputDir: string): string {
+  return `#!/usr/bin/env bash
+# Reconstrói o grafo de conhecimento do projeto (graphify).
+# Gerado pelo Prometheon. Ajuste o comando ao corpus deste projeto: o comando
+# errado reconstrói o grafo a partir de um corpus diferente do que vocês curam.
+# A saída esperada fica em "${outputDir}/" (knowledge.graphify.outputDir).
+set -euo pipefail
+
+graphify update .
+`;
+}
 
 /**
  * Estado do grafo de conhecimento do projeto e execução do rebuild.
@@ -37,6 +72,45 @@ const TERMINAL_NAME = 'Prometheon · graph';
  * decide sozinha como reconstruir, porque o comando errado corrompe o corpus.
  */
 export class GraphService {
+  /**
+   * Gera os scripts de rebuild em `.prometheon/scripts/` — PowerShell e Bash,
+   * porque o time pode ser misto — e devolve o comando da plataforma atual,
+   * relativo à raiz do projeto. Script existente nunca é sobrescrito: ajuste
+   * feito pelo time vale mais que o template.
+   */
+  async createRebuildScript(config: GraphifyConfig): Promise<{
+    readonly command: string;
+    readonly open: vscode.Uri;
+  }> {
+    const prometheonDir = this.workspace.prometheonDir;
+    if (prometheonDir === null) {
+      throw new GraphWorkspaceRequiredError();
+    }
+    const dir = vscode.Uri.joinPath(prometheonDir, ...SCRIPTS_DIR);
+    await vscode.workspace.fs.createDirectory(dir);
+
+    const powershell = vscode.Uri.joinPath(dir, 'rebuild-graphify.ps1');
+    const shell = vscode.Uri.joinPath(dir, 'rebuild-graphify.sh');
+    await this.writeIfMissing(powershell, powershellScript(config.outputDir));
+    await this.writeIfMissing(shell, shellScript(config.outputDir));
+
+    const windows = process.platform === 'win32';
+    return {
+      command: windows
+        ? 'powershell -NoProfile -ExecutionPolicy Bypass -File .prometheon/scripts/rebuild-graphify.ps1'
+        : 'bash .prometheon/scripts/rebuild-graphify.sh',
+      open: windows ? powershell : shell,
+    };
+  }
+
+  private async writeIfMissing(file: vscode.Uri, content: string): Promise<void> {
+    try {
+      await vscode.workspace.fs.stat(file);
+    } catch {
+      await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(content));
+    }
+  }
+
   /** Resultado da sondagem do CLI. Detectar a cada render seria caro. */
   private cliDetected: boolean | null = null;
 
