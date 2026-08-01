@@ -1441,7 +1441,7 @@ interface RoleDraft {
 }
 
 /** Valor sentinela do menu de modelo: abre o campo de texto livre. */
-const OTHER_MODEL = ' other';
+const OTHER_MODEL = '\u0000other';
 
 const ROLE_SCOPE_ICONS: Record<AgentRoleScope, string> = {
   project: 'folder',
