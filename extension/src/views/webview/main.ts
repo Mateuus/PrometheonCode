@@ -1467,7 +1467,27 @@ interface McpDraft {
 let settingsSection: SettingsSection = 'accounts';
 let accountDraft: AccountDraft = { name: '', providerId: '' };
 /** Conta cujo nome está sendo corrigido no próprio card; nula fora da edição. */
-let accountRename: { profileId: string; name: string } | null = null;
+/**
+ * Contas com o card expandido. O redesenho do modal recria os nós, então o
+ * aberto/fechado de cada `details` sobreviveria zero redesenhos sem isto.
+ */
+const expandedAccounts = new Set<string>();
+
+/** O formulário de conta nova só ocupa a tela quando alguém pede. */
+let accountFormOpen = false;
+
+/** Agentes com o card expandido, pelo id do perfil — mesma razão das contas. */
+const expandedAgents = new Set<string>();
+
+/** O gerenciador de papéis é um diálogo; aberto, sobrevive aos redesenhos. */
+let rolesDialogOpen = false;
+
+/** Lista de agentes agrupada por papel — um modo de ver, guardado à parte. */
+let agentsGroupByRole = false;
+
+/** Dono do seletor de skills aberto: o rascunho de agente ou o de papel. */
+let skillsPickerTarget: 'agent' | 'role' | null = null;
+let skillsPickerFilter = '';
 let agentDraft: AgentDraft | null = null;
 /** Papel em edição. Abre por cima do formulário de agente, que fica guardado. */
 let roleDraft: RoleDraft | null = null;
@@ -1489,6 +1509,8 @@ function openSettings(section: SettingsSection = settingsSection, focus?: 'new')
       agentDraft = newAgentDraft(state?.accounts[0]?.profileId ?? '');
     } else if (section === 'mcp') {
       mcpDraft = newMcpDraft();
+    } else if (section === 'accounts') {
+      accountFormOpen = true;
     }
   }
   renderSettings();
@@ -1508,12 +1530,25 @@ function firstInputFor(section: SettingsSection): HTMLInputElement | null {
     mcp: 'mcp-name',
   };
   const name = names[section];
+  // No documento, e não só no pane: o formulário de conta vive num diálogo
+  // sobreposto, fora da árvore do pane.
   return name === undefined
     ? null
-    : dom.settingsPane.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
+    : document.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
 }
 
 function closeSettings(): void {
+  // Os diálogos empilhados pertencem à configuração: não sobrevivem a ela.
+  closeUiDialog();
+  accountFormOpen = false;
+  rolesDialogOpen = false;
+  roleDraft = null;
+  agentDraft = null;
+  skillsPickerTarget = null;
+  document.getElementById('account-dialog')?.remove();
+  document.getElementById('roles-dialog')?.remove();
+  document.getElementById('agent-dialog')?.remove();
+  document.getElementById('skills-dialog')?.remove();
   dom.settingsModal.hidden = true;
   dom.openSettingsModal.setAttribute('aria-expanded', 'false');
   for (const menu of sectionMenus) {
@@ -1555,9 +1590,15 @@ function renderSettings(): void {
   renderSettingsNav();
   dom.settingsPane.setAttribute('aria-label', SECTION_LABELS[settingsSection]);
   dom.settingsPane.replaceChildren(...renderSection());
+  renderAccountDialog();
+  renderAgentDialog();
+  renderRolesDialog();
+  renderSkillsDialog();
 
   if (focusedField !== null && focusedField.field !== null) {
-    const restored = dom.settingsPane.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+    // No documento, não só no pane: os campos podem morar num diálogo
+    // sobreposto, e perder o foco a cada tecla mataria a digitação.
+    const restored = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(
       `[data-field="${focusedField.field}"]`,
     );
     if (restored !== null) {
@@ -1944,15 +1985,24 @@ function isLanguageChoice(value: string): value is LanguageChoice {
 
 function renderAccountsSection(): readonly Node[] {
   const accounts = state?.accounts ?? [];
-  const providers = state?.providers ?? [];
-  const blocks: Node[] = [
+
+  const headingRow = document.createElement('div');
+  headingRow.className = 'settings-heading-row';
+  headingRow.append(
     sectionHeading(
       s('Accounts'),
       s(
         'Each account is a separate CLI sign-in with its own configuration directory. Signing in always happens through the official CLI flow.',
       ),
     ),
-  ];
+    actionButton(s('Add account'), 'primary', () => {
+      accountFormOpen = true;
+      renderSettings();
+      firstInputFor('accounts')?.focus();
+    }),
+  );
+
+  const blocks: Node[] = [headingRow];
 
   if (accounts.length === 0) {
     blocks.push(
@@ -1965,7 +2015,6 @@ function renderAccountsSection(): readonly Node[] {
   }
 
   blocks.push(
-    renderAccountForm(providers),
     emptyNote(
       s(
         'Token counts are measured by Prometheon on this machine. Subscription limits live in each provider account and are not read from here.',
@@ -1975,10 +2024,349 @@ function renderAccountsSection(): readonly Node[] {
   return blocks;
 }
 
+/**
+ * Diálogo de conta nova, sobre o modal de Configurações.
+ *
+ * É recriado a cada redesenho — o mesmo ciclo de vida do resto do modal — e
+ * vive em cima da configuração porque criar conta é um desvio curto: dois
+ * campos, e a pessoa volta para a lista de onde saiu.
+ */
+function renderAccountDialog(): void {
+  document.getElementById('account-dialog')?.remove();
+  if (!accountFormOpen || !isSettingsOpen()) {
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.id = 'account-dialog';
+  overlay.className = 'modal account-dialog';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', s('New account'));
+  overlay.addEventListener('mousedown', (event) => {
+    // Só o clique no pano de fundo fecha; dentro do cartão é uso normal.
+    if (event.target === overlay) {
+      closeAccountDialog();
+    }
+  });
+
+  const card = document.createElement('div');
+  card.className = 'modal-card dialog-card';
+
+  const header = document.createElement('header');
+  header.className = 'modal-header';
+  const title = document.createElement('h2');
+  title.textContent = s('New account');
+  header.append(title);
+
+  card.append(header, renderAccountForm(state?.providers ?? []));
+  overlay.append(card);
+  document.body.append(overlay);
+}
+
+function closeAccountDialog(): void {
+  accountFormOpen = false;
+  renderSettings();
+  dom.settingsPane.focus();
+}
+
+/**
+ * Gerenciador de papéis nomeados, num diálogo sobre a configuração: a lista
+ * inteira num lugar só — ver, criar, editar e remover — em vez de formulários
+ * espalhados pela seção. Com um rascunho aberto (`roleDraft`), o diálogo vira
+ * o próprio formulário; cancelar volta para a lista.
+ */
+function renderRolesDialog(): void {
+  document.getElementById('roles-dialog')?.remove();
+  if ((!rolesDialogOpen && roleDraft === null) || !isSettingsOpen()) {
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.id = 'roles-dialog';
+  overlay.className = 'modal account-dialog roles-dialog';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', s('Roles'));
+  overlay.addEventListener('mousedown', (event) => {
+    // Com o formulário aberto, clique fora não descarta a digitação — sair
+    // dali é decisão dos botões (ou do Esc, que cancela um nível por vez).
+    if (event.target === overlay && roleDraft === null) {
+      closeRolesDialog();
+    }
+  });
+
+  const card = document.createElement('div');
+  card.className = 'modal-card dialog-card roles-card';
+
+  const header = document.createElement('header');
+  header.className = 'modal-header';
+  const title = document.createElement('h2');
+  title.textContent = s('Roles');
+  header.append(title);
+  card.append(header);
+
+  const body = document.createElement('div');
+  body.className = 'roles-body';
+
+  if (roleDraft !== null) {
+    body.append(renderRoleForm(roleDraft));
+  } else {
+    const roles = state?.customRoles ?? [];
+    if (roles.length === 0) {
+      body.append(
+        emptyNote(s('No named role yet. Create one to reuse a specialty across agents.')),
+      );
+    }
+    for (const role of roles) {
+      body.append(renderRoleRow(role));
+    }
+    body.append(
+      actionRow(
+        actionButton(s('New role'), 'primary', () => {
+          roleDraft = newRoleDraft();
+          renderSettings();
+        }),
+      ),
+    );
+  }
+
+  card.append(body);
+  overlay.append(card);
+  document.body.append(overlay);
+}
+
+/** Uma linha do gerenciador: quem é o papel, de onde veio, e as duas ações. */
+function renderRoleRow(role: CustomAgentRole): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'role-row';
+
+  const glyph = document.createElement('span');
+  glyph.className = 'role-row-icon';
+  const roleIcon = icon(ROLE_ICONS[role.basedOn]);
+  if (roleIcon !== null) {
+    glyph.append(roleIcon);
+  }
+
+  const text = document.createElement('div');
+  text.className = 'account-summary-text';
+  const label = document.createElement('span');
+  label.className = 'account-name';
+  label.textContent = role.label;
+  const subtitle = document.createElement('span');
+  subtitle.className = 'account-subtitle';
+  subtitle.textContent = `${s(AGENT_ROLE_LABELS[role.basedOn])} · ${s(AGENT_ROLE_SCOPE_LABELS[role.scope])}`;
+  text.append(label, subtitle);
+
+  const actions = document.createElement('div');
+  actions.className = 'role-row-actions';
+  const remove = accountButton(s('Remove role'), () =>
+    confirmDialog({
+      title: s('Remove role'),
+      body: [
+        s('Agents using this role start warning that it is missing; none of them is repointed.'),
+      ],
+      confirmLabel: s('Remove'),
+      danger: true,
+      onConfirm: () => post({ type: 'agentRoles.remove', payload: { id: role.id } }),
+    }),
+  );
+  remove.classList.add('danger');
+  actions.append(
+    accountButton(s('Edit role'), () => {
+      roleDraft = roleDraftFrom(role);
+      renderSettings();
+    }),
+    remove,
+  );
+
+  row.append(glyph, text, actions);
+  return row;
+}
+
+function closeRolesDialog(): void {
+  rolesDialogOpen = false;
+  roleDraft = null;
+  renderSettings();
+  dom.settingsPane.focus();
+}
+
+/**
+ * Criar e editar agente acontecem num diálogo próprio: o formulário é o maior
+ * da configuração, e inline ele empurrava a lista para fora da tela. O card
+ * rola por dentro; clique no pano de fundo não descarta a digitação.
+ */
+function renderAgentDialog(): void {
+  document.getElementById('agent-dialog')?.remove();
+  const draft = agentDraft;
+  if (draft === null || !isSettingsOpen()) {
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.id = 'agent-dialog';
+  overlay.className = 'modal account-dialog agent-dialog';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', draft.id === null ? s('New agent') : sf('Edit {0}', draft.name));
+
+  const card = document.createElement('div');
+  card.className = 'modal-card dialog-card roles-card agent-card';
+
+  const header = document.createElement('header');
+  header.className = 'modal-header';
+  const title = document.createElement('h2');
+  title.textContent = draft.id === null ? s('New agent') : sf('Edit {0}', draft.name);
+  header.append(title);
+  card.append(header);
+
+  const body = document.createElement('div');
+  body.className = 'roles-body';
+  body.append(renderAgentForm(draft, state?.accounts ?? []));
+  card.append(body);
+
+  overlay.append(card);
+  document.body.append(overlay);
+}
+
+/**
+ * Casca dos diálogos imperativos — confirmação, renomear, o que vier. Um por
+ * vez: abrir outro substitui o anterior. É imperativa de propósito: a pergunta
+ * nasce do clique, não do estado, então um redesenho do modal de configuração
+ * não a recria nem a perde — o nó vive fora do pane.
+ */
+function openUiDialog(title: string): HTMLElement {
+  closeUiDialog();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'ui-dialog';
+  overlay.className = 'modal confirm-dialog';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', title);
+  overlay.addEventListener('mousedown', (event) => {
+    if (event.target === overlay) {
+      closeUiDialog();
+    }
+  });
+
+  const card = document.createElement('div');
+  card.className = 'modal-card dialog-card confirm-card';
+
+  const header = document.createElement('header');
+  header.className = 'modal-header';
+  const heading = document.createElement('h2');
+  heading.textContent = title;
+  header.append(heading);
+  card.append(header);
+
+  overlay.append(card);
+  document.body.append(overlay);
+  return card;
+}
+
+/** Fecha o diálogo imperativo, se houver. Devolve se havia um aberto. */
+function closeUiDialog(): boolean {
+  const open = document.getElementById('ui-dialog');
+  if (open === null) {
+    return false;
+  }
+  open.remove();
+  return true;
+}
+
+/** Fileira de ações de um diálogo: a principal primeiro, cancelar por último. */
+function dialogActions(...buttons: readonly HTMLElement[]): HTMLElement {
+  const actions = document.createElement('div');
+  actions.className = 'field-actions confirm-actions';
+  actions.append(...buttons);
+  return actions;
+}
+
+/** Confirmação antes de uma ação com consequência — o uso mais comum da casca. */
+function confirmDialog(options: {
+  readonly title: string;
+  readonly body?: readonly string[];
+  readonly confirmLabel: string;
+  readonly danger?: boolean;
+  readonly onConfirm: () => void;
+}): void {
+  const card = openUiDialog(options.title);
+
+  const body = document.createElement('div');
+  body.className = 'confirm-body';
+  for (const paragraph of options.body ?? []) {
+    const text = document.createElement('p');
+    text.textContent = paragraph;
+    body.append(text);
+  }
+  card.append(body);
+
+  const confirm = actionButton(options.confirmLabel, 'primary', () => {
+    closeUiDialog();
+    options.onConfirm();
+  });
+  if (options.danger === true) {
+    confirm.classList.add('danger');
+  }
+  const cancel = actionButton(s('Cancel'), 'ghost', () => closeUiDialog());
+  card.append(dialogActions(confirm, cancel));
+
+  // O foco nasce no caminho seguro: confirmar exige mirar, cancelar é o Enter.
+  cancel.focus();
+}
+
+/** Renomeia a conta num diálogo próprio; Enter salva, Esc desiste. */
+function renameAccountDialog(account: PrometheonViewState['accounts'][number]): void {
+  const card = openUiDialog(s('Rename'));
+
+  let draft = account.name;
+  const commit = (): void => {
+    const name = draft.trim();
+    if (name === '') {
+      showNotification(s('Give the account a name.'), 'warning');
+      return;
+    }
+    closeUiDialog();
+    if (name !== account.name) {
+      post({ type: 'accounts.rename', payload: { profileId: account.profileId, name } });
+    }
+  };
+
+  const input = textInput({
+    name: 'account-rename',
+    value: account.name,
+    maxLength: MAX_PROFILE_NAME_LENGTH,
+    onInput: (value) => {
+      draft = value;
+    },
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      commit();
+    }
+  });
+
+  const body = document.createElement('div');
+  body.className = 'confirm-body';
+  body.append(field(s('Name'), input));
+  card.append(body);
+
+  card.append(
+    dialogActions(
+      actionButton(s('Save name'), 'primary', commit),
+      actionButton(s('Cancel'), 'ghost', () => closeUiDialog()),
+    ),
+  );
+
+  input.focus();
+  input.select();
+}
+
 function renderAccountForm(providers: PrometheonViewState['providers']): HTMLElement {
   const form = document.createElement('section');
   form.className = 'settings-form';
-  form.append(sectionHeading(s('New account')));
 
   if (providers.length === 0) {
     form.append(emptyNote(s('No provider adapter is available yet.')));
@@ -2037,37 +2425,103 @@ function renderAccountForm(providers: PrometheonViewState['providers']): HTMLEle
           payload: { name, providerId: accountDraft.providerId },
         });
         accountDraft = { ...accountDraft, name: '' };
-        renderSettings();
+        // Criou, o diálogo já cumpriu o papel: a lista é o que interessa.
+        closeAccountDialog();
       }),
+      actionButton(s('Cancel'), 'ghost', closeAccountDialog),
     ),
   );
   return form;
 }
 
 function renderAccount(account: PrometheonViewState['accounts'][number]): HTMLElement {
-  const renaming = accountRename?.profileId === account.profileId ? accountRename : null;
-  const card = document.createElement('section');
+  // O card é um `details`: fechado mostra só nome e estado, e a lista inteira
+  // cabe na tela.
+  const card = document.createElement('details');
   card.className = `account ${account.authenticated ? 'signed-in' : 'signed-out'}`;
+  card.open = expandedAccounts.has(account.profileId);
+  card.addEventListener('toggle', () => {
+    if (card.open) {
+      expandedAccounts.add(account.profileId);
+    } else {
+      expandedAccounts.delete(account.profileId);
+    }
+  });
 
-  const header = document.createElement('header');
+  const header = document.createElement('summary');
+  header.className = 'account-summary';
 
-  const state = document.createElement('span');
-  state.className = 'account-state';
-  state.textContent = account.authenticated
+  // `stateBadge`, não `state`: o snapshot global chama-se `state`, e sombreá-lo
+  // aqui faria o filtro de agentes vinculados ler um span em vez do estado.
+  const stateBadge = document.createElement('span');
+  stateBadge.className = 'account-state';
+  stateBadge.textContent = account.authenticated
     ? s('Signed in')
     : account.cliInstalled
       ? s('Signed out')
       : s('CLI missing');
 
-  if (renaming === null) {
-    const name = document.createElement('span');
-    name.className = 'account-name';
-    name.textContent = account.name;
-    header.append(name, state);
-  } else {
-    header.append(renameInput(account.profileId, renaming.name, account.name), state);
+  // Fechado, o card ainda diz de quem é: provedor e e-mail numa linha apagada
+  // sob o nome — o suficiente para distinguir contas sem abrir nenhuma.
+  const text = document.createElement('div');
+  text.className = 'account-summary-text';
+
+  const name = document.createElement('span');
+  name.className = 'account-name';
+  name.textContent = account.name;
+  text.append(name);
+
+  const subtitleParts = [account.providerName, account.accountLabel].filter(
+    (part): part is string => part !== undefined && part !== '',
+  );
+  if (subtitleParts.length > 0) {
+    const subtitle = document.createElement('span');
+    subtitle.className = 'account-subtitle';
+    subtitle.textContent = subtitleParts.join(' · ');
+    text.append(subtitle);
   }
+
+  header.append(text, stateBadge);
   card.append(header);
+
+  // A identidade abre o corpo: quem é este login, de relance — e-mail em
+  // destaque, método e organização na linha apagada, plano como selo. Sem
+  // sessão não há identidade a mostrar: o CLI responde "none", e "none" na
+  // tela é ruído fingindo ser informação.
+  if (account.authenticated) {
+    const identity = document.createElement('div');
+    identity.className = 'account-identity';
+
+    const avatar = document.createElement('span');
+    avatar.className = 'account-avatar';
+    avatar.textContent = (account.name.trim().charAt(0) || '?').toUpperCase();
+
+    const identityText = document.createElement('div');
+    identityText.className = 'account-identity-text';
+    const identityPrimary = document.createElement('span');
+    identityPrimary.className = 'account-identity-primary';
+    identityPrimary.textContent = account.accountLabel ?? account.providerName;
+    identityText.append(identityPrimary);
+
+    const identityDetails = [account.authMethod, account.organization].filter(
+      (part): part is string => part !== undefined && part !== '',
+    );
+    if (identityDetails.length > 0) {
+      const identitySecondary = document.createElement('span');
+      identitySecondary.className = 'account-identity-secondary';
+      identitySecondary.textContent = identityDetails.join(' · ');
+      identityText.append(identitySecondary);
+    }
+    identity.append(avatar, identityText);
+
+    if (account.plan !== undefined && account.plan !== '') {
+      const plan = document.createElement('span');
+      plan.className = 'account-plan';
+      plan.textContent = account.plan;
+      identity.append(plan);
+    }
+    card.append(identity);
+  }
 
   const rows: [string, string][] = [
     [
@@ -2077,36 +2531,45 @@ function renderAccount(account: PrometheonViewState['accounts'][number]): HTMLEl
         : `${account.providerName} ${account.cliVersion}`,
     ],
   ];
-  if (account.authMethod !== undefined) {
-    rows.push([s('Auth method'), account.authMethod]);
-  }
-  if (account.accountLabel !== undefined) {
-    rows.push([s('Email'), account.accountLabel]);
-  }
-  if (account.organization !== undefined) {
-    rows.push([s('Organization'), account.organization]);
-  }
-  if (account.plan !== undefined) {
-    rows.push([s('Plan'), account.plan]);
-  }
   if (account.message !== undefined && !account.authenticated) {
     rows.push([s('Status'), account.message]);
   }
   card.append(definitionList(rows));
 
+  // Uso em três painéis — hoje, semana, sempre — com entrada e saída
+  // empilhadas: números comparáveis de coluna a coluna, sem tabela.
   const usage = document.createElement('div');
   usage.className = 'usage';
   const title = document.createElement('span');
   title.className = 'usage-title';
-  title.textContent = s('Tokens measured locally');
-  usage.append(title);
-  usage.append(
-    definitionList([
-      [s('Today'), tokenPair(account.usage.today)],
-      [s('Last 7 days'), tokenPair(account.usage.last7Days)],
-      [s('All time'), sf('{0} · {1} runs', tokenPair(account.usage.total), account.usage.runs)],
-    ]),
-  );
+  title.textContent =
+    account.usage.runs > 0
+      ? sf('{0} · {1} runs', s('Tokens measured locally'), account.usage.runs)
+      : s('Tokens measured locally');
+  const grid = document.createElement('div');
+  grid.className = 'usage-grid';
+  const windows: [string, { input: number; output: number }][] = [
+    [s('Today'), account.usage.today],
+    [s('Last 7 days'), account.usage.last7Days],
+    [s('All time'), account.usage.total],
+  ];
+  for (const [label, tokens] of windows) {
+    const cell = document.createElement('div');
+    cell.className = 'usage-cell';
+    const input = document.createElement('span');
+    input.className = 'usage-cell-value';
+    input.textContent = `↑ ${formatTokens(tokens.input)}`;
+    const output = document.createElement('span');
+    output.className = 'usage-cell-value usage-cell-out';
+    output.textContent = `↓ ${formatTokens(tokens.output)}`;
+    const caption = document.createElement('span');
+    caption.className = 'usage-cell-label';
+    caption.textContent = label;
+    caption.title = label;
+    cell.append(input, output, caption);
+    grid.append(cell);
+  }
+  usage.append(title, grid);
   card.append(usage);
 
   const directory = document.createElement('code');
@@ -2117,91 +2580,55 @@ function renderAccount(account: PrometheonViewState['accounts'][number]): HTMLEl
 
   const actions = document.createElement('div');
   actions.className = 'account-actions';
-  if (renaming === null) {
-    actions.append(
-      accountButton(account.authenticated ? s('Sign in again') : s('Sign in'), () =>
+  // Um botão de sessão só: conectado sai, desconectado entra. Oferecer os dois
+  // ao mesmo tempo é pedir que a pessoa deduza qual deles vale agora.
+  const session = account.authenticated
+    ? accountButton(s('Sign out'), () =>
+        confirmDialog({
+          title: s('Sign out of this account?'),
+          body: [s('The isolated configuration directory is kept.')],
+          confirmLabel: s('Sign out'),
+          onConfirm: () =>
+            post({ type: 'accounts.logout', payload: { profileId: account.profileId } }),
+        }),
+      )
+    : accountButton(s('Sign in'), () =>
         post({ type: 'accounts.login', payload: { profileId: account.profileId } }),
-      ),
-      accountButton(s('Sign out'), () =>
-        post({ type: 'accounts.logout', payload: { profileId: account.profileId } }),
-      ),
-      accountButton(s('Rename'), () => startRename(account.profileId, account.name)),
-      accountButton(s('Remove'), () =>
+      );
+  actions.append(session, accountButton(s('Rename'), () => renameAccountDialog(account)));
+  // Remover é a única ação sem volta do card: fica separada, com a cor de
+  // perigo, e conta o que sobra — o diretório fica, os agentes vinculados
+  // param até apontarem para outra conta.
+  const bound = (state?.agentProfiles ?? []).filter(
+    (summary) => summary.profile.providerProfileId === account.profileId,
+  );
+  const remove = accountButton(s('Remove'), () =>
+    confirmDialog({
+      title: s('Remove account'),
+      body: [
+        sf(
+          'The sign-in files in {0} are kept. Delete that folder yourself to also drop the credentials.',
+          account.configDirectory,
+        ),
+        ...(bound.length === 0
+          ? []
+          : [
+              sf(
+                '{0} agent profile(s) still point to this account and will stop until they are bound to another one.',
+                bound.length,
+              ),
+            ]),
+      ],
+      confirmLabel: s('Remove'),
+      danger: true,
+      onConfirm: () =>
         post({ type: 'accounts.remove', payload: { profileId: account.profileId } }),
-      ),
-    );
-  } else {
-    // Renomeando, o card fica só com as duas saídas possíveis: as outras ações
-    // levariam o nome digitado embora sem dizer que ele foi descartado.
-    actions.append(
-      actionButton(s('Save name'), 'primary', () => commitRename(account.name)),
-      accountButton(s('Cancel'), cancelRename),
-    );
-  }
+    }),
+  );
+  remove.classList.add('danger');
+  actions.append(remove);
   card.append(actions);
   return card;
-}
-
-/**
- * Campo que substitui o nome no cabeçalho do card durante a edição. `current` é
- * o rascunho e `saved` é o nome que está gravado — um redesenho no meio da
- * digitação mudaria o primeiro, e comparar contra ele engoliria a renomeação.
- */
-function renameInput(profileId: string, current: string, saved: string): HTMLInputElement {
-  const input = textInput({
-    name: 'account-rename',
-    value: current,
-    maxLength: MAX_PROFILE_NAME_LENGTH,
-    onInput: (next) => {
-      accountRename = { profileId, name: next };
-    },
-  });
-  input.className = 'field-input account-name-input';
-  input.setAttribute('aria-label', s('Name'));
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      commitRename(saved);
-    } else if (event.key === 'Escape') {
-      // Sem isto, o Esc fecharia o modal inteiro e o card voltaria depois já
-      // fora da edição, como se o cancelamento tivesse sido outra coisa.
-      event.preventDefault();
-      event.stopPropagation();
-      cancelRename();
-    }
-  });
-  return input;
-}
-
-function startRename(profileId: string, name: string): void {
-  accountRename = { profileId, name };
-  renderSettings();
-  const input = dom.settingsPane.querySelector<HTMLInputElement>('[data-field="account-rename"]');
-  input?.focus();
-  input?.select();
-}
-
-function cancelRename(): void {
-  accountRename = null;
-  renderSettings();
-}
-
-/** Grava o nome digitado. Sem mudança, sai da edição sem falar com a extensão. */
-function commitRename(previous: string): void {
-  const rename = accountRename;
-  if (rename === null) {
-    return;
-  }
-  const name = rename.name.trim();
-  if (name === '') {
-    showNotification(s('Give the account a name.'), 'warning');
-    return;
-  }
-  accountRename = null;
-  if (name !== previous) {
-    post({ type: 'accounts.rename', payload: { profileId: rename.profileId, name } });
-  }
-  renderSettings();
 }
 
 // ---------- Seção Agents ----------
@@ -2311,57 +2738,159 @@ function splitList(value: string): string[] {
     .filter((entry) => entry !== '');
 }
 
+/**
+ * Estado vazio da seção de agentes: em vez de uma linha seca, o modelo do
+ * produto em um cartão — ícone, uma frase e o diagrama Agente → Papel → Conta.
+ * O corpo muda conforme o que falta (uma conta, ou só o primeiro agente).
+ */
+function agentsEmptyHero(body: string, ...buttons: readonly HTMLElement[]): HTMLElement {
+  const hero = document.createElement('div');
+  hero.className = 'settings-hero';
+
+  const tile = document.createElement('span');
+  tile.className = 'settings-hero-icon';
+  const glyph = icon('agent');
+  if (glyph !== null) {
+    tile.append(glyph);
+  }
+
+  const title = document.createElement('h4');
+  title.className = 'settings-hero-title';
+  title.textContent = s('Assemble your agent team');
+
+  const text = document.createElement('p');
+  text.className = 'settings-hero-body';
+  text.textContent = body;
+
+  // O diagrama é o modelo inteiro numa linha: quem age, o que faz, por onde.
+  const chain = document.createElement('div');
+  chain.className = 'settings-hero-chain';
+  const links: readonly [string, string][] = [
+    ['agent', s('Agent')],
+    ['sliders', s('Role')],
+    ['person', s('Account')],
+  ];
+  links.forEach(([glyphName, label], index) => {
+    if (index > 0) {
+      const arrow = document.createElement('span');
+      arrow.className = 'settings-hero-arrow';
+      arrow.textContent = '→';
+      chain.append(arrow);
+    }
+    const chip = document.createElement('span');
+    chip.className = 'settings-hero-chip';
+    const chipIcon = icon(glyphName);
+    if (chipIcon !== null) {
+      chip.append(chipIcon);
+    }
+    const chipLabel = document.createElement('span');
+    chipLabel.textContent = label;
+    chip.append(chipLabel);
+    chain.append(chip);
+  });
+
+  const actions = document.createElement('div');
+  actions.className = 'settings-hero-actions';
+  actions.append(...buttons);
+
+  hero.append(tile, title, text, chain, actions);
+  return hero;
+}
+
 function renderAgentsSection(): readonly Node[] {
   const profiles = state?.agentProfiles ?? [];
   const accounts = state?.accounts ?? [];
-  const blocks: Node[] = [
+
+  const headingRow = document.createElement('div');
+  headingRow.className = 'settings-heading-row';
+  headingRow.append(
     sectionHeading(
       s('Agent Profiles'),
       s(
         'Every agent runs through one account. Prometheon never falls back to another one when the bound account is unavailable.',
       ),
     ),
-  ];
-
-  if (accounts.length === 0) {
-    blocks.push(
-      emptyNote(s('An agent profile needs an account. Create one first, then come back here.')),
-      actionRow(actionButton(s('Go to Accounts'), 'ghost', () => selectSection('accounts'))),
-    );
-    return blocks;
-  }
-
-  blocks.push(
-    profiles.length === 0
-      ? emptyNote(s('No agent profile yet.'))
-      : fragment(profiles.map(renderAgentProfile)),
   );
 
-  // O formulário de papel toma a frente: ele foi aberto de dentro do de agente,
-  // que continua guardado em `agentDraft` e volta quando este fechar.
-  if (roleDraft !== null) {
-    blocks.push(renderRoleForm(roleDraft));
+  // Antes da primeira conta, a seção ensina em vez de listar: sem conta não
+  // existe agente, e o único passo que faz sentido é ir criá-la.
+  if (accounts.length === 0) {
+    return [
+      headingRow,
+      agentsEmptyHero(
+        s('An agent profile needs an account. Create one first, then come back here.'),
+        actionButton(s('Go to Accounts'), 'primary', () => selectSection('accounts')),
+      ),
+    ];
+  }
+
+  const firstAccount = accounts[0];
+  headingRow.append(
+    actionButton(s('Roles'), 'ghost', () => {
+      rolesDialogOpen = true;
+      renderSettings();
+    }),
+    actionButton(s('New agent'), 'primary', () => {
+      agentDraft = newAgentDraft(firstAccount?.profileId ?? '');
+      renderSettings();
+      firstInputFor('agents')?.focus();
+    }),
+  );
+
+  const blocks: Node[] = [headingRow];
+
+  if (profiles.length === 0) {
+    blocks.push(
+      agentsEmptyHero(
+        s('An agent is a role plus an account: the role says what it does, the account says how it runs.'),
+      ),
+    );
     return blocks;
   }
 
-  if (agentDraft === null) {
-    const firstAccount = accounts[0];
-    blocks.push(
-      actionRow(
-        actionButton(s('New agent profile'), 'primary', () => {
-          agentDraft = newAgentDraft(firstAccount?.profileId ?? '');
-          renderSettings();
-        }),
-        actionButton(s('New role'), 'ghost', () => {
-          roleDraft = newRoleDraft();
-          renderSettings();
-        }),
-      ),
-    );
+  // Agrupar por papel é um modo de ver, não uma ação — por isso mora junto da
+  // lista, e só quando há agentes suficientes para a ordem importar.
+  if (profiles.length > 1) {
+    const view = document.createElement('div');
+    view.className = 'agents-viewbar';
+    const group = actionButton(s('Group by role'), 'ghost', () => {
+      agentsGroupByRole = !agentsGroupByRole;
+      renderSettings();
+    });
+    group.classList.add('agents-viewtoggle');
+    group.setAttribute('aria-pressed', String(agentsGroupByRole));
+    view.append(group);
+    blocks.push(view);
+  }
+
+  if (agentsGroupByRole) {
+    for (const [label, members] of groupAgentsByRole(profiles)) {
+      const title = document.createElement('span');
+      title.className = 'usage-title agents-group-title';
+      title.textContent = label;
+      blocks.push(title, ...members.map(renderAgentProfile));
+    }
   } else {
-    blocks.push(renderAgentForm(agentDraft, accounts));
+    blocks.push(fragment(profiles.map(renderAgentProfile)));
   }
   return blocks;
+}
+
+/** Agrupa pela etiqueta do papel; nomeados aparecem pelo próprio nome. */
+function groupAgentsByRole(
+  profiles: readonly AgentProfileSummary[],
+): readonly [string, readonly AgentProfileSummary[]][] {
+  const groups = new Map<string, AgentProfileSummary[]>();
+  for (const summary of profiles) {
+    const label = summary.customRole?.label ?? s(AGENT_ROLE_LABELS[summary.profile.role]);
+    const bucket = groups.get(label);
+    if (bucket === undefined) {
+      groups.set(label, [summary]);
+    } else {
+      bucket.push(summary);
+    }
+  }
+  return [...groups.entries()];
 }
 
 /**
@@ -2504,13 +3033,38 @@ function fragment(children: readonly Node[]): DocumentFragment {
 
 function renderAgentProfile(summary: AgentProfileSummary): HTMLElement {
   const profile = summary.profile;
-  const card = document.createElement('section');
+  // Colapsável como o card de conta: fechado é uma linha — nome, conta e
+  // papel —, e uma equipe grande cabe inteira na tela.
+  const card = document.createElement('details');
   card.className = `account agent-profile ${profile.enabled ? 'enabled' : 'disabled'}`;
+  card.open = expandedAgents.has(profile.id);
+  card.addEventListener('toggle', () => {
+    if (card.open) {
+      expandedAgents.add(profile.id);
+    } else {
+      expandedAgents.delete(profile.id);
+    }
+  });
 
-  const header = document.createElement('header');
+  const header = document.createElement('summary');
+  header.className = 'account-summary';
+
+  const text = document.createElement('div');
+  text.className = 'account-summary-text';
   const name = document.createElement('span');
   name.className = 'account-name';
   name.textContent = profile.name;
+  text.append(name);
+
+  const subtitleParts = [summary.providerName, summary.accountName].filter(
+    (part): part is string => part !== null && part !== '',
+  );
+  if (subtitleParts.length > 0) {
+    const subtitle = document.createElement('span');
+    subtitle.className = 'account-subtitle';
+    subtitle.textContent = subtitleParts.join(' · ');
+    text.append(subtitle);
+  }
 
   const role = document.createElement('span');
   role.className = 'account-state';
@@ -2518,7 +3072,7 @@ function renderAgentProfile(summary: AgentProfileSummary): HTMLElement {
   // justamente o que distingue este agente dos outros.
   role.textContent = summary.customRole?.label ?? s(AGENT_ROLE_LABELS[profile.role]);
 
-  header.append(name, role);
+  header.append(text, role);
   card.append(header);
 
   // `Agent → Provider → Account`: o documento exige que a conta usada nunca
@@ -2563,7 +3117,13 @@ function renderAgentProfile(summary: AgentProfileSummary): HTMLElement {
         }),
       ),
       actionButton(s('Remove'), 'ghost', () =>
-        post({ type: 'agentProfiles.remove', payload: { id: profile.id } }),
+        confirmDialog({
+          title: s('Remove agent'),
+          body: [s('The agent profile is deleted. The account it points to is not touched.')],
+          confirmLabel: s('Remove'),
+          danger: true,
+          onConfirm: () => post({ type: 'agentProfiles.remove', payload: { id: profile.id } }),
+        }),
       ),
     ),
   );
@@ -2576,7 +3136,6 @@ function renderAgentForm(
 ): HTMLElement {
   const form = document.createElement('section');
   form.className = 'settings-form';
-  form.append(sectionHeading(draft.id === null ? s('New agent profile') : sf('Edit {0}', draft.name)));
 
   const update = (patch: Partial<AgentDraft>, redraw = false): void => {
     agentDraft = { ...draft, ...patch };
@@ -2687,7 +3246,15 @@ function renderAgentForm(
         'Tools this agent may never use, even when they also appear in the allowed list. Denied always wins.',
       ),
     ),
-    skillsField(draft, update),
+    skillsSummaryField(
+      'agent',
+      (state?.skills.skills ?? []).length === 0
+        ? s('No skill found yet. Add one under .prometheon/skills/ and refresh.')
+        : sf('{0} skills available in this workspace.', (state?.skills.skills ?? []).length),
+      s(
+        'Procedures this agent may load during a run. Only the name and the trigger line stay in the prompt; the body is read when the agent asks for it.',
+      ),
+    ),
     field(
       s('Max concurrent sessions'),
       textInput({
@@ -2888,7 +3455,15 @@ function roleField(
           renderSettings();
         }),
         actionButton(s('Remove role'), 'link', () =>
-          post({ type: 'agentRoles.remove', payload: { id: chosen.id } }),
+          confirmDialog({
+            title: s('Remove role'),
+            body: [
+              s('Agents using this role start warning that it is missing; none of them is repointed.'),
+            ],
+            confirmLabel: s('Remove'),
+            danger: true,
+            onConfirm: () => post({ type: 'agentRoles.remove', payload: { id: chosen.id } }),
+          }),
         ),
       ),
     );
@@ -2896,57 +3471,202 @@ function roleField(
   return wrapper;
 }
 
+/** Lê e grava o CSV de skills do rascunho dono do seletor. */
+function readSkills(target: 'agent' | 'role'): string {
+  return (target === 'agent' ? agentDraft?.skills : roleDraft?.skills) ?? '';
+}
+
+function writeSkills(target: 'agent' | 'role', skills: string): void {
+  if (target === 'agent' && agentDraft !== null) {
+    agentDraft = { ...agentDraft, skills };
+  } else if (target === 'role' && roleDraft !== null) {
+    roleDraft = { ...roleDraft, skills };
+  }
+  renderSettings();
+}
+
 /**
- * Campo de skills. O texto continua sendo a fonte — é o que grava — e o
- * catálogo abaixo serve para marcar e desmarcar sem decorar nome de skill.
+ * Campo de skills dos formulários: as escolhidas como chips — clicar tira — e
+ * o seletor completo num diálogo. O CSV continua sendo o formato do rascunho;
+ * quem edita a lista é o diálogo, não um input de texto.
  */
-function skillsField(
-  draft: AgentDraft,
-  update: (patch: Partial<AgentDraft>, redraw?: boolean) => void,
-): HTMLElement {
+function skillsSummaryField(target: 'agent' | 'role', hint: string, help: string): HTMLElement {
+  const chosen = splitList(readSkills(target));
   const catalog = state?.skills.skills ?? [];
-  const chosen = splitList(draft.skills);
-  const wrapper = field(
-    s('Skills'),
+
+  const box = document.createElement('div');
+  box.className = 'skills-summary';
+  for (const name of chosen) {
+    const known = catalog.some((skill) => skill.name === name);
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = `skill-chip is-on${known ? '' : ' is-missing'}`;
+    chip.textContent = name;
+    chip.title = known ? s('Click to remove.') : s('Not in the catalog');
+    chip.addEventListener('click', (event) => {
+      event.preventDefault();
+      writeSkills(target, chosen.filter((item) => item !== name).join(', '));
+    });
+    box.append(chip);
+  }
+  if (chosen.length === 0) {
+    const none = document.createElement('span');
+    none.className = 'skills-summary-empty';
+    none.textContent = s('No skill enabled.');
+    box.append(none);
+  }
+  const open = actionButton(s('Select skills…'), 'ghost', () => {
+    skillsPickerTarget = target;
+    skillsPickerFilter = '';
+    renderSettings();
+  });
+  open.classList.add('skills-summary-open');
+  box.append(open);
+
+  // `div`, e não `label`: um label ativaria o primeiro botão embutido em
+  // qualquer clique no texto — e o primeiro botão embutido remove uma skill.
+  const wrapper = document.createElement('div');
+  wrapper.className = 'field';
+  const caption = document.createElement('span');
+  caption.className = 'field-label';
+  caption.textContent = s('Skills');
+  const hintNote = document.createElement('span');
+  hintNote.className = 'field-hint';
+  hintNote.textContent = hint;
+  wrapper.append(caption, box, hintNote);
+  wrapper.title = help;
+  return wrapper;
+}
+
+/**
+ * Seletor de skills em duas colunas — ativadas de um lado, disponíveis do
+ * outro; clicar move. As mudanças aplicam na hora; fechar nunca perde nada.
+ */
+function renderSkillsDialog(): void {
+  document.getElementById('skills-dialog')?.remove();
+  const target = skillsPickerTarget;
+  if (target === null || !isSettingsOpen()) {
+    return;
+  }
+
+  const chosen = splitList(readSkills(target));
+  const catalog = state?.skills.skills ?? [];
+  const filter = skillsPickerFilter.trim().toLowerCase();
+  const matches = (name: string): boolean => filter === '' || name.toLowerCase().includes(filter);
+
+  const overlay = document.createElement('div');
+  overlay.id = 'skills-dialog';
+  overlay.className = 'modal account-dialog skills-dialog';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', s('Skills'));
+  overlay.addEventListener('mousedown', (event) => {
+    // As escolhas aplicam na hora: fechar por fora não descarta nada.
+    if (event.target === overlay) {
+      closeSkillsPicker();
+    }
+  });
+
+  const card = document.createElement('div');
+  card.className = 'modal-card dialog-card roles-card skills-card';
+
+  const header = document.createElement('header');
+  header.className = 'modal-header';
+  const title = document.createElement('h2');
+  title.textContent = s('Skills');
+  header.append(title);
+  card.append(header);
+
+  const body = document.createElement('div');
+  body.className = 'roles-body';
+
+  body.append(
     textInput({
-      name: 'agent-skills',
-      value: draft.skills,
-      placeholder: 'test-driven-development, systematic-debugging',
-      onInput: (value) => update({ skills: value }),
+      name: 'skills-filter',
+      value: skillsPickerFilter,
+      placeholder: s('Filter skills…'),
+      onInput: (value) => {
+        skillsPickerFilter = value;
+        renderSettings();
+      },
     }),
-    catalog.length === 0
-      ? s('No skill found yet. Add one under .prometheon/skills/ and refresh.')
-      : sf('{0} skills available in this workspace.', catalog.length),
-    s(
-      'Procedures this agent may load during a run. Only the name and the trigger line stay in the prompt; the body is read when the agent asks for it.',
-    ),
   );
 
-  if (catalog.length > 0) {
-    const list = document.createElement('div');
-    list.className = 'skill-picker';
-    for (const skill of catalog) {
-      const marked = chosen.includes(skill.name);
-      const toggle = document.createElement('button');
-      toggle.type = 'button';
-      toggle.className = `skill-chip${marked ? ' is-on' : ''}${skill.supported ? '' : ' is-off'}`;
-      toggle.textContent = skill.name;
-      toggle.title = skill.supported
-        ? skill.description
-        : sf('{0} — does not run on this platform.', skill.description);
-      toggle.setAttribute('aria-pressed', String(marked));
-      toggle.addEventListener('click', (event) => {
-        event.preventDefault();
-        const next = marked
-          ? chosen.filter((name) => name !== skill.name)
-          : [...chosen, skill.name];
-        update({ skills: next.join(', ') }, true);
-      });
-      list.append(toggle);
-    }
-    wrapper.append(list);
+  const columns = document.createElement('div');
+  columns.className = 'skills-columns';
+  columns.append(
+    skillsColumn(s('Enabled'), chosen.filter(matches), catalog, true, (name) => {
+      writeSkills(target, chosen.filter((item) => item !== name).join(', '));
+    }),
+    skillsColumn(
+      s('Available'),
+      catalog
+        .map((skill) => skill.name)
+        .filter((name) => !chosen.includes(name))
+        .filter(matches),
+      catalog,
+      false,
+      (name) => {
+        writeSkills(target, [...chosen, name].join(', '));
+      },
+    ),
+  );
+  body.append(columns);
+  body.append(dialogActions(actionButton(s('Done'), 'primary', closeSkillsPicker)));
+  card.append(body);
+  overlay.append(card);
+  document.body.append(overlay);
+}
+
+/** Uma coluna do seletor: título com contagem e a pilha de skills clicáveis. */
+function skillsColumn(
+  label: string,
+  names: readonly string[],
+  catalog: PrometheonViewState['skills']['skills'],
+  enabledSide: boolean,
+  onPick: (name: string) => void,
+): HTMLElement {
+  const column = document.createElement('div');
+  column.className = 'skills-column';
+
+  const heading = document.createElement('span');
+  heading.className = 'usage-title';
+  heading.textContent = `${label} · ${names.length}`;
+  column.append(heading);
+
+  if (names.length === 0) {
+    const none = document.createElement('span');
+    none.className = 'skills-summary-empty';
+    none.textContent = enabledSide ? s('No skill enabled.') : s('Nothing else available.');
+    column.append(none);
+    return column;
   }
-  return wrapper;
+
+  for (const name of names) {
+    const skill = catalog.find((entry) => entry.name === name);
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `skills-item${skill === undefined ? ' is-missing' : ''}${skill?.supported === false ? ' is-off' : ''}`;
+    item.textContent = name;
+    item.title =
+      skill === undefined
+        ? s('Not in the catalog')
+        : skill.supported
+          ? skill.description
+          : sf('{0} — does not run on this platform.', skill.description);
+    item.addEventListener('click', (event) => {
+      event.preventDefault();
+      onPick(name);
+    });
+    column.append(item);
+  }
+  return column;
+}
+
+function closeSkillsPicker(): void {
+  skillsPickerTarget = null;
+  skillsPickerFilter = '';
+  renderSettings();
 }
 
 /**
@@ -3030,15 +3750,9 @@ function renderRoleForm(draft: RoleDraft): HTMLElement {
       undefined,
       s('Where this role is stored, and therefore who else gets it. Team roles need a connected Hub; project roles travel with the repository.'),
     ),
-    field(
-      s('Skills'),
-      textInput({
-        name: 'role-skills',
-        value: draft.skills,
-        placeholder: 'unreal-mcp, test-driven-development',
-        onInput: (value) => update({ skills: value }),
-      }),
-      s('Comma separated.'),
+    skillsSummaryField(
+      'role',
+      s('Skills every agent with this role starts with. Each agent can still add its own.'),
       s('Skills every agent with this role starts with. Each agent can still add its own.'),
     ),
     field(
@@ -5389,6 +6103,34 @@ document.addEventListener('keydown', (event) => {
   // A pergunta vem antes da configuração: é ela que está segurando o run.
   if (isQuestionOpen()) {
     cancelQuestion();
+    return;
+  }
+  // Camadas de cima primeiro: diálogo imperativo, papéis, conta nova, e só
+  // então a configuração — cada Esc desfaz exatamente um nível.
+  if (closeUiDialog()) {
+    return;
+  }
+  if (skillsPickerTarget !== null && isSettingsOpen()) {
+    closeSkillsPicker();
+    return;
+  }
+  if ((rolesDialogOpen || roleDraft !== null) && isSettingsOpen()) {
+    if (roleDraft !== null) {
+      // Primeiro o rascunho, depois o gerenciador: dois níveis, dois Esc.
+      roleDraft = null;
+      renderSettings();
+    } else {
+      closeRolesDialog();
+    }
+    return;
+  }
+  if (agentDraft !== null && isSettingsOpen()) {
+    agentDraft = null;
+    renderSettings();
+    return;
+  }
+  if (accountFormOpen && isSettingsOpen()) {
+    closeAccountDialog();
     return;
   }
   if (isSettingsOpen()) {

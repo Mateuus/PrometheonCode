@@ -178,6 +178,12 @@ export class PrometheonCore implements vscode.Disposable {
   /** Pergunta aberta do agente; some quando é respondida ou o run acaba. */
   private pendingQuestion: AgentQuestionRequest | null = null;
   private hubStatus: HubConnectionStatus = { state: 'local-only' };
+  /** Vigia do login de conta em andamento; o mais recente é o único que vale. */
+  private loginWatch: {
+    profileId: string;
+    timer: ReturnType<typeof setTimeout> | null;
+    deadline: number;
+  } | null = null;
   /** Projetos do Hub; só existem depois de uma conexão autenticada. */
   private webProjects: readonly ProjectOption[] = [];
   private speechStatus: SpeechStatus = {
@@ -1949,54 +1955,87 @@ export class PrometheonCore implements vscode.Disposable {
 
   async loginAccount(profileId: string): Promise<void> {
     await this.deps.profiles.login(profileId);
-    // O login roda num terminal e termina quando o usuário quiser; o estado é
-    // relido quando ele reabrir o painel de contas.
     this.deps.bus.emit('notification', {
       level: 'info',
-      message: 'Finish the sign-in in the terminal, then refresh the accounts panel.',
+      message: t('Finish the sign-in in the terminal. The account connects here by itself.'),
     });
+    this.watchLogin(profileId);
   }
 
-  async logoutAccount(profileId: string): Promise<void> {
-    const profile = await this.deps.profiles.require(profileId);
-    const confirm = 'Sign out';
-    const answer = await vscode.window.showWarningMessage(
-      `Sign out of "${profile.name}"?`,
-      { modal: true, detail: 'The isolated configuration directory is kept.' },
-      confirm,
-    );
-    if (answer !== confirm) {
+  /**
+   * Espera o OAuth do CLI concluir e reflete sozinho.
+   *
+   * O login roda num terminal que não é nosso: ninguém avisa quando a sessão
+   * nasce. O vigia relê o estado a cada poucos segundos até a conta aparecer
+   * autenticada — e aí o painel vira "Conectado" sem ninguém reabrir nada.
+   * Um probe só é agendado quando o anterior terminou, então um `auth status`
+   * lento nunca empilha consultas.
+   */
+  private watchLogin(profileId: string): void {
+    this.stopLoginWatch();
+    // Dez minutos cobrem navegador lento e dupla verificação; depois disso,
+    // parar de consultar o CLI é gentileza com quem desistiu no meio.
+    this.loginWatch = { profileId, timer: null, deadline: Date.now() + 10 * 60_000 };
+    this.scheduleLoginProbe();
+  }
+
+  private scheduleLoginProbe(): void {
+    const watch = this.loginWatch;
+    if (watch === null) {
       return;
     }
+    watch.timer = setTimeout(() => {
+      void this.probeLogin();
+    }, 4_000);
+  }
+
+  private async probeLogin(): Promise<void> {
+    const watch = this.loginWatch;
+    if (watch === null) {
+      return;
+    }
+    if (Date.now() > watch.deadline) {
+      this.stopLoginWatch();
+      return;
+    }
+    await this.refreshAccounts();
+    const account = this.accounts.find((item) => item.profileId === watch.profileId);
+    if (account?.authenticated === true) {
+      this.stopLoginWatch();
+      this.deps.bus.emit('notification', {
+        level: 'info',
+        message: t('Account "{0}" is signed in.', account.name),
+      });
+    } else {
+      this.scheduleLoginProbe();
+    }
+    await this.publish();
+  }
+
+  private stopLoginWatch(): void {
+    if (this.loginWatch !== null && this.loginWatch.timer !== null) {
+      clearTimeout(this.loginWatch.timer);
+    }
+    this.loginWatch = null;
+  }
+
+  /**
+   * Sai da conta. A confirmação acontece no diálogo da própria interface,
+   * antes de a mensagem chegar aqui — repetir a pergunta num modal do editor
+   * seria perguntar duas vezes a mesma coisa.
+   */
+  async logoutAccount(profileId: string): Promise<void> {
     await this.deps.profiles.logout(profileId);
     await this.refreshAccounts();
     await this.publish();
   }
 
-  /** Remove o perfil da lista. As credenciais em disco não são tocadas. */
+  /**
+   * Remove o perfil da lista. As credenciais em disco não são tocadas, e a
+   * confirmação — com o caminho preservado e os agentes que ficarão órfãos —
+   * é o diálogo da interface quem faz.
+   */
   async removeAccount(profileId: string): Promise<void> {
-    const profile = await this.deps.profiles.require(profileId);
-    // Agentes vinculados não são reapontados para outra conta: eles passam a
-    // avisar que o binding quebrou, e é isso que o diálogo antecipa.
-    const bound = this.agentProfiles.filter(
-      (summary) => summary.profile.providerProfileId === profileId,
-    );
-    const boundDetail =
-      bound.length === 0
-        ? ''
-        : ` ${bound.length} agent profile(s) still point to it (${bound.map((summary) => summary.profile.name).join(', ')}) and will stop until you bind them to another account.`;
-    const confirm = 'Remove profile';
-    const answer = await vscode.window.showWarningMessage(
-      `Remove the profile "${profile.name}" from Prometheon?`,
-      {
-        modal: true,
-        detail: `The credentials in ${profile.configDirectory} are left untouched — delete that folder yourself if you also want to drop the sign-in.${boundDetail}`,
-      },
-      confirm,
-    );
-    if (answer !== confirm) {
-      return;
-    }
     await this.deps.profiles.remove(profileId);
     await this.refreshAccounts();
     await this.publish();
@@ -2459,6 +2498,7 @@ export class PrometheonCore implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.stopLoginWatch();
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
