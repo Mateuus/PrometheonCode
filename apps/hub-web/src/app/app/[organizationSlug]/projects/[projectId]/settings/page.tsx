@@ -6,6 +6,7 @@ import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/status-badge';
 import { DataView } from '@/components/states/data-view';
 import { ForcedStateNotice } from '@/components/states/forced-state-notice';
+import { ProjectBehaviorForm } from '@/components/forms/project-behavior-form';
 import { UpdateProjectForm } from '@/components/forms/project-settings-form';
 import { getOrganizationBySlug, getProject } from '@/lib/api/queries';
 import { applyForcedState, devForcedState } from '@/lib/api/state-override';
@@ -53,13 +54,21 @@ export default async function ProjectSettingsPage({
         {(data) => (
           <div className="max-w-2xl space-y-5">
             {canConfigure ? (
-              <UpdateProjectForm
-                projectId={data.id}
-                name={data.name}
-                description={data.description ?? ''}
-                version={data.version}
-                returnTo={`${base}/settings`}
-              />
+              <>
+                <UpdateProjectForm
+                  projectId={data.id}
+                  name={data.name}
+                  description={data.description ?? ''}
+                  version={data.version}
+                  returnTo={`${base}/settings`}
+                />
+                <ProjectBehaviorForm
+                  projectId={data.id}
+                  settings={data.settings}
+                  version={data.version}
+                  projectPath={base}
+                />
+              </>
             ) : (
               <Alert title={t('projectSettings.readOnly')} />
             )}

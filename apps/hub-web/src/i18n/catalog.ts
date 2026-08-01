@@ -382,10 +382,26 @@ export const CATALOG = {
   'projectSettings.autonomy': 'Autonomy',
   'projectSettings.autonomy.auto': 'Automatic',
   'projectSettings.autonomy.manual': 'Manual',
+  // Espelha o comentário do contrato: bypass nunca vira padrão de projeto.
+  'projectSettings.autonomy.bypassNote':
+    'Bypass is not an option here: it is local and temporary by design, and never becomes a project default.',
   'projectSettings.requireReview': 'Review required',
+  'projectSettings.requireReview.hint':
+    'A person must approve changes before they are applied to code.',
   'projectSettings.remoteAgents': 'Remote agents allowed',
+  'projectSettings.remoteAgents.hint':
+    'Members can start remote agents for this project from the Hub.',
   'projectSettings.contextBudget': 'Context budget',
+  'projectSettings.contextBudget.hint': 'Per-conversation token ceiling, up to 10,000,000 tokens.',
   'projectSettings.tokens': '{count} tokens',
+  'projectSettings.retention': 'Conversation retention',
+  'projectSettings.retention.hint':
+    'In days. Leave empty to follow the organization retention policy.',
+  'projectSettings.saveBehaviour': 'Save behaviour',
+  'projectSettings.error.contextBudget':
+    'Context budget must be a whole number between 1 and 10,000,000 tokens.',
+  'projectSettings.error.retention':
+    'Retention must be between 1 and 3,650 days, or empty to follow the organization policy.',
   'projectSettings.readOnly': 'Your role can read these settings but not change them.',
   'projectSettings.repositoryUnavailable':
     'Connecting a repository is not available from the Hub yet.',
