@@ -15,6 +15,7 @@
  * credencial — e o `CLAUDE.md` proíbe segredo em arquivo do repositório.
  */
 
+import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -44,7 +45,9 @@ export function createCaptureTransport(
 
   async function ensureDirectory(): Promise<void> {
     if (!ensured) {
-      await mkdir(directory, { recursive: true });
+      // `0700` porque o diretório padrão é o temporário do sistema, que é
+      // compartilhado com todo mundo na máquina.
+      await mkdir(directory, { recursive: true, mode: 0o700 });
       ensured = true;
     }
   }
@@ -54,8 +57,12 @@ export function createCaptureTransport(
     async send(message: MailMessage, from: string): Promise<MailResult> {
       await ensureDirectory();
 
+      // O sufixo sorteado não é enfeite: sem ele o nome do arquivo é
+      // adivinhável a partir do horário e do destinatário, e quem adivinha o
+      // nome num diretório compartilhado pode plantar um link ali antes de nós.
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const base = join(directory, `${stamp}_${message.kind}_${slugForFile(message.to)}`);
+      const unico = randomBytes(6).toString('hex');
+      const base = join(directory, `${stamp}_${message.kind}_${slugForFile(message.to)}_${unico}`);
       const raw = [
         `From: ${from}`,
         `To: ${message.to}`,
@@ -67,7 +74,12 @@ export function createCaptureTransport(
         message.text,
       ].join('\r\n');
 
-      await writeFile(`${base}.eml`, raw, 'utf8');
+      // `mode` restringe a leitura ao dono; `wx` recusa escrever se o caminho
+      // já existir, que é como um symlink plantado desviaria o conteúdo. A
+      // mensagem carrega token de uso único: isto é credencial em disco.
+      const exclusivo = { encoding: 'utf8', mode: 0o600, flag: 'wx' } as const;
+
+      await writeFile(`${base}.eml`, raw, exclusivo);
       await writeFile(
         `${base}.json`,
         JSON.stringify(
@@ -84,7 +96,7 @@ export function createCaptureTransport(
           null,
           2,
         ),
-        'utf8',
+        exclusivo,
       );
 
       // O link é o único campo impresso: ele é o que destrava o fluxo em

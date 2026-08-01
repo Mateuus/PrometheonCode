@@ -49,7 +49,10 @@ export function secretEntropyBytes(value: string): number {
 
     // O decodificador do Node é tolerante: só confiamos no resultado quando o
     // tamanho bate com o esperado para a codificação.
-    const withoutPadding = value.replace(/=+$/, '');
+    // `={1,2}` e não `=+`: o padding de base64 tem no máximo dois sinais — o
+    // `BASE64_PATTERN` acima já garante isso — e o quantificador aberto dava
+    // backtracking quadrático numa string cheia de `=`.
+    const withoutPadding = value.replace(/={1,2}$/, '');
     const expected = Math.floor((withoutPadding.length * 3) / 4);
 
     if (decoded.length === expected && decoded.length > 0) {

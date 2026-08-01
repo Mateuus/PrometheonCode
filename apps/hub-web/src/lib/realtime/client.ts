@@ -191,7 +191,14 @@ function handleMessage(raw: string): void {
       // Buraco na retomada: o que passou não chega mais por aqui.
       emit({ kind: 'resync' });
     }
-    const interval = typeof typed.heartbeatIntervalMs === 'number' ? typed.heartbeatIntervalMs : 30_000;
+    // O intervalo chega pela rede. Um valor absurdo — zero, negativo, NaN —
+    // transformaria o heartbeat em laço apertado de `send`, então ele fica
+    // preso a uma faixa sã antes de virar timer.
+    const proposto =
+      typeof typed.heartbeatIntervalMs === 'number' && Number.isFinite(typed.heartbeatIntervalMs)
+        ? Math.trunc(typed.heartbeatIntervalMs)
+        : 30_000;
+    const interval = Math.min(Math.max(proposto, 5_000), 300_000);
     clearTimers();
     heartbeatTimer = setInterval(() => {
       if (socket?.readyState === WebSocket.OPEN) {

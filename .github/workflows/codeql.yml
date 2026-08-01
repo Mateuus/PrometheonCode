@@ -45,6 +45,13 @@ jobs:
           languages: ${{ matrix.language }}
           # security-extended cobre mais padrões de injeção e de fluxo de dados.
           queries: security-extended
+          # O bundle é gerado pelo passo de compilação logo abaixo. Analisá-lo
+          # repete cada achado do fonte num arquivo que ninguém revisa nem
+          # versiona.
+          config: |
+            paths-ignore:
+              - extension/dist
+              - extension/out
 
       - name: Instalar dependências
         run: npm run ci:install

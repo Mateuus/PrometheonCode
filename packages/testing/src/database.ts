@@ -31,7 +31,12 @@ function temporaryName(prefix: string): string {
 export async function createDisposableDatabase(
   prefix = 'prometheon_test',
 ): Promise<DisposableDatabase> {
-  if (!/^prometheon_[a-z0-9_]*test[a-z0-9_]*$/i.test(prefix)) {
+  // Duas checagens em vez de uma regex com dois `[a-z0-9_]*` em volta de
+  // `test`: aquela forma era ambígua e fazia o motor voltar atrás em cada
+  // repetição de "test". Estas são lineares e dizem a mesma coisa.
+  const formaValida = /^prometheon_[a-z0-9_]*$/i.test(prefix);
+
+  if (!formaValida || !prefix.toLowerCase().includes('test')) {
     throw new Error(
       `Prefixo de banco de teste inválido: "${prefix}". Ele precisa começar com "prometheon_" e conter "test".`,
     );
