@@ -1,0 +1,11 @@
+{
+  // Typecheck do preview com as mesmas regras da extensão. O esbuild não
+  // valida tipos, então é este projeto que garante que a fixture continua
+  // casando com o PrometheonViewState real: `npx tsc -p preview`.
+  "extends": "../tsconfig.json",
+  "include": ["./**/*.ts", "../src/**/*.ts"],
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".."
+  }
+}

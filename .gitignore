@@ -31,3 +31,6 @@ graphify-out/
 
 # Cache do Python (motor de ditado em extension/media/speech).
 __pycache__/
+
+# Log do servidor de preview da webview (ferramenta local de design)
+extension/preview-server.log

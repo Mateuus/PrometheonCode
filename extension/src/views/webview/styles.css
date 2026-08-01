@@ -26,6 +26,14 @@
   --prom-surface-input: var(--vscode-input-background);
   --prom-border: var(--vscode-panel-border);
   --prom-text-dim: var(--vscode-descriptionForeground, var(--vscode-foreground));
+
+  /* Camadas de profundidade: `raised` é o cartão sobre a superfície, `sunken`
+     o campo dentro do cartão. No tema claro, os controles do próprio VS Code
+     cumprem os papéis; o escuro redefine logo abaixo. */
+  --prom-surface-raised: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  --prom-surface-sunken: var(--vscode-input-background);
+  --prom-border-soft: var(--vscode-panel-border);
+  --prom-accent-tint: rgba(124, 58, 237, 0.14);
 }
 
 body.vscode-dark,
@@ -34,10 +42,38 @@ body.vscode-high-contrast {
   --prom-surface-input: #1c1c29;
   --prom-border: #29293a;
   --prom-text-dim: var(--prom-gray);
+  --prom-surface-raised: #1d1d2a;
+  --prom-surface-sunken: #131320;
+  --prom-border-soft: rgba(255, 255, 255, 0.07);
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Rolagem discreta em todo o painel: trilho invisível, polegar que só se
+   afirma sob o cursor. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 148, 170, 0.22);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 148, 170, 0.4);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
 
 /* `display` vindo de uma classe vence o `hidden` do agente de usuário, e vários
@@ -234,12 +270,30 @@ body {
 }
 
 .hub-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 0.8em;
-  padding: 2px 6px;
+  padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid var(--prom-border);
   opacity: 0.85;
   white-space: nowrap;
+}
+
+/* O ponto diz o estado antes de a palavra ser lida — herda a cor do texto. */
+.hub-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.9;
+}
+
+/* Antes do primeiro snapshot o badge não tem estado: nada a exibir. */
+.hub-badge:empty {
+  display: none;
 }
 
 /* Ciano é a cor de conexão e atividade em toda a interface. */
@@ -1229,7 +1283,9 @@ button.ghost:hover:not(:disabled) {
   align-items: center;
   justify-content: center;
   padding: 12px;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(6, 6, 12, 0.62);
+  /* O desfoque separa o modal do chat sem escurecer tudo até o preto. */
+  backdrop-filter: blur(5px);
 }
 
 .modal-card {
@@ -1237,10 +1293,12 @@ button.ghost:hover:not(:disabled) {
   flex-direction: column;
   width: min(560px, 100%);
   max-height: 100%;
-  border-radius: 12px;
-  border: 1px solid var(--prom-border);
+  border-radius: 14px;
+  border: 1px solid var(--prom-border-soft);
   background: var(--prom-surface);
-  box-shadow: 0 16px 40px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.5));
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 24px 60px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
 
@@ -1253,14 +1311,17 @@ button.ghost:hover:not(:disabled) {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 12px 8px;
+  padding: 11px 14px;
   flex: 0 0 auto;
+  border-bottom: 1px solid var(--prom-border-soft);
 }
 
 .modal-header h2 {
   flex: 1 1 auto;
   margin: 0;
-  font-size: 1.05em;
+  font-size: 0.95em;
+  font-weight: 650;
+  letter-spacing: 0.01em;
 }
 
 /* A navegação é sempre uma barra lateral: as seções ficam à vista de uma vez,
@@ -1276,28 +1337,29 @@ button.ghost:hover:not(:disabled) {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   width: 116px;
-  padding: 0 8px 12px;
+  padding: 10px 8px 12px;
   overflow-y: auto;
-  border-right: 1px solid var(--prom-border);
+  border-right: 1px solid var(--prom-border-soft);
 }
 
 .settings-tab {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px;
+  gap: 7px;
   flex: 0 0 auto;
   width: 100%;
-  padding: 5px 9px;
+  padding: 5px 8px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--vscode-foreground);
-  font-size: 0.86em;
-  opacity: 0.75;
+  font-size: 0.84em;
+  opacity: 0.68;
   white-space: nowrap;
+  transition: background 0.12s ease, opacity 0.12s ease;
 }
 
 .settings-tab:hover:not(:disabled) {
@@ -1305,10 +1367,9 @@ button.ghost:hover:not(:disabled) {
   opacity: 1;
 }
 
-/* Seção aberta marcada com o roxo da marca, nunca com a seleção azul do tema. */
+/* Seção aberta é uma pílula no roxo da marca, nunca a seleção azul do tema. */
 .settings-tab.active {
-  background: var(--vscode-toolbar-hoverBackground);
-  box-shadow: inset 2px 0 0 var(--prom-accent);
+  background: var(--prom-accent-tint);
   opacity: 1;
 }
 
@@ -1318,7 +1379,7 @@ button.ghost:hover:not(:disabled) {
 }
 
 .settings-tab.active .settings-tab-icon {
-  color: var(--prom-accent);
+  color: var(--prom-accent-hover);
   opacity: 1;
 }
 
@@ -1326,10 +1387,10 @@ button.ghost:hover:not(:disabled) {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px 12px 14px;
+  padding: 12px 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 /* Sem isto o conteúdo comprime em vez de rolar, e blocos de uma linha só —
@@ -1349,10 +1410,15 @@ button.ghost:hover:not(:disabled) {
   }
 }
 
+/* Título de seção como micro-rótulo, à la Linear: pequeno, caixa alta e
+   espaçado. A hierarquia vem do contraste com o conteúdo, não do tamanho. */
 .settings-heading h3 {
   margin: 0;
-  font-size: 0.98em;
-  font-weight: 600;
+  font-size: 0.74em;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--prom-text-dim);
 }
 
 .settings-note {
@@ -1385,10 +1451,10 @@ button.ghost:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 10px;
+  padding: 12px;
   border-radius: 10px;
-  border: 1px solid var(--prom-border);
-  background: var(--prom-surface-input);
+  border: 1px solid var(--prom-border-soft);
+  background: var(--prom-surface-raised);
 }
 
 .field {
@@ -1549,19 +1615,20 @@ button.ghost:hover:not(:disabled) {
 
 .field-input {
   width: 100%;
-  padding: 5px 8px;
-  border-radius: var(--am-radius);
-  border: 1px solid var(--vscode-input-border, var(--prom-border));
-  background: var(--prom-surface);
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--prom-border-soft);
+  background: var(--prom-surface-sunken);
   color: var(--vscode-input-foreground);
   font-family: inherit;
   font-size: 0.92em;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
 .field-input:focus-visible {
   outline: none;
   border-color: var(--prom-accent);
-  box-shadow: 0 0 0 2px var(--prom-accent-glow);
+  box-shadow: 0 0 0 3px var(--prom-accent-glow);
 }
 
 .field-input:disabled {
@@ -1587,10 +1654,10 @@ button.ghost:hover:not(:disabled) {
   width: 100%;
   max-width: 100%;
   justify-content: flex-start;
-  padding: 5px 8px;
-  border-radius: var(--am-radius);
-  border: 1px solid var(--vscode-input-border, var(--prom-border));
-  background: var(--prom-surface);
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--prom-border-soft);
+  background: var(--prom-surface-sunken);
   font-size: 0.92em;
   opacity: 1;
 }
@@ -1668,32 +1735,413 @@ button.ghost:hover:not(:disabled) {
   color: var(--prom-activity);
 }
 
-.account {
+/* Título de seção com uma ação à direita ("Add account"): o rótulo respira e
+   o botão fica onde o olho procura, sem um formulário permanente na tela. */
+.settings-heading-row {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  border-radius: 10px;
-  border: 1px solid var(--prom-border);
-  background: var(--prom-surface-input);
+  align-items: flex-start;
+  gap: 8px 10px;
+  /* Num corredor muito estreito o botão desce para baixo do texto, inteiro,
+     em vez de encolher até virar reticências. */
+  flex-wrap: wrap;
 }
 
-.account header {
+.settings-heading-row .settings-heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.settings-heading-row .primary,
+.settings-heading-row .ghost {
+  flex: 0 0 auto;
+}
+
+.settings-heading-row .ghost {
+  border-color: var(--prom-border-soft);
+  opacity: 0.95;
+}
+
+/* Card de conta colapsável: fechado é uma linha — nome e estado —, e a lista
+   inteira cabe na tela; aberto mostra fatos, uso e ações. */
+.account {
+  display: block;
+  border-radius: 10px;
+  border: 1px solid var(--prom-border-soft);
+  background: var(--prom-surface-raised);
+  overflow: hidden;
+}
+
+.account > *:not(.account-summary) {
+  margin: 8px 11px 0;
+}
+
+.account > *:last-child:not(.account-summary) {
+  margin-bottom: 11px;
+}
+
+.account-summary {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 9px 11px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.account-summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Chevron desenhado com bordas: sem asset, herda a cor e gira ao abrir. */
+.account-summary::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-right: 1.4px solid var(--prom-text-dim);
+  border-bottom: 1.4px solid var(--prom-text-dim);
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.account[open] > .account-summary::before {
+  transform: rotate(45deg);
+}
+
+.account-summary:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.account[open] > .account-summary {
+  border-bottom: 1px solid var(--prom-border-soft);
+}
+
+.account-summary-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .account-name {
-  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
 }
 
-/* Ocupa exatamente o lugar do nome, para renomear não sacudir o card. */
-.account-name-input {
-  flex: 1 1 auto;
+/* Provedor e e-mail no card fechado: identifica a conta sem abri-la. */
+.account-subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78em;
+  color: var(--prom-text-dim);
+}
+
+/* Estado vazio de agentes: um cartão que ensina o modelo antes de listar. O
+   tracejado diz "aqui ainda não mora nada" sem parecer erro. */
+.settings-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 22px 16px;
+  border-radius: 12px;
+  border: 1px dashed var(--prom-border);
+  background: var(--prom-surface-raised);
+  text-align: center;
+}
+
+.settings-hero-icon {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  background: var(--prom-accent-tint);
+  color: var(--prom-accent-hover);
+}
+
+.settings-hero-icon svg {
+  width: 19px;
+  height: 19px;
+}
+
+.settings-hero-title {
+  margin: 0;
+  font-size: 0.95em;
+  font-weight: 650;
+}
+
+.settings-hero-body {
+  margin: 0;
+  max-width: 300px;
+  font-size: 0.83em;
+  line-height: 1.5;
+  color: var(--prom-text-dim);
+}
+
+.settings-hero-chain {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.settings-hero-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--prom-border-soft);
+  background: var(--prom-surface-sunken);
+  font-size: 0.78em;
+}
+
+.settings-hero-chip svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0.8;
+}
+
+.settings-hero-arrow {
+  color: var(--prom-text-dim);
+  font-size: 0.8em;
+}
+
+.settings-hero-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+/* Diálogo de conta nova, empilhado sobre a configuração. */
+.account-dialog {
+  z-index: 60;
+}
+
+.account-dialog .dialog-card {
+  width: min(380px, 100%);
+}
+
+/* Dentro do diálogo, o formulário é o conteúdo — dispensa a própria moldura. */
+.account-dialog .settings-form {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 12px 14px 14px;
+}
+
+/* Gerenciador de papéis: mais largo que o de conta — lista e formulário. Fica
+   acima do diálogo de agente, que pode tê-lo aberto por dentro. */
+.roles-dialog {
+  z-index: 62;
+}
+
+.roles-dialog .roles-card {
+  width: min(440px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Diálogo de agente: o formulário mais alto da configuração rola por dentro. */
+.agent-dialog .agent-card {
+  width: min(460px, 100%);
+}
+
+/* Seletor de skills: acima de qualquer formulário que o tenha aberto. */
+.skills-dialog {
+  z-index: 64;
+}
+
+.skills-dialog .skills-card {
+  width: min(480px, 100%);
+}
+
+/* Resumo no formulário: as escolhidas como chips e o botão de abrir. */
+.skills-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.skills-summary-empty {
+  font-size: 0.82em;
+  color: var(--prom-text-dim);
+}
+
+.skills-summary-open {
+  font-size: 0.8em;
+  border-color: var(--prom-border-soft);
+}
+
+.skill-chip.is-missing {
+  border-color: rgba(255, 200, 87, 0.55);
+  color: var(--prom-alert);
+}
+
+/* Duas colunas do seletor; num corredor estreito elas empilham. */
+.skills-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.skills-column {
   min-width: 0;
-  font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 9px;
+  border: 1px solid var(--prom-border-soft);
+  background: var(--prom-surface-sunken);
+}
+
+.skills-item {
+  width: 100%;
+  text-align: left;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--vscode-foreground);
+  font-size: 0.84em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skills-item:hover:not(:disabled) {
+  background: var(--prom-accent-tint);
+  border-color: transparent;
+}
+
+.skills-item.is-off {
+  opacity: 0.55;
+}
+
+.skills-item.is-missing {
+  color: var(--prom-alert);
+}
+
+.roles-body {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 14px;
+}
+
+.role-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--prom-border-soft);
+  background: var(--prom-surface-raised);
+}
+
+.role-row-icon {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--prom-accent-tint);
+  color: var(--prom-accent-hover);
+}
+
+.role-row-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.role-row-actions .danger {
+  color: var(--vscode-errorForeground);
+}
+
+.role-row-actions .danger:hover:not(:disabled) {
+  border-color: var(--vscode-errorForeground);
+}
+
+/* Barra de visão da lista de agentes: modos de ver, alinhados à direita. */
+.agents-viewbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.agents-viewtoggle {
+  font-size: 0.78em;
+  padding: 3px 9px;
+  border-color: var(--prom-border-soft);
+  opacity: 0.85;
+}
+
+.agents-viewtoggle[aria-pressed='true'] {
+  background: var(--prom-accent-tint);
+  border-color: transparent;
+  color: var(--prom-accent-hover);
+  opacity: 1;
+}
+
+/* Título de um grupo de agentes por papel, no mesmo tom dos micro-rótulos. */
+.agents-group-title {
+  margin-top: 4px;
+}
+
+/* Confirmação: a camada mais alta de todas — nada clica através dela. */
+.confirm-dialog {
+  z-index: 70;
+}
+
+.confirm-card {
+  width: min(340px, 100%);
+}
+
+.confirm-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 0;
+}
+
+.confirm-body p {
+  margin: 0;
+  font-size: 0.86em;
+  line-height: 1.5;
+  color: var(--prom-text-dim);
+  overflow-wrap: anywhere;
+}
+
+.confirm-actions {
+  padding: 12px 14px 14px;
+}
+
+/* Confirmar uma destruição é vermelho, não roxo: a cor repete o aviso. */
+.confirm-actions .primary.danger {
+  background: var(--vscode-errorForeground);
+  border-color: transparent;
+  color: #ffffff;
+}
+
+.confirm-actions .primary.danger:hover:not(:disabled) {
+  filter: brightness(1.1);
 }
 
 .account-state {
@@ -1733,24 +2181,129 @@ button.ghost:hover:not(:disabled) {
   overflow-wrap: anywhere;
 }
 
+/* Identidade do login: avatar com a inicial, e-mail em destaque, método e
+   organização apagados, plano como selo à direita. */
+.account-identity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.account-avatar {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--prom-accent-tint);
+  color: var(--prom-accent-hover);
+  font-size: 0.85em;
+  font-weight: 650;
+}
+
+.account-identity-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.account-identity-primary {
+  font-size: 0.92em;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-identity-secondary {
+  font-size: 0.78em;
+  color: var(--prom-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-plan {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--prom-accent-tint);
+  color: var(--prom-accent-hover);
+  font-size: 0.72em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .usage {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-top: 6px;
-  border-top: 1px solid var(--prom-border);
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px solid var(--prom-border-soft);
 }
 
 .usage-title {
-  font-size: 0.76em;
+  font-size: 0.72em;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   color: var(--prom-text-dim);
 }
 
+/* Três janelas de uso lado a lado; dentro de cada uma, entrada sobre saída.
+   `auto-fit` é a responsividade: num painel estreito as janelas quebram em
+   duas ou uma coluna em vez de esmagar os rótulos. */
+.usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 6px;
+}
+
+.usage-cell {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--prom-border-soft);
+  background: var(--prom-surface-sunken);
+}
+
+.usage-cell-value {
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.usage-cell-out {
+  color: var(--prom-text-dim);
+}
+
+.usage-cell-label {
+  margin-top: 2px;
+  font-size: 0.66em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--prom-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* O caminho é referência técnica: bloco rebaixado, fonte do editor. */
 .account-directory {
   display: block;
-  font-size: 0.76em;
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--prom-border-soft);
+  background: var(--prom-surface-sunken);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.74em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1761,6 +2314,17 @@ button.ghost:hover:not(:disabled) {
   display: flex;
   gap: 4px;
   flex-wrap: wrap;
+}
+
+/* Remover é destrutivo: cor de perigo e distância das ações de rotina. */
+.account-actions .danger {
+  margin-left: auto;
+  color: var(--vscode-errorForeground);
+}
+
+.account-actions .danger:hover:not(:disabled) {
+  border-color: var(--vscode-errorForeground);
+  opacity: 1;
 }
 
 /* ---------- Visualizador de imagem ---------- */

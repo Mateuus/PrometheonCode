@@ -84,19 +84,31 @@ export class ClaudeCodeAdapter implements ProviderAdapter {
   }
 
   async getAuthStatus(profile: ProviderProfile): Promise<AuthStatus> {
+    const first = await this.tryAuthStatus(profile);
+    if (first !== null) {
+      return first;
+    }
+    // Uma releitura cobre o tropeço transitório — CLI ocupado, antivírus
+    // segurando o spawn — sem transformar uma sessão OAuth válida em
+    // "desconectado" na interface por causa de um blip.
+    const second = await this.tryAuthStatus(profile);
+    return (
+      second ?? {
+        authenticated: false,
+        message: 'Could not read the authentication status of this profile.',
+      }
+    );
+  }
+
+  /** Uma tentativa de `auth status`. `null` é falha sem resposta utilizável. */
+  private async tryAuthStatus(profile: ProviderProfile): Promise<AuthStatus | null> {
     try {
       const stdout = await this.exec(profile, ['auth', 'status', '--json']);
       return parseAuthStatus(stdout);
     } catch (error) {
       // Não autenticado sai com código 1 e ainda imprime o JSON no stdout.
       const stdout = stdoutOf(error);
-      if (stdout !== null) {
-        return parseAuthStatus(stdout);
-      }
-      return {
-        authenticated: false,
-        message: 'Could not read the authentication status of this profile.',
-      };
+      return stdout === null ? null : parseAuthStatus(stdout);
     }
   }
 

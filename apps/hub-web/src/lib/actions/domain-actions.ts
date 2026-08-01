@@ -3,7 +3,12 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { ORGANIZATION_ROLES, TASK_PRIORITIES, TASK_STATUSES } from '@prometheon/contracts';
+import {
+  ORGANIZATION_ROLES,
+  TASK_PRIORITIES,
+  TASK_STATUSES,
+  projectSettingsSchema,
+} from '@prometheon/contracts';
 import {
   acceptInvitation,
   createConversation,
@@ -108,6 +113,77 @@ export async function updateProjectAction(
   }
 
   revalidatePath(field(formData, 'returnTo') || '/app');
+  return formSuccess('projects.saved');
+}
+
+/**
+ * Salva o comportamento do projeto — o objeto `settings` inteiro.
+ *
+ * A entrada é validada com o próprio `projectSettingsSchema` do contrato antes
+ * de ir à rede: o que a Hub API recusaria nem chega a sair daqui, e os dois
+ * campos digitados à mão ganham erro por campo em vez de uma recusa genérica.
+ * Checkbox desmarcado não viaja no `FormData`, então a ausência é o `false`.
+ */
+export async function updateProjectBehaviorAction(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const projectId = field(formData, 'projectId');
+  const version = z.coerce.number().int().safeParse(field(formData, 'version'));
+  if (!version.success) {
+    return formError('auth.error.generic');
+  }
+
+  const retention = field(formData, 'conversationRetentionDays');
+  const settings = projectSettingsSchema.safeParse({
+    defaultWorkMode: field(formData, 'defaultWorkMode'),
+    defaultAutonomy: field(formData, 'defaultAutonomy'),
+    requireReview: formData.get('requireReview') !== null,
+    allowRemoteAgents: formData.get('allowRemoteAgents') !== null,
+    // `Number` em vez de coerção por campo: assim NaN, decimal e fora do teto
+    // reprovam no schema com o `path` certo, e o erro cai no campo culpado.
+    contextBudgetTokens: Number(field(formData, 'contextBudgetTokens')),
+    // Vazio é escolha, não esquecimento: `null` segue a política da organização.
+    conversationRetentionDays: retention === '' ? null : Number(retention),
+  });
+
+  if (!settings.success) {
+    const fieldErrors: NonNullable<FormState['fieldErrors']> = {};
+    for (const issue of settings.error.issues) {
+      if (issue.path[0] === 'contextBudgetTokens') {
+        fieldErrors.contextBudgetTokens = 'projectSettings.error.contextBudget';
+      } else if (issue.path[0] === 'conversationRetentionDays') {
+        fieldErrors.conversationRetentionDays = 'projectSettings.error.retention';
+      }
+    }
+    // Selects e checkboxes não produzem valor inválido sem adulteração; se foi
+    // o caso, o genérico basta.
+    return formError(
+      fieldErrors.contextBudgetTokens ??
+        fieldErrors.conversationRetentionDays ??
+        'auth.error.generic',
+      fieldErrors,
+    );
+  }
+
+  const updated = await updateProject(projectId, {
+    settings: settings.data,
+    version: version.data,
+  });
+  if (!updated.ok) {
+    // Concorrência otimista: a mensagem manda recarregar para ler a versão nova.
+    return updated.code === 'VERSION_CONFLICT'
+      ? formError('projects.error.versionConflict')
+      : translateFailure(updated);
+  }
+
+  // A visão geral repete estes valores no card de comportamento; revalidar só a
+  // página do formulário deixaria aquele card mostrando o passado.
+  const projectPath = field(formData, 'projectPath');
+  if (projectPath !== '') {
+    revalidatePath(projectPath);
+    revalidatePath(`${projectPath}/settings`);
+  }
   return formSuccess('projects.saved');
 }
 

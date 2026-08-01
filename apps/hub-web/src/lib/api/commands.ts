@@ -29,6 +29,7 @@ import type {
   OrganizationRole,
   PlanLimits,
   Project,
+  ProjectSettings,
   Task,
   TaskPriority,
   TaskStatus,
@@ -170,9 +171,22 @@ export async function createProject(
   });
 }
 
+/**
+ * Edita o projeto (`PATCH /v1/projects/:id`), campos gerais e `settings`.
+ *
+ * `version` é obrigatória porque a rota usa concorrência otimista: mandar a
+ * versão lida faz a API devolver `VERSION_CONFLICT` quando alguém salvou antes,
+ * em vez de sobrescrever em silêncio. `settings` é parcial no contrato; o que
+ * não for enviado fica como está.
+ */
 export async function updateProject(
   projectId: string,
-  input: { name?: string; description?: string | null; version: number },
+  input: {
+    name?: string;
+    description?: string | null;
+    settings?: Partial<ProjectSettings>;
+    version: number;
+  },
 ): Promise<ApiResult<Project>> {
   return send(`/v1/projects/${encodeURIComponent(projectId)}`, projectSchema, {
     method: 'PATCH',

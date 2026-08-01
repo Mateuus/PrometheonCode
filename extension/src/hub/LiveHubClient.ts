@@ -466,20 +466,9 @@ export class LiveHubClient implements HubClient {
       platform: process.platform,
     });
 
-    const open = t('Open browser');
-    const copy = t('Copy code');
-    const choice = await vscode.window.showInformationMessage(
-      t('Authorize this device in the Prometheon Hub. Your code is {0}.', authorization.userCode),
-      { modal: true, detail: t('You will confirm the code at {0}.', authorization.verificationUri) },
-      open,
-      copy,
-    );
-    if (choice === undefined) {
-      return null;
-    }
-    if (choice === copy) {
-      await vscode.env.clipboard.writeText(authorization.userCode);
-    }
+    // Direto ao navegador, sem diálogo no caminho — como GitHub e Claude. A
+    // conferência anti-phishing não se perde: a notificação de progresso repete
+    // o código aqui, e a página o mostra em destaque para a comparação.
     await vscode.env.openExternal(
       vscode.Uri.parse(authorization.verificationUriComplete ?? authorization.verificationUri),
     );

@@ -119,12 +119,18 @@ export const WEBVIEW_STRINGS = {
   'accounts.plan': 'Plan',
   'accounts.status': 'Status',
   'accounts.signIn': 'Sign in',
-  'accounts.signInAgain': 'Sign in again',
   'accounts.signOut': 'Sign out',
   'accounts.rename': 'Rename',
   'accounts.renameSave': 'Save name',
   'accounts.renameRequired': 'Give the account a name.',
   'accounts.remove': 'Remove',
+  'accounts.signOutConfirmTitle': 'Sign out of this account?',
+  'accounts.signOutConfirmBody': 'The isolated configuration directory is kept.',
+  'accounts.removeConfirmTitle': 'Remove account',
+  'accounts.removeConfirmBody':
+    'The sign-in files in {0} are kept. Delete that folder yourself to also drop the credentials.',
+  'accounts.removeConfirmBound':
+    '{0} agent profile(s) still point to this account and will stop until they are bound to another one.',
   'accounts.note':
     'Token counts are measured by Prometheon on this machine. Subscription limits live in each provider account and are not read from here.',
 
@@ -183,8 +189,17 @@ export const WEBVIEW_STRINGS = {
   'agents.needsAccount':
     'An agent profile needs an account. Create one first, then come back here.',
   'agents.goToAccounts': 'Go to Accounts',
-  'agents.emptyProfiles': 'No agent profile yet.',
-  'agents.newProfile': 'New agent profile',
+  'agents.emptyTitle': 'Assemble your agent team',
+  'agents.emptyBody':
+    'An agent is a role plus an account: the role says what it does, the account says how it runs.',
+  'agents.new': 'New agent',
+  'agents.groupByRole': 'Group by role',
+  'agents.removeConfirmTitle': 'Remove agent',
+  'agents.removeConfirmBody': 'The agent profile is deleted. The account it points to is not touched.',
+  'roles.manager': 'Roles',
+  'roles.empty': 'No named role yet. Create one to reuse a specialty across agents.',
+  'roles.removeConfirmBody':
+    'Agents using this role start warning that it is missing; none of them is repointed.',
   'agents.unknownProvider': 'unknown provider',
   'agents.model': 'Model',
   'agents.modelDefault': 'Chosen by the CLI',
@@ -279,6 +294,14 @@ export const WEBVIEW_STRINGS = {
   'skills.help':
     'Procedures this agent may load during a run. Only the name and the trigger line stay in the prompt; the body is read when the agent asks for it.',
   'skills.unsupported': '{0} — does not run on this platform.',
+  'skills.select': 'Select skills…',
+  'skills.pickerAvailable': 'Available',
+  'skills.filter': 'Filter skills…',
+  'skills.noneEnabled': 'No skill enabled.',
+  'skills.noneAvailable': 'Nothing else available.',
+  'skills.notInCatalog': 'Not in the catalog',
+  'skills.clickToRemove': 'Click to remove.',
+  'form.done': 'Done',
 
   // Seção Skills: catálogo de leitura. Editar uma skill é editar o SKILL.md.
   'skills.section': 'Skills',
