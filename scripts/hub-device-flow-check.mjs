@@ -4,7 +4,8 @@
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 
-const API = 'http://127.0.0.1:3551';
+// Mesma variável que a CLI usa; sem ela, o alvo é o Hub de desenvolvimento.
+const API = process.env.PROMETHEON_HUB_URL ?? 'http://127.0.0.1:3551';
 const flow = await import(
   pathToFileURL('f:/Projects/Prometheon/extension/out/hub/deviceFlow.js').href
 );

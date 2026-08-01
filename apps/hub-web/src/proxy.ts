@@ -27,8 +27,15 @@ import {
  * pode fazer é a Hub API, a cada requisição (`Docs/05`).
  */
 
-/** Rotas que exigem um cookie de sessão para sequer renderizar. */
-const PRIVATE_PREFIXES = ['/app', '/settings', '/admin'];
+/**
+ * Rotas que exigem um cookie de sessão para sequer renderizar.
+ *
+ * `/device` está aqui porque a autorização de dispositivo (`Docs/09`) só faz
+ * sentido logado — as rotas da API que ela consome exigem sessão. O redirect
+ * abaixo guarda `?user_code=` dentro do `next`, então quem veio do editor entra
+ * e volta direto para o pedido que ia aprovar.
+ */
+const PRIVATE_PREFIXES = ['/app', '/settings', '/admin', '/device'];
 
 const API_URL = process.env.HUB_API_URL ?? 'http://127.0.0.1:3551';
 

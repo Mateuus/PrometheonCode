@@ -145,6 +145,32 @@ suite('Device flow do Hub', () => {
     );
   });
 
+  test('a identidade que vem com a credencial é preservada', async () => {
+    // O Hub manda quem autorizou junto da credencial; é o que permite ao painel
+    // dizer "conectado como fulano" sem outra chamada.
+    const outcome = await pollDeviceToken(
+      fakeHub([
+        {
+          status: 200,
+          body: {
+            data: {
+              deviceToken: 'pdt_x',
+              deviceId: 'dev_1',
+              user: { id: 'u1', name: 'Ada Lovelace', email: 'ada@example.com' },
+            },
+          },
+        },
+      ]),
+      'dev_abc',
+    );
+    assert.equal(outcome.kind, 'authorized');
+    if (outcome.kind !== 'authorized') {
+      return;
+    }
+    assert.equal(outcome.credential.userName, 'Ada Lovelace');
+    assert.equal(outcome.credential.userEmail, 'ada@example.com');
+  });
+
   test('credencial sem validade declarada não expira sozinha', async () => {
     const outcome = await pollDeviceToken(
       fakeHub([{ status: 200, body: { data: { deviceToken: 'pdt_x', deviceId: 'dev_1' } } }]),

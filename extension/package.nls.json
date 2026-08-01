@@ -20,7 +20,7 @@
   "configuration.language.en": "English, the source language of the interface.",
   "configuration.language.ptbr": "Brazilian Portuguese.",
   "configuration.language.es": "Spanish.",
-  "configuration.hub.url": "Prometheon Hub base URL. HTTPS is required outside `localhost`. Leave it empty to work locally only. Tokens do **not** go here: they go to the VS Code secret storage.",
+  "configuration.hub.url": "Prometheon Hub API base URL. Leave it empty to use the official Hub (`https://api.prometheoncode.xyz`); set it only for a self-hosted Hub. HTTPS is required outside `localhost`. Tokens do **not** go here: they go to the VS Code secret storage.",
   "configuration.chat.defaultType": "Chat type opened by default.",
   "configuration.chat.defaultType.local": "Local Chat: works without an account and without a server.",
   "configuration.chat.defaultType.web": "Web Chat: requires a configured Prometheon Hub.",

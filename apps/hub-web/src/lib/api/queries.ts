@@ -10,6 +10,7 @@ import {
   auditPageSchema,
   conversationPageSchema,
   deviceSessionListSchema,
+  deviceVerificationSchema,
   knowledgePageSchema,
   memberPageSchema,
   meResponseSchema,
@@ -23,6 +24,7 @@ import {
   sessionPageSchema,
   subscriptionOverviewSchema,
   taskPageSchema,
+  type DeviceVerification,
 } from './schemas';
 import type {
   ActiveAgent,
@@ -147,6 +149,22 @@ export async function listSessions(): Promise<ApiResult<Session[]>> {
  */
 export async function listDevices(): Promise<ApiResult<DeviceSession[]>> {
   return items(await get('/v1/me/devices', deviceSessionListSchema));
+}
+
+/**
+ * O que um dispositivo está pedindo para autorizar
+ * (`GET /v1/auth/device/verification`, passo 3a do device flow, `Docs/09`).
+ *
+ * A rota exige sessão de propósito: o pedido só se abre para quem pode
+ * decidi-lo — é o middleware que leva o resto ao login, com o código preservado
+ * no `next`. Código desconhecido responde `DEVICE_CODE_INVALID`, e "expirado"
+ * cai no mesmo caso: o estado vive no Redis com TTL, e uma chave vencida é
+ * indistinguível de uma que nunca existiu.
+ */
+export async function getDeviceVerification(
+  userCode: string,
+): Promise<ApiResult<DeviceVerification>> {
+  return get('/v1/auth/device/verification', deviceVerificationSchema, { query: { userCode } });
 }
 
 export async function listOrganizations(): Promise<ApiResult<OrganizationWithAccess[]>> {

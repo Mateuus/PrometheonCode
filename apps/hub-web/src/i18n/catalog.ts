@@ -484,6 +484,48 @@ export const CATALOG = {
   'devices.revoke': 'Disconnect',
   'devices.revoked': 'Device disconnected.',
 
+  // ------------------------------------- autorização de dispositivo (/device)
+  'device.title': 'Authorize a device',
+  'device.subtitle': 'A device wants to access your Prometheon account.',
+  'device.checkCode': 'Make sure this is the code your editor is showing.',
+  'device.field.device': 'Device',
+  'device.field.client': 'Client',
+  'device.field.platform': 'Platform',
+  'device.field.requestedAt': 'Requested',
+  'device.field.expiresAt': 'Code expires',
+  'device.kind.vscode': 'VS Code',
+  'device.kind.cli': 'CLI',
+  'device.kind.ci': 'CI',
+  'device.kind.other': 'Other client',
+  'device.securityWarning.title': 'Only approve if you started this from your editor.',
+  'device.securityWarning.body':
+    'Approving gives this device access to your account in the organization below. If you did not request this code, deny it.',
+  'device.field.organization': 'Organization',
+  'device.organizationHint': 'The credential is scoped to this organization and cannot switch later.',
+  'device.singleOrganization': 'The device gets access to {organization}.',
+  'device.noOrganizations.title': 'You are not in an organization yet',
+  'device.noOrganizations.description':
+    'A device credential always belongs to one organization. Create yours in the Hub and come back to this page.',
+  'device.approve': 'Approve device',
+  'device.deny': 'Deny',
+  'device.approved.title': 'Device approved',
+  'device.approved.description':
+    'Go back to the editor — it finishes signing in by itself. You can close this tab.',
+  'device.denied.title': 'Request denied',
+  'device.denied.description': 'The device does not get access and the code stops working.',
+  'device.enter.title': 'Connect a device',
+  'device.enter.description': 'Type the code your editor is showing.',
+  'device.enter.label': 'Device code',
+  'device.enter.placeholder': 'XXXX-XXXX',
+  'device.enter.submit': 'Continue',
+  'device.invalid.title': 'This code does not work',
+  'device.error.invalidCode':
+    'This code is not valid — it may have expired. Codes last ten minutes; ask the editor for a new one and try again.',
+  'device.error.expiredCode': 'The code expired before the decision was saved. Start over from the editor.',
+  'device.error.alreadyDecided':
+    'This request was already answered — maybe in another tab. Ask the editor for a new code if you still need to connect.',
+  'device.error.organizationRequired': 'Pick the organization the device will work in.',
+
   // ------------------------------------------- configurações da organização
   'organizationSettings.title': 'Organization settings',
   'organizationSettings.subtitle': 'Name, address and deletion of this organization.',

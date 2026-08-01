@@ -5,6 +5,15 @@ export interface HubConnectionConfig {
   readonly url: string;
 }
 
+export interface HubConnectOptions {
+  /**
+   * `false` reaproveita apenas a credencial guardada — nunca abre navegador nem
+   * mostra diálogo. É o modo da reconexão automática na ativação: quem nunca
+   * entrou não é incomodado, e quem já entrou volta conectado sem fazer nada.
+   */
+  readonly interactive?: boolean;
+}
+
 /**
  * Projeto do Hub, reduzido ao que a extensão exibe.
  *
@@ -66,9 +75,15 @@ export interface HubSubscription {
 
 export interface HubClient {
   getStatus(): HubConnectionStatus;
-  connect(config: HubConnectionConfig): Promise<void>;
+  connect(config: HubConnectionConfig, options?: HubConnectOptions): Promise<void>;
   disconnect(): Promise<void>;
   isAuthenticated(): boolean;
+  /**
+   * Há credencial de dispositivo guardada nesta máquina? Decide se a ativação
+   * tenta reconectar sozinha — sem tocar rede e sem abrir o cofre à toa quando a
+   * resposta é não.
+   */
+  hasStoredCredential(): Promise<boolean>;
   /**
    * Esquece a credencial deste dispositivo.
    *

@@ -19,7 +19,6 @@ import { registerCommands } from './commands';
 import { CHAT_VIEW_ID, CHAT_VIEW_SECONDARY_ID } from './constants';
 import { PrometheonCore } from './core/PrometheonCore';
 import { EventBus } from './core/EventBus';
-import { DisabledHubClient } from './hub/DisabledHubClient';
 import { initializeLanguage } from './i18n';
 import { LiveHubClient } from './hub/LiveHubClient';
 import { Logger } from './logger';
@@ -153,14 +152,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
 
   registry.register(claudeCode);
 
-  // Com uma URL configurada, a extensão fala com o Hub de verdade; sem ela,
-  // continua estritamente local. A escolha é do usuário, e é explícita.
-  const configuredHubUrl = vscode.workspace
-    .getConfiguration('prometheon')
-    .get<string>('hub.url', '')
-    .trim();
-  const hub =
-    configuredHubUrl === '' ? new DisabledHubClient() : new LiveHubClient(secrets, logger, extensionVersion);
+  // O cliente do Hub existe sempre — conectar é decisão do usuário, tomada no
+  // botão de entrar, não na configuração. Sem credencial guardada a extensão
+  // continua estritamente local e nenhuma conexão é aberta.
+  const hub = new LiveHubClient(secrets, logger, extensionVersion);
   // A saída integral das ferramentas fica no armazenamento da extensão para
   // este workspace: fora do projeto do usuário, fora do Git, e apagada sozinha
   // depois de uma semana.
@@ -257,6 +252,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
   );
 
   await core.initialize();
+  // Fora do caminho da ativação: retomar a sessão do Hub toca a rede, e a
+  // janela não deve esperar por isso. O resultado chega pelo `hub.status`.
+  void core.resumeHubSession();
   logger.info(`Prometheon ${extensionVersion} ativo.`);
 
   return {
