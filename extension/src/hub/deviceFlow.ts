@@ -37,6 +37,9 @@ export interface DeviceCredential {
   /** Instante de expiração em milissegundos, ou `null` quando não expira. */
   readonly expiresAt: number | null;
   readonly organizationId?: string;
+  /** Quem autorizou, para a interface dizer como quem o dispositivo entrou. */
+  readonly userName?: string;
+  readonly userEmail?: string;
 }
 
 /** Resultado de uma tentativa de troca do código por credencial. */
@@ -123,6 +126,11 @@ export async function pollDeviceToken(http: HubHttp, deviceCode: string): Promis
     if (token === undefined || deviceId === undefined) {
       throw new DeviceAuthorizationError('The Hub approved the device but did not return a credential.');
     }
+    // O contrato manda o usuário junto da credencial; nome e e-mail deixam a
+    // interface dizer "conectado como fulano" sem outra ida ao Hub.
+    const user = record(data['user']);
+    const userName = text(user, 'name');
+    const userEmail = text(user, 'email');
     return {
       kind: 'authorized',
       credential: {
@@ -134,6 +142,8 @@ export async function pollDeviceToken(http: HubHttp, deviceCode: string): Promis
         ...(text(data, 'organizationId') === undefined
           ? {}
           : { organizationId: text(data, 'organizationId') as string }),
+        ...(userName === undefined ? {} : { userName }),
+        ...(userEmail === undefined ? {} : { userEmail }),
       },
     };
   }

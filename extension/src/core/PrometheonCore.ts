@@ -44,7 +44,7 @@ import type { WorkspaceService } from '../workspace/WorkspaceService';
 import { applyLanguage, isLanguageChoice, languageChoice, t, type LanguageChoice } from '../i18n';
 import { HubNotConfiguredError, serializeError } from '../utils/errors';
 import { newId } from '../utils/ids';
-import { parseHubUrl } from '../hub/HubClient';
+import { parseHubUrl, resolveHubUrl } from '../hub/HubClient';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_ATTACHMENT_BYTES,
@@ -2122,38 +2122,28 @@ export class PrometheonCore implements vscode.Disposable {
 
   // ---------- Hub ----------
 
-  async connectHub(): Promise<void> {
-    const configuration = vscode.workspace.getConfiguration('prometheon');
-    const configured = configuration.get<string>('hub.url', '').trim();
-
-    const url =
-      configured === ''
-        ? await vscode.window.showInputBox({
-            title: 'Connect to Prometheon Hub',
-            prompt: 'Hub base URL. HTTPS is required outside localhost. Do not paste tokens here.',
-            placeHolder: 'https://hub.example.com',
-            ignoreFocusOut: true,
-            validateInput: (value) => {
-              try {
-                parseHubUrl(value);
-                return null;
-              } catch (error) {
-                return error instanceof Error ? error.message : 'URL inválida.';
-              }
-            },
-          })
-        : configured;
-
-    if (url === undefined || url.trim() === '') {
-      return;
-    }
+  /**
+   * Entra no Prometheon Hub.
+   *
+   * Ninguém digita URL: em branco, a configuração `prometheon.hub.url` significa
+   * o Hub oficial — o botão vai direto ao navegador, como no GitHub ou no
+   * Claude. A configuração fica para quem hospeda o próprio Hub.
+   */
+  async connectHub(options?: { readonly interactive?: boolean }): Promise<void> {
+    const interactive = options?.interactive ?? true;
+    const configured = vscode.workspace
+      .getConfiguration('prometheon')
+      .get<string>('hub.url', '');
 
     try {
-      const parsed = parseHubUrl(url);
-      await configuration.update('hub.url', parsed.toString(), vscode.ConfigurationTarget.Global);
-      this.hubStatus = { state: 'connecting' };
-      this.deps.bus.emit('hub.status', this.hubStatus);
-      await this.deps.hub.connect({ url: parsed.toString() });
+      const parsed = parseHubUrl(resolveHubUrl(configured));
+      if (interactive) {
+        // A reconexão silenciosa não anuncia "connecting": sem credencial ela
+        // termina em nada, e o badge não deve piscar a cada abertura do editor.
+        this.hubStatus = { state: 'connecting' };
+        this.deps.bus.emit('hub.status', this.hubStatus);
+      }
+      await this.deps.hub.connect({ url: parsed.toString() }, { interactive });
       this.hubStatus = this.deps.hub.getStatus();
     } catch (error) {
       const serialized = serializeError(error);
@@ -2170,6 +2160,18 @@ export class PrometheonCore implements vscode.Disposable {
   }
 
   /**
+   * Retoma a sessão do Hub na ativação, sem incomodar: só quando existe
+   * credencial guardada, e nunca abrindo navegador. Quem nunca entrou não vê
+   * nada; quem já entrou volta conectado, como espera de qualquer login.
+   */
+  async resumeHubSession(): Promise<void> {
+    if (!(await this.deps.hub.hasStoredCredential())) {
+      return;
+    }
+    await this.connectHub({ interactive: false });
+  }
+
+  /**
    * Sai do Hub nesta máquina.
    *
    * Pede confirmação porque entrar de novo custa o device flow inteiro — e
@@ -2177,13 +2179,14 @@ export class PrometheonCore implements vscode.Disposable {
    * autorizado do lado do Hub até ser revogado na conta.
    */
   async signOutHub(): Promise<void> {
-    const confirm = 'Sign out';
+    const confirm = t('Sign out');
     const choice = await vscode.window.showWarningMessage(
-      'Sign out of Prometheon Hub on this machine?',
+      t('Sign out of Prometheon Hub on this machine?'),
       {
         modal: true,
-        detail:
+        detail: t(
           'The device credential is erased here. The device stays authorized in the Hub until you revoke it in your account.',
+        ),
       },
       confirm,
     );

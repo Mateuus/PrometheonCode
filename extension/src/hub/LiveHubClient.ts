@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { normalizeCustomRole } from '../agents/AgentRoleStore';
 import type { CustomAgentRole, HubConnectionStatus } from '../core/types';
+import { t } from '../i18n';
 import type { Logger } from '../logger';
 import type { SecretStore } from '../storage/SecretStore';
 import { HubNotConfiguredError, serializeError } from '../utils/errors';
@@ -16,6 +17,7 @@ import { openRealtime } from './realtime';
 import type {
   HubClient,
   HubConnectionConfig,
+  HubConnectOptions,
   HubConversation,
   HubMessage,
   HubProject,
@@ -53,41 +55,69 @@ export class LiveHubClient implements HubClient {
     return this.credential !== null && !this.isExpired(this.credential);
   }
 
+  hasStoredCredential(): Promise<boolean> {
+    return this.secrets.has('hub.token');
+  }
+
   /**
    * Conecta ao Hub. Reaproveita a credencial guardada quando ela ainda vale; se
-   * não houver, conduz o device flow com o usuário.
+   * não houver, conduz o device flow com o usuário. Em modo não interativo —
+   * a reconexão automática da ativação — o device flow nunca acontece: sem
+   * credencial aproveitável a chamada devolve o motivo no status e para aí.
    */
-  async connect(config: HubConnectionConfig): Promise<void> {
+  async connect(config: HubConnectionConfig, options?: HubConnectOptions): Promise<void> {
+    const interactive = options?.interactive ?? true;
     const url = parseHubUrl(config.url);
     this.baseUrl = url;
-    this.setStatus({ state: 'connecting' });
 
     try {
-      const reachable = await this.checkHealth();
-      if (!reachable) {
-        this.setStatus({ state: 'error', detail: 'The Hub did not answer the health check.' });
+      const stored = await this.loadCredential();
+
+      // A reconexão silenciosa não toca a rede sem credencial que preste: quem
+      // nunca entrou continua em `local-only`, sem badge piscando na ativação.
+      if (!interactive && (stored === null || this.isExpired(stored))) {
+        if (stored === null) {
+          this.baseUrl = null;
+        } else {
+          this.setStatus({ state: 'disconnected', detail: sessionExpiredMessage() });
+        }
         return;
       }
 
-      const stored = await this.loadCredential();
+      this.setStatus({ state: 'connecting' });
+
+      const reachable = await this.checkHealth();
+      if (!reachable) {
+        this.setStatus({ state: 'error', detail: t('The Hub did not answer the health check.') });
+        return;
+      }
+
       if (stored !== null && !this.isExpired(stored)) {
         this.credential = stored;
-        if (await this.verifyCredential()) {
-          this.setStatus({ state: 'connected' });
+        const identity = await this.verifyCredential();
+        if (identity.ok) {
+          this.setStatus(connectedStatus(identity.displayName ?? displayNameFrom(stored)));
           return;
         }
         // Credencial recusada: some com ela antes de pedir outra.
         await this.forgetCredential();
+        if (!interactive) {
+          this.setStatus({ state: 'disconnected', detail: sessionExpiredMessage() });
+          return;
+        }
       }
 
       const credential = await this.authorizeDevice();
       if (credential === null) {
-        this.setStatus({ state: 'disconnected', detail: 'Device authorization was not completed.' });
+        this.setStatus({
+          state: 'disconnected',
+          detail: t('Device authorization was not completed.'),
+        });
         return;
       }
       this.credential = credential;
       await this.secrets.store('hub.token', JSON.stringify(credential));
-      this.setStatus({ state: 'connected' });
+      this.setStatus(connectedStatus(displayNameFrom(credential)));
     } catch (error) {
       const serialized = serializeError(error);
       this.logger.error(`Falha ao conectar ao Hub: ${sanitize(serialized.message)}`);
@@ -147,10 +177,20 @@ export class LiveHubClient implements HubClient {
       if (typeof token !== 'string' || typeof deviceId !== 'string') {
         return null;
       }
+      // Organização e identidade voltam junto: sem elas, cada reabertura do
+      // editor pagaria uma chamada a mais para redescobrir o que já sabia.
+      const organizationId = value['organizationId'];
+      const userName = value['userName'];
+      const userEmail = value['userEmail'];
       return {
         token,
         deviceId,
         expiresAt: typeof expiresAt === 'number' ? expiresAt : null,
+        ...(typeof organizationId === 'string' && organizationId !== ''
+          ? { organizationId }
+          : {}),
+        ...(typeof userName === 'string' && userName !== '' ? { userName } : {}),
+        ...(typeof userEmail === 'string' && userEmail !== '' ? { userEmail } : {}),
       };
     } catch {
       // Segredo corrompido não deve derrubar a extensão: só não serve.
@@ -284,7 +324,7 @@ export class LiveHubClient implements HubClient {
     const response = await this.request('POST', path, body);
 
     if (response.status === 401 || response.status === 403) {
-      throw new HubNotConfiguredError('This device is not authorized in the Hub.');
+      throw new HubNotConfiguredError(t('This device is not authorized in the Hub.'));
     }
     if (response.status >= 400) {
       throw new Error(`Hub responded ${String(response.status)} for ${path}.`);
@@ -328,7 +368,7 @@ export class LiveHubClient implements HubClient {
     const response = await this.request('GET', path);
 
     if (response.status === 401 || response.status === 403) {
-      throw new HubNotConfiguredError('This device is not authorized in the Hub.');
+      throw new HubNotConfiguredError(t('This device is not authorized in the Hub.'));
     }
     if (response.status >= 400) {
       throw new Error(`Hub responded ${String(response.status)} for ${path}.`);
@@ -349,7 +389,9 @@ export class LiveHubClient implements HubClient {
     body?: unknown,
   ): Promise<{ status: number; body: unknown }> {
     if (this.baseUrl === null) {
-      throw new Error('Hub URL is not configured.');
+      // Mesmo contrato do cliente sem Hub de antigamente: quem chama o Web Chat
+      // sem conexão recebe `hub.not-configured`, não um erro genérico de URL.
+      throw new HubNotConfiguredError();
     }
     const url = new URL(path, this.baseUrl);
     const controller = new AbortController();
@@ -393,12 +435,22 @@ export class LiveHubClient implements HubClient {
     }
   }
 
-  private async verifyCredential(): Promise<boolean> {
+  /**
+   * Confere a credencial em `/v1/me` e aproveita a viagem para trazer quem é o
+   * usuário — é o nome que o painel mostra ao lado de "Connected".
+   */
+  private async verifyCredential(): Promise<{ ok: boolean; displayName?: string }> {
     try {
       const response = await this.request('GET', '/v1/me');
-      return response.status === 200;
+      if (response.status !== 200) {
+        return { ok: false };
+      }
+      const data = isRecord(response.body) ? response.body['data'] : undefined;
+      const user = isRecord(data) ? data['user'] : undefined;
+      const name = isRecord(user) ? (text(user['name']) ?? text(user['email'])) : null;
+      return { ok: true, ...(name === null ? {} : { displayName: name }) };
     } catch {
-      return false;
+      return { ok: false };
     }
   }
 
@@ -414,11 +466,11 @@ export class LiveHubClient implements HubClient {
       platform: process.platform,
     });
 
-    const open = 'Open browser';
-    const copy = 'Copy code';
+    const open = t('Open browser');
+    const copy = t('Copy code');
     const choice = await vscode.window.showInformationMessage(
-      `Authorize this device in the Prometheon Hub. Your code is ${authorization.userCode}.`,
-      { modal: true, detail: `You will confirm the code at ${authorization.verificationUri}.` },
+      t('Authorize this device in the Prometheon Hub. Your code is {0}.', authorization.userCode),
+      { modal: true, detail: t('You will confirm the code at {0}.', authorization.verificationUri) },
       open,
       copy,
     );
@@ -435,7 +487,7 @@ export class LiveHubClient implements HubClient {
     return vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: `Waiting for authorization (code ${authorization.userCode})`,
+        title: t('Waiting for Hub authorization (code {0})', authorization.userCode),
         cancellable: true,
       },
       async (_progress, token) => {
@@ -459,11 +511,11 @@ export class LiveHubClient implements HubClient {
               interval = outcome.intervalSeconds;
               break;
             case 'denied':
-              void vscode.window.showWarningMessage(`Prometheon Hub: ${outcome.reason}`);
+              void vscode.window.showWarningMessage(t('Prometheon Hub: {0}', outcome.reason));
               return null;
             case 'expired':
               void vscode.window.showWarningMessage(
-                'The authorization code expired. Start the connection again.',
+                t('The authorization code expired. Start the connection again.'),
               );
               return null;
             case 'pending':
@@ -486,6 +538,29 @@ export class LiveHubClient implements HubClient {
       });
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+/** Conectado, dizendo como quem — quando o Hub contou. */
+function connectedStatus(displayName: string | undefined): HubConnectionStatus {
+  return displayName === undefined
+    ? { state: 'connected' }
+    : { state: 'connected', detail: t('Signed in as {0}', displayName) };
+}
+
+function displayNameFrom(credential: DeviceCredential): string | undefined {
+  return credential.userName ?? credential.userEmail;
+}
+
+/**
+ * Função e não constante para a frase sair no idioma vigente na hora do aviso,
+ * não no da carga do módulo.
+ */
+function sessionExpiredMessage(): string {
+  return t('Your Hub session expired. Sign in to connect this device again.');
 }
 
 // ---------------------------------------------------------------------------
