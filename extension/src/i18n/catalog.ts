@@ -169,9 +169,6 @@ export const WEBVIEW_STRINGS = {
   'form.disable': 'Disable',
   'form.enabled': 'Enabled',
   'form.disabled': 'Disabled',
-  'form.yes': 'Yes',
-  'form.no': 'No',
-  'form.none': 'None',
   'accounts.description':
     'Each account is a separate CLI sign-in with its own configuration directory. Signing in always happens through the official CLI flow.',
   'accounts.emptyList':
@@ -294,6 +291,41 @@ export const WEBVIEW_STRINGS = {
   'skills.help':
     'Procedures this agent may load during a run. Only the name and the trigger line stay in the prompt; the body is read when the agent asks for it.',
   'skills.unsupported': '{0} — does not run on this platform.',
+  'mcp.test': 'Test servers',
+  'mcp.reachable': 'Reachable',
+  'mcp.unreachable': 'Unreachable',
+  'mcp.commandMissing': 'Command not found',
+  'mcp.removeConfirmTitle': 'Remove MCP server',
+  'mcp.removeConfirmBody':
+    'The entry is removed from .mcp.json. Other tools that read the same file lose it too.',
+  'graph.createScript': 'Create rebuild script',
+  'graph.scriptCreated':
+    'Rebuild script created in .prometheon/scripts/ — adjust it to this project corpus.',
+  'workspace.settings': 'Workspace settings',
+  'workspace.setupTitle': 'Set up the shared workspace',
+  'workspace.setupBody':
+    'Skills, roles and the commit policy live in .prometheon/ and reach the whole team through Git.',
+  'workspace.gitDetected': 'Git repository detected',
+  'workspace.gitMissing': 'No Git repository',
+  'workspace.hubProject': 'Prometheon Hub project',
+  'workspace.hubConnect': 'Connect to the Hub to bind this workspace to a team project.',
+  'workspace.projectHint':
+    'Web Chat conversations live inside this project; team context is read from it.',
+  'workspace.dialogNote':
+    'Changes apply as you pick them and are written to .prometheon/prometheon.yaml — the file the whole team shares.',
+  'workspace.defaultChat': 'Default chat',
+  'workspace.chatLocalHint': 'Conversations stay on this machine.',
+  'workspace.chatWebHint': 'Conversations live in the Hub project.',
+  'workspace.bypassNote':
+    'Bypass is never a persisted default: it stays local, temporary and per session.',
+  'skills.new': 'New skill',
+  'skills.create': 'Create skill',
+  'skills.machineOnly': 'Only on this machine',
+  'skills.nameHint':
+    'Lowercase, numbers and dashes. Project skills live in .prometheon/skills/ and travel with the repository.',
+  'skills.invalidName':
+    'Skill names use lowercase letters, numbers and dashes — it is also the folder name.',
+  'skills.needsFolder': 'Open a folder (or configure the workspace) before creating a project skill.',
   'skills.select': 'Select skills…',
   'skills.pickerAvailable': 'Available',
   'skills.filter': 'Filter skills…',
@@ -370,12 +402,10 @@ export const WEBVIEW_STRINGS = {
     'The shared Prometheon workspace lives in .prometheon/ inside the open folder. Local Chat works without it.',
   'workspace.folder': 'Folder',
   'workspace.noFolder': 'None open',
-  'workspace.configured': 'Configured',
   'workspace.git': 'Git repository',
   'workspace.detected': 'Detected',
   'workspace.notDetected': 'Not detected',
   'workspace.external': 'External folder',
-  'workspace.skipped': 'Setup skipped',
   'mcp.title': 'MCP servers',
   'mcp.description':
     'Model Context Protocol servers of this project, read from .mcp.json — the same file Claude Code, Cursor and VS Code use.',
@@ -558,7 +588,6 @@ export const WEBVIEW_STRINGS = {
   'git.hooks': 'Hooks',
   'git.hooksNote':
     'The files are versioned so the whole team gets them, but pointing Git at them is per machine — each person installs it once.',
-  'git.hooksPath': 'core.hooksPath',
   'git.hooksPathUnset': 'Not set (Git uses .git/hooks)',
   'git.hooksForeign':
     'Git is currently using hooks from {0}. Installing points it at .githooks instead.',

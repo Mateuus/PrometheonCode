@@ -25,6 +25,11 @@ export interface OrchestrationPatch {
 export type GraphPatch = Partial<GraphifyConfig>;
 export type GitPatch = Partial<GitConfig>;
 
+/** Campos editáveis do bloco de chat e orquestração do `prometheon.yaml`. */
+export type WorkspacePatch = Partial<
+  Pick<WorkspaceConfig['orchestration'], 'workMode' | 'autonomy' | 'mainAgent' | 'maxWorkers'>
+> & { readonly defaultType?: WorkspaceConfig['chat']['defaultType'] };
+
 /**
  * Leitura e escrita de `.prometheon/prometheon.yaml` — a configuração
  * compartilhável do workspace. Atualizações usam o documento YAML original, para
@@ -94,6 +99,24 @@ export class SettingsStore {
     for (const [key, value] of Object.entries(patch)) {
       if (value !== undefined) {
         entries.push([['knowledge', 'graphify', key], value]);
+      }
+    }
+    await this.applyEntries(configUri, entries);
+  }
+
+  /**
+   * Grava chat padrão e orquestração do workspace, campo a campo — mesma regra
+   * do grafo: só o que veio no patch é tocado, comentários preservados.
+   */
+  async updateWorkspace(configUri: vscode.Uri, patch: WorkspacePatch): Promise<void> {
+    const entries: [string[], unknown][] = [];
+    if (patch.defaultType !== undefined) {
+      entries.push([['chat', 'defaultType'], patch.defaultType]);
+    }
+    for (const key of ['workMode', 'autonomy', 'mainAgent', 'maxWorkers'] as const) {
+      const value = patch[key];
+      if (value !== undefined) {
+        entries.push([['orchestration', key], value]);
       }
     }
     await this.applyEntries(configUri, entries);

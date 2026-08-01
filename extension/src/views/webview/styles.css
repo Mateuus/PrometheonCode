@@ -494,13 +494,55 @@ textarea:focus-visible {
   opacity: 0.7;
 }
 
-.notification-error .content {
-  border-left-color: var(--vscode-errorForeground);
+/* Avisos flutuantes: a camada mais alta de todas — uma validação de
+   formulário precisa aparecer sobre qualquer diálogo aberto. */
+.toasts {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: min(420px, calc(100vw - 24px));
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  cursor: pointer;
+  padding: 7px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--prom-border-soft);
+  background: var(--prom-surface-raised);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-size: 0.84em;
+  line-height: 1.45;
+  color: var(--vscode-foreground);
+  animation: toast-in 0.18s ease;
+}
+
+.toast-warning {
+  border-color: rgba(255, 200, 87, 0.5);
+  color: var(--prom-alert);
+}
+
+.toast-error {
+  border-color: var(--vscode-errorForeground);
   color: var(--vscode-errorForeground);
 }
 
-.notification-warning .content {
-  border-left-color: var(--vscode-inputValidation-warningBorder, var(--vscode-panel-border));
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .empty-state {
@@ -1682,12 +1724,53 @@ button.ghost:hover:not(:disabled) {
   color: var(--prom-text-dim);
 }
 
-/* Marcações de escolha seguem o roxo da marca, não o azul do sistema. */
-.field input[type='checkbox'] {
-  accent-color: var(--prom-accent);
-  width: 14px;
-  height: 14px;
+/* Checkbox desenhado em casa: o nativo chega branco no tema escuro e destoa
+   de tudo. Desmarcado é um campo rebaixado; marcado é o roxo da marca com o
+   visto desenhado por bordas — sem imagem, sem fonte de ícones. */
+input[type='checkbox'] {
+  appearance: none;
+  width: 15px;
+  height: 15px;
   margin: 0;
+  flex: 0 0 auto;
+  position: relative;
+  border: 1px solid var(--prom-border);
+  border-radius: 4px;
+  background: var(--prom-surface-sunken);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+input[type='checkbox']:hover {
+  border-color: var(--prom-accent-soft);
+}
+
+input[type='checkbox']:checked {
+  background: var(--prom-accent);
+  border-color: var(--prom-accent);
+}
+
+input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border-right: 1.8px solid #ffffff;
+  border-bottom: 1.8px solid #ffffff;
+  transform: rotate(45deg);
+}
+
+input[type='checkbox']:focus-visible {
+  outline: none;
+  border-color: var(--prom-accent);
+  box-shadow: 0 0 0 3px var(--prom-accent-glow);
+}
+
+input[type='checkbox']:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .field-actions {
@@ -1913,6 +1996,52 @@ button.ghost:hover:not(:disabled) {
 .settings-hero-arrow {
   color: var(--prom-text-dim);
   font-size: 0.8em;
+}
+
+/* Caminho dentro de um chip: trunca em vez de estourar a linha. */
+.graph-status-path {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.95em;
+}
+
+/* Os selos de estado das seções alinham à esquerda, sem centralizar. */
+.graph-status {
+  justify-content: flex-start;
+}
+
+/* Sonda dos servidores MCP: alcançável no ciano de conexão, falha em âmbar. */
+.account-state.probe-ok {
+  border-color: var(--prom-activity);
+  color: var(--prom-activity);
+}
+
+.account-state.probe-warn {
+  border-color: rgba(255, 200, 87, 0.55);
+  color: var(--prom-alert);
+}
+
+/* Caminho dentro de um chip: fonte do editor e reticências no meio do resto. */
+.graph-status-path {
+  font-family: var(--vscode-editor-font-family, monospace);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Chips de estado do hero: verde é pronto, âmbar é atenção. */
+.settings-hero-chip.is-ok {
+  border-color: rgba(34, 211, 238, 0.4);
+  color: var(--prom-activity);
+}
+
+.settings-hero-chip.is-warn {
+  border-color: rgba(255, 200, 87, 0.45);
+  color: var(--prom-alert);
 }
 
 .settings-hero-actions {

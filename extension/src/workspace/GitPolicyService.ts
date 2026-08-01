@@ -272,7 +272,12 @@ export function preCommitHook(graph: GraphifyConfig): string {
       '',
       '  # O grafo recém-gerado entra no mesmo commit. Sem isto, o commit levaria',
       '  # o código novo com o grafo antigo -- a dessincronia que o hook evita.',
-      `  git add ${shellQuote(normalizePath(graph.outputDir))}`,
+      '  # Se o diretório estiver no .gitignore, o add falharia e derrubaria o',
+      '  # commit por um artefato que o time decidiu não versionar: aí o hook',
+      '  # avisa e segue, em vez de abortar.',
+      `  if ! git add ${shellQuote(normalizePath(graph.outputDir))} 2>/dev/null; then`,
+      `    echo "Prometheon: ${normalizePath(graph.outputDir)} está no .gitignore; o grafo não entrou no commit." >&2`,
+      '  fi',
       'fi',
       '',
     );

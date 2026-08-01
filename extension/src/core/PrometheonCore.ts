@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import * as vscode from 'vscode';
 import type { AgentProfileService } from '../agents/AgentProfileService';
 import type { AgentRegistry } from '../agents/AgentRegistry';
@@ -54,6 +56,7 @@ import {
   type GitPatch,
   type GraphPatch,
   type WebviewToExtensionMessage,
+  type WorkspacePatch,
   type WorkspaceSetupChoice,
 } from '../views/messages';
 import type { EventBus } from './EventBus';
@@ -92,6 +95,8 @@ import {
   type GraphStatus,
   type HubConnectionStatus,
   type McpServerDraft,
+  type McpProbeStatus,
+  type McpServerSummary,
   type McpStatus,
   type SkillCatalogStatus,
   type ProjectOption,
@@ -184,6 +189,8 @@ export class PrometheonCore implements vscode.Disposable {
     timer: ReturnType<typeof setTimeout> | null;
     deadline: number;
   } | null = null;
+  /** Última sonda dos servidores MCP; vazio até alguém pedir o teste. */
+  private mcpProbes: Readonly<Record<string, McpProbeStatus>> = {};
   /** Projetos do Hub; só existem depois de uma conexão autenticada. */
   private webProjects: readonly ProjectOption[] = [];
   private speechStatus: SpeechStatus = {
@@ -314,6 +321,11 @@ export class PrometheonCore implements vscode.Disposable {
     await this.refreshSkills();
     await this.refreshCustomRoles();
     await this.refreshAccounts();
+    // Os perfis só existem depois de `refreshAccounts`; um principal que é
+    // perfil ("Claudio Main" no yaml) precisa ser revalidado agora, senão a
+    // resolução da linha de cima já o teria trocado pelo adaptador padrão.
+    this.mainAgentId = this.resolveAgentId(config?.orchestration.mainAgent ?? localMain);
+    this.deps.registry.setMain(this.executionAgentId());
     await this.refreshMcp();
     await this.refreshProjectPolicies(config);
     this.workspaceStatus = await this.deps.workspace.status();
@@ -342,7 +354,10 @@ export class PrometheonCore implements vscode.Disposable {
       agentProfiles: this.agentProfiles,
       customRoles: this.customRoles,
       skills: this.skillCatalog,
-      mcp: this.mcpStatus,
+      mcp:
+        Object.keys(this.mcpProbes).length === 0
+          ? this.mcpStatus
+          : { ...this.mcpStatus, probes: this.mcpProbes },
       graph: this.graphStatus,
       git: this.gitStatus,
       activity: this.activity,
@@ -494,12 +509,18 @@ export class PrometheonCore implements vscode.Disposable {
       case 'skills.open':
         await this.openSkill(message.payload.name);
         return;
+      case 'skills.create':
+        await this.createSkill(message.payload.name, message.payload.scope);
+        return;
       case 'mcp.refresh':
         await this.refreshMcp();
         await this.publish();
         return;
       case 'mcp.import':
         await this.importMcpServers();
+        return;
+      case 'mcp.probe':
+        await this.probeMcpServers();
         return;
       case 'mcp.save':
         await this.saveMcpServer(message.payload.server);
@@ -552,8 +573,14 @@ export class PrometheonCore implements vscode.Disposable {
       case 'graph.update':
         await this.updateGraph(message.payload.patch);
         return;
+      case 'workspace.update':
+        await this.updateWorkspaceConfig(message.payload.patch);
+        return;
       case 'graph.rebuild':
         await this.rebuildGraph();
+        return;
+      case 'graph.createScript':
+        await this.createGraphScript();
         return;
       case 'git.update':
         await this.updateGitPolicy(message.payload.patch);
@@ -606,7 +633,9 @@ export class PrometheonCore implements vscode.Disposable {
         // A mais restritiva entre o composer, o perfil e o teto das skills
         // carregadas — uma skill que lida com segredo prende o run em manual.
         autonomy: this.effectiveAutonomyForRun(),
-        mainAgentId: this.mainAgentId,
+        // O executor é sempre um adaptador; quando o principal é um perfil, o
+        // adaptador sai do provedor da conta vinculada.
+        mainAgentId: this.executionAgentId(),
         ...(model === undefined || model === '' ? {} : { model }),
         ...(systemPrompt === '' ? {} : { systemPrompt }),
       })) {
@@ -1174,7 +1203,9 @@ export class PrometheonCore implements vscode.Disposable {
   }
 
   async setMainAgent(agentId: string): Promise<void> {
-    if (!this.deps.registry.has(agentId)) {
+    const isAdapter = this.deps.registry.has(agentId);
+    const isProfile = this.agentProfiles.some((summary) => summary.profile.id === agentId);
+    if (!isAdapter && !isProfile) {
       this.deps.bus.emit('notification', {
         level: 'warning',
         message: `Unknown agent: ${agentId}`,
@@ -1182,7 +1213,9 @@ export class PrometheonCore implements vscode.Disposable {
       return;
     }
     this.mainAgentId = agentId;
-    this.deps.registry.setMain(agentId);
+    // O registro conhece adaptadores; um perfil principal delega ao motor da
+    // conta dele — é isso que `executionAgentId` resolve.
+    this.deps.registry.setMain(this.executionAgentId());
     await this.deps.local.setMainAgentId(agentId);
     await this.persistOrchestration({ mainAgent: agentId });
     await this.publish();
@@ -1484,6 +1517,29 @@ export class PrometheonCore implements vscode.Disposable {
     return this.agentProfiles.find((candidate) => candidate.profile.id === this.mainAgentId);
   }
 
+  /**
+   * Id do ADAPTADOR que executa pelo agente principal atual.
+   *
+   * O principal pode ser um perfil ("Claudio Main"): quem roda é o CLI do
+   * provedor da conta vinculada a ele. Um id de adaptador cru continua aceito —
+   * é o caminho dos testes e o fallback de quem ainda não criou perfil.
+   */
+  private executionAgentId(): string {
+    if (this.deps.registry.has(this.mainAgentId)) {
+      return this.mainAgentId;
+    }
+    const summary = this.mainAgentProfile;
+    if (summary !== undefined) {
+      const account = this.accounts.find(
+        (item) => item.profileId === summary.profile.providerProfileId,
+      );
+      if (account !== undefined && this.deps.registry.has(account.providerId)) {
+        return account.providerId;
+      }
+    }
+    return this.deps.registry.main.id;
+  }
+
   systemPromptForMainAgent(): string {
     const summary = this.mainAgentProfile;
     if (summary === undefined) {
@@ -1613,6 +1669,23 @@ export class PrometheonCore implements vscode.Disposable {
    * A webview manda o nome, nunca o caminho: ela não lê disco, e um caminho
    * vindo dela seria abertura arbitrária de arquivo. Quem resolve é o catálogo.
    */
+  /**
+   * Cria a skill no escopo pedido e abre o SKILL.md: o arquivo é a skill, e o
+   * lugar de escrevê-la é o editor, não um formulário.
+   */
+  async createSkill(name: string, scope: 'project' | 'machine'): Promise<void> {
+    try {
+      const file = await this.deps.skills.createSkill(name, scope);
+      const document = await vscode.workspace.openTextDocument(file);
+      await vscode.window.showTextDocument(document, { preview: false });
+      await this.refreshSkills();
+      await this.publish();
+    } catch (error) {
+      const serialized = serializeError(error);
+      this.deps.bus.emit('notification', { level: 'warning', message: serialized.message });
+    }
+  }
+
   async openSkill(name: string): Promise<void> {
     const skill = await this.deps.skills.find(name);
     if (skill === undefined) {
@@ -1726,6 +1799,41 @@ export class PrometheonCore implements vscode.Disposable {
     }
   }
 
+  /**
+   * Grava chat padrão e orquestração no `prometheon.yaml` e reflete no estado
+   * vivo na mesma hora: a configuração do projeto tem precedência, e um valor
+   * recém-gravado que só valesse no próximo reload pareceria botão quebrado.
+   */
+  async updateWorkspaceConfig(patch: WorkspacePatch): Promise<void> {
+    const configUri = this.deps.workspace.configUri;
+    if (configUri === null) {
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: t('Initialize the Prometheon workspace before changing its settings.'),
+      });
+      return;
+    }
+
+    try {
+      await this.deps.settings.updateWorkspace(configUri, patch);
+      if (patch.defaultType !== undefined) {
+        await this.setChatType(patch.defaultType);
+      }
+      if (patch.workMode !== undefined) {
+        await this.setWorkMode(patch.workMode);
+      }
+      if (patch.autonomy !== undefined) {
+        await this.setAutonomy(patch.autonomy);
+      }
+      if (patch.mainAgent !== undefined) {
+        await this.setMainAgent(patch.mainAgent);
+      }
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível salvar a configuração do workspace', error);
+    }
+  }
+
   async updateGraph(patch: GraphPatch): Promise<void> {
     const configUri = this.deps.workspace.configUri;
     if (configUri === null) {
@@ -1754,6 +1862,37 @@ export class PrometheonCore implements vscode.Disposable {
       await this.deps.graph.rebuild(this.graphConfig);
     } catch (error) {
       this.reportFailure('Não foi possível reconstruir o grafo', error);
+    }
+  }
+
+  /**
+   * Gera os scripts de rebuild dentro de `.prometheon/scripts/`, aponta o
+   * comando do yaml para o da plataforma e abre o script no editor — o
+   * template é ponto de partida; o corpus certo é decisão do projeto.
+   */
+  async createGraphScript(): Promise<void> {
+    const configUri = this.deps.workspace.configUri;
+    if (configUri === null) {
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: 'Initialize the Prometheon workspace before configuring the graph.',
+      });
+      return;
+    }
+    try {
+      const { command, open } = await this.deps.graph.createRebuildScript(this.graphConfig);
+      await this.deps.settings.updateGraph(configUri, { rebuildCommand: command });
+      await this.refreshProjectPolicies();
+      await this.rewriteInstalledHooks();
+      const document = await vscode.workspace.openTextDocument(open);
+      await vscode.window.showTextDocument(document, { preview: false });
+      this.deps.bus.emit('notification', {
+        level: 'info',
+        message: t('Rebuild script created in .prometheon/scripts/ — adjust it to this project corpus.'),
+      });
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível criar o script de rebuild', error);
     }
   }
 
@@ -1914,6 +2053,24 @@ export class PrometheonCore implements vscode.Disposable {
     }
   }
 
+  /**
+   * Sonda os servidores habilitados: http/sse é uma requisição com prazo
+   * curto — qualquer resposta HTTP conta como alcançável —, e stdio é a
+   * existência do comando no PATH. Nada roda o servidor de verdade: o teste
+   * responde "dá para falar com ele?", não "ele funciona?".
+   */
+  async probeMcpServers(): Promise<void> {
+    const servers = this.mcpStatus.servers.filter((server) => server.enabled);
+    const results: Record<string, McpProbeStatus> = {};
+    await Promise.all(
+      servers.map(async (server) => {
+        results[server.name] = await probeMcpServer(server);
+      }),
+    );
+    this.mcpProbes = results;
+    await this.publish();
+  }
+
   async setMcpServerEnabled(name: string, enabled: boolean): Promise<void> {
     try {
       await this.deps.mcp.setEnabled(name, enabled);
@@ -2047,7 +2204,8 @@ export class PrometheonCore implements vscode.Disposable {
     const agent = this.agents.find((item) => item.id === this.mainAgentId);
     const account = this.accounts.find((item) => item.profileId === this.usageProfileId());
     const detail = [
-      agent?.displayName ?? this.mainAgentId,
+      // Perfil principal aparece pelo próprio nome; adaptador cru, pelo dele.
+      this.mainAgentProfile?.profile.name ?? agent?.displayName ?? this.mainAgentId,
       account === undefined ? null : `${account.providerName} · ${account.name}`,
       WORK_MODE_LABELS[this.workMode],
     ]
@@ -2087,6 +2245,11 @@ export class PrometheonCore implements vscode.Disposable {
    * um Provider Profile, cai no primeiro perfil conhecido — ou num balde local.
    */
   private usageProfileId(): string {
+    // A conta do perfil principal, quando há um: é nela que o run gasta.
+    const main = this.mainAgentProfile;
+    if (main !== undefined) {
+      return main.profile.providerProfileId;
+    }
     return this.accounts[0]?.profileId ?? 'local';
   }
 
@@ -2314,7 +2477,15 @@ export class PrometheonCore implements vscode.Disposable {
   }
 
   private resolveAgentId(candidate: string): string {
-    return this.deps.registry.has(candidate) ? candidate : this.deps.registry.main.id;
+    if (this.deps.registry.has(candidate)) {
+      return candidate;
+    }
+    // Perfil de agente também é um principal válido — "Claudio Main" no yaml
+    // do projeto sobrevive ao reload em vez de cair no adaptador padrão.
+    if (this.agentProfiles.some((summary) => summary.profile.id === candidate)) {
+      return candidate;
+    }
+    return this.deps.registry.main.id;
   }
 
   private upsertActiveAgent(agent: ActiveAgentSummary): void {
@@ -2560,4 +2731,45 @@ function optionalText<K extends string>(
   value: string | undefined,
 ): Record<K, string> | object {
   return value === undefined ? {} : ({ [key]: value } as Record<K, string>);
+}
+
+/** Prazo das sondas MCP: rede curta e comando local mais curto ainda. */
+const MCP_PROBE_TIMEOUT_MS = 4_000;
+
+const runCommand = promisify(execFile);
+
+/**
+ * Sonda um servidor MCP sem executá-lo. HTTP/SSE: uma requisição com prazo —
+ * qualquer status de resposta prova que há alguém do outro lado. stdio: o
+ * comando precisa existir no PATH; rodá-lo de verdade seria caro e barulhento.
+ */
+async function probeMcpServer(server: McpServerSummary): Promise<McpProbeStatus> {
+  if (server.transport === 'stdio') {
+    if (server.command === undefined || server.command === '') {
+      return 'missing';
+    }
+    const finder = process.platform === 'win32' ? 'where' : 'which';
+    try {
+      await runCommand(finder, [server.command], { timeout: MCP_PROBE_TIMEOUT_MS });
+      return 'ok';
+    } catch {
+      return 'missing';
+    }
+  }
+
+  if (server.url === undefined || server.url === '') {
+    return 'missing';
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, MCP_PROBE_TIMEOUT_MS);
+  try {
+    await fetch(server.url, { method: 'GET', signal: controller.signal });
+    return 'ok';
+  } catch {
+    return 'unreachable';
+  } finally {
+    clearTimeout(timer);
+  }
 }

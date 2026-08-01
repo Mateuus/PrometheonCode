@@ -678,6 +678,12 @@ export interface McpProblem {
   readonly detail: string;
 }
 
+/**
+ * Resultado da sonda de um servidor MCP: `ok` respondeu, `unreachable` não
+ * respondeu no prazo, `missing` é stdio cujo comando não existe no PATH.
+ */
+export type McpProbeStatus = 'ok' | 'unreachable' | 'missing';
+
 export interface McpStatus {
   /** Há uma pasta aberta; sem isso não existe `.mcp.json` de projeto. */
   readonly available: boolean;
@@ -689,6 +695,8 @@ export interface McpStatus {
   readonly problems: readonly McpProblem[];
   /** Motivo já pronto para exibir quando `available` é falso. */
   readonly message?: string;
+  /** Sondas por nome de servidor; ausente enquanto ninguém testou. */
+  readonly probes?: Readonly<Record<string, McpProbeStatus>>;
 }
 
 /**
