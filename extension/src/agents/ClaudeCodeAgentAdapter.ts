@@ -7,7 +7,7 @@ import type { ImageAttachment } from '../chat/types';
 import type { Logger } from '../logger';
 import type { ProviderProfile } from '../providers/types';
 import type { TokenUsage } from '../providers/UsageTracker';
-import type { SerializedError } from '../core/types';
+import type { EffortLevel, SerializedError } from '../core/types';
 import type {
   AgentAdapter,
   AgentCapabilities,
@@ -44,8 +44,12 @@ interface RunningSession {
   readonly workspaceFolder: string | undefined;
   /** Modelo pedido pelo Agent Profile; a conta não escolhe modelo. */
   readonly model: string | undefined;
+  /** Esforço de raciocínio pedido para esta sessão. */
+  readonly effort: EffortLevel | undefined;
   /** Papel e índice de skills, já montados pelo núcleo. Vazio quando não há. */
   readonly systemPrompt: string | undefined;
+  /** Ferramenta de delegação, quando este agente é o orquestrador. */
+  readonly delegation: StartAgentInput['delegation'];
   /** Identificador que o CLI dá à conversa; é o que permite retomá-la. */
   cliSessionId: string | null;
   child: ChildProcessWithoutNullStreams | null;
@@ -53,10 +57,34 @@ interface RunningSession {
   interrupted: boolean;
 }
 
+/**
+ * Quanto o CLI espera por uma chamada de delegação antes de desistir.
+ *
+ * Vinte minutos: o worker é um agente inteiro, não uma consulta. O núcleo
+ * desiste antes disso e devolve um bilhete de retirada, então este número é a
+ * folga que impede o cliente de cortar a chamada primeiro.
+ */
+const DELEGATION_CLIENT_TIMEOUT_MS = 20 * 60 * 1000;
+
 export class ClaudeCodeAgentAdapter implements AgentAdapter {
   readonly id = 'claude-code';
   readonly displayName = 'Claude Code';
   readonly transport = 'cli' as const;
+
+  /**
+   * Os nomes do Claude Code. `ultracode` é o degrau a mais dele: não existe
+   * como valor de `--effort` (o CLI aceita só até `max`), e sim como o pacote
+   * "xhigh + orquestração" que a interface dele oferece — aqui isso vira
+   * `--effort xhigh` mais uma instrução de delegar, montada em `argumentsFor`.
+   */
+  readonly effortLabels: Partial<Record<EffortLevel, string>> = {
+    low: 'Low',
+    medium: 'Medium',
+    high: 'High',
+    xhigh: 'Extra high',
+    max: 'Max',
+    ultracode: 'Ultracode',
+  };
 
   readonly capabilities: AgentCapabilities = {
     chat: true,
@@ -115,6 +143,8 @@ export class ClaudeCodeAgentAdapter implements AgentAdapter {
       workspaceFolder: input.workspaceFolder,
       model: input.model,
       systemPrompt: input.systemPrompt,
+      effort: input.effort,
+      delegation: input.delegation,
       cliSessionId: null,
       child: null,
       interrupted: false,
@@ -147,7 +177,16 @@ export class ClaudeCodeAgentAdapter implements AgentAdapter {
 
     const child = spawn(executableOf(session.profile), argumentsFor(session, message), {
       cwd: session.workspaceFolder,
-      env: environmentFor(session.profile),
+      env: {
+        ...environmentFor(session.profile),
+        // Delegar é uma chamada de ferramenta que dura o quanto durar o
+        // trabalho do outro agente. Com o teto padrão do cliente MCP, uma
+        // pesquisa de verdade estoura o tempo e o orquestrador recebe "timed
+        // out" enquanto o worker continua rodando às escuras.
+        ...(session.delegation === undefined
+          ? {}
+          : { MCP_TIMEOUT: '60000', MCP_TOOL_TIMEOUT: String(DELEGATION_CLIENT_TIMEOUT_MS) }),
+      },
       windowsHide: true,
     });
 
@@ -645,6 +684,19 @@ function environmentFor(profile: ProviderProfile): NodeJS.ProcessEnv {
   return { ...process.env, CLAUDE_CONFIG_DIR: profile.configDirectory };
 }
 
+/**
+ * O que o `ultracode` acrescenta ao prompt.
+ *
+ * O nível não existe no CLI: ele é `xhigh` mais a postura de decompor e
+ * delegar. Como instrução, o efeito é real e verificável na timeline — bem
+ * melhor do que um rótulo bonito que não muda nada na execução.
+ */
+const ULTRACODE_INSTRUCTION = [
+  'Work at maximum thoroughness.',
+  'Decompose the task before acting, and delegate independent parts to subagents when the tooling allows it.',
+  'Verify your own findings before reporting them: correctness matters more than speed here.',
+].join(' ');
+
 function argumentsFor(session: RunningSession, message: AgentInput): string[] {
   const args = [
     '--print',
@@ -667,11 +719,46 @@ function argumentsFor(session: RunningSession, message: AgentInput): string[] {
     args.push('--model', model);
   }
 
+  // Esforço de raciocínio. A escala do Prometheon casa com a do CLI até `max`;
+  // `ultracode` é o degrau extra da interface do Claude Code, que vale por
+  // `xhigh` mais a instrução de orquestrar — mandá-lo cru viraria aviso de
+  // valor desconhecido e o esforço cairia para o padrão.
+  if (session.effort !== undefined) {
+    args.push('--effort', session.effort === 'ultracode' ? 'xhigh' : session.effort);
+  }
+
+  // Ferramenta de delegação: o CLI não sabe o que é um agente do Prometheon,
+  // mas sabe usar MCP. O servidor é local, com token de uso único, e as
+  // ferramentas são liberadas por nome — sem isso o CLI pararia para pedir
+  // aprovação de cada chamada e a orquestração travaria na primeira.
+  if (session.delegation !== undefined) {
+    args.push(
+      '--mcp-config',
+      JSON.stringify({
+        mcpServers: {
+          prometheon: {
+            type: 'http',
+            url: session.delegation.url,
+            headers: { Authorization: `Bearer ${session.delegation.token}` },
+          },
+        },
+      }),
+      '--allowedTools',
+      ...session.delegation.toolNames,
+    );
+  }
+
   // `--append-system-prompt` acrescenta ao prompt do CLI em vez de substituí-lo:
   // o papel e o índice de skills entram por cima do que o Claude Code já sabe
   // fazer, e não no lugar disso.
-  if (session.systemPrompt !== undefined && session.systemPrompt !== '') {
-    args.push('--append-system-prompt', session.systemPrompt);
+  const instructions = [
+    session.systemPrompt ?? '',
+    session.effort === 'ultracode' ? ULTRACODE_INSTRUCTION : '',
+  ]
+    .filter((part) => part !== '')
+    .join('\n\n');
+  if (instructions !== '') {
+    args.push('--append-system-prompt', instructions);
   }
 
   // Retomar a conversa é o que dá contexto à segunda mensagem. Sem isto, cada

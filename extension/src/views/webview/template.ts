@@ -45,6 +45,8 @@ const ICONS = {
   trash: `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.9 4.4h10.2"/><path d="M6.4 4.4V3.1a.9.9 0 0 1 .9-.9h1.4a.9.9 0 0 1 .9.9v1.3"/><path d="M4.3 4.4l.6 8.2a1 1 0 0 0 1 .9h4.2a1 1 0 0 0 1-.9l.6-8.2"/></svg>`,
   /** Asterisco do indicador de trabalho. Três traços pelo centro, a 60°. */
   spark: `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 2.4v11.2"/><path d="M3.2 5.2l9.6 5.6"/><path d="M3.2 10.8l9.6-5.6"/></svg>`,
+  /** Lápis do título editável; só aparece quando o ponteiro chega perto. */
+  pencil: `<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h2.6L13 5.6a1.3 1.3 0 0 0 0-1.8l-.8-.8a1.3 1.3 0 0 0-1.8 0L3 10.4Z"/><path d="M9.6 4.4l2 2"/></svg>`,
 } as const;
 
 /**
@@ -83,6 +85,10 @@ const MENU_ICONS: Readonly<Record<string, string>> = {
   git: `<circle cx="4.6" cy="3.8" r="1.6"/><circle cx="4.6" cy="12.2" r="1.6"/><circle cx="11.4" cy="6.6" r="1.6"/><path d="M4.6 5.4v5.2"/><path d="M9.8 7.6a5 5 0 0 1-5.2 3"/>`,
   // Marcador dos blocos de ferramenta; gira ao expandir.
   chevronRight: `<path d="M6.2 3.8 10.6 8l-4.4 4.2"/>`,
+  /** Lápis das ações de renomear na lista de sessões. */
+  pencil: `<path d="M3 13h2.6L13 5.6a1.3 1.3 0 0 0 0-1.8l-.8-.8a1.3 1.3 0 0 0-1.8 0L3 10.4Z"/><path d="M9.6 4.4l2 2"/>`,
+  /** Lixeira com tampa e duas ranhuras — a mesma família de traço do resto. */
+  trash: `<path d="M2.8 4.3h10.4"/><path d="M6.3 4.3V3.2a1 1 0 0 1 1-1h1.4a1 1 0 0 1 1 1v1.1"/><path d="M4.4 4.3l.5 8.3a1 1 0 0 0 1 .9h4.2a1 1 0 0 0 1-.9l.5-8.3"/><path d="M6.8 6.6v4.4M9.2 6.6v4.4"/>`,
 };
 
 function iconTemplates(): string {
@@ -139,7 +145,13 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
   <div class="app">
     <header class="header">
       <img class="logo" src="${logoUri.toString()}" alt="" width="18" height="18" />
-      <span class="session-title" id="session-title">${t('Untitled')}</span>
+      <!-- Botão, e não rótulo: clicar no título abre a edição no lugar dele.
+           O texto tem span próprio porque o lápis mora dentro do botão. -->
+      <button class="session-title" type="button" id="session-title" title="${label('Rename this conversation')}">
+        <span class="session-title-text" id="session-title-text">${t('Untitled')}</span>
+        <span class="session-title-pencil">${ICONS.pencil}</span>
+      </button>
+      <input class="session-title-input" id="session-title-input" type="text" maxlength="120" aria-label="${label('Rename this conversation')}" hidden />
       <span class="grow"></span>
       <span class="hub-badge" id="hub-badge" title="Prometheon Hub status"></span>
       <button class="icon-button" type="button" id="toggle-sessions" title="${label('Sessions')}" aria-label="${label('Sessions')}" aria-haspopup="dialog" aria-expanded="false">${ICONS.history}</button>
@@ -182,13 +194,6 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
       <div class="web-project" id="web-project" hidden></div>
     </section>
 
-    <div class="working" id="working" role="status" hidden>
-      <span class="working-glyph">${ICONS.spark}</span>
-      <span class="working-word" id="working-word"></span>
-      <span class="working-elapsed" id="working-elapsed"></span>
-      <span class="working-tokens" id="working-tokens"></span>
-    </div>
-
     <!--
       Barra de visão: fica escondida enquanto a conversa é do agente principal e
       só aparece quando alguém abre o console de um agente. Sem isso, a troca de
@@ -204,6 +209,16 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
 
     <div class="empty-state" id="empty-state" hidden>
       <p>${t('No messages yet. Ask something to see the mesh respond.')}</p>
+    </div>
+
+    <!-- O indicador de trabalho fica no fim da conversa, logo acima dos
+         agentes ativos: é ali que a última mensagem está e para onde o olho
+         volta enquanto espera. No topo, ele saía de vista na primeira rolagem. -->
+    <div class="working" id="working" role="status" hidden>
+      <span class="working-glyph">${ICONS.spark}</span>
+      <span class="working-word" id="working-word"></span><span class="working-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="working-elapsed" id="working-elapsed"></span>
+      <span class="working-tokens" id="working-tokens"></span>
     </div>
 
     <details class="agents" id="agents-section">
@@ -280,6 +295,18 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
             </button>
             <div class="menu" id="autonomy-menu" role="menu" aria-label="${label('Autonomy')}" hidden>
               <div class="menu-title">${t('Autonomy')}</div>
+              <div class="menu-items" data-slot="items"></div>
+            </div>
+          </div>
+
+          <!-- Esforço de raciocínio. Escondido quando o agente do momento não
+               tem esse controle: um seletor sem efeito é pior que nenhum. -->
+          <div class="menu-anchor" id="effort-anchor" hidden>
+            <button class="pill" type="button" id="effort-button" aria-haspopup="menu" aria-expanded="false">
+              <span class="pill-icon" data-slot="icon"></span><span data-slot="label"></span>
+            </button>
+            <div class="menu" id="effort-menu" role="menu" aria-label="${label('Effort')}" hidden>
+              <div class="menu-title">${t('Effort')}</div>
               <div class="menu-items" data-slot="items"></div>
             </div>
           </div>

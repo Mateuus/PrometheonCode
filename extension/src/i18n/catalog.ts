@@ -17,6 +17,9 @@ export const WEBVIEW_STRINGS = {
   // configurações do VS Code virou um botão dentro da seção General.
   'header.settings': 'Settings',
   'header.untitled': 'Untitled',
+  'header.renameConversation': 'Rename this conversation',
+  'sessions.renameLabel': 'Rename {0}',
+  'sessions.nameRequired': 'Give the conversation a name.',
 
   // Histórico de sessões
   'sessions.local': 'Local',
@@ -45,6 +48,20 @@ export const WEBVIEW_STRINGS = {
   'menu.workMode': 'Work mode',
   'menu.autonomy': 'Autonomy',
   'menu.mainAgent': 'Main agent',
+  'menu.effort': 'Effort',
+
+  // Esforço de raciocínio (a escala é comum; o nome de cada nível vem do CLI)
+  'effort.low.description': 'Answers fast, thinks little. Good for lookups and small edits.',
+  'effort.medium.description': 'The balance most tasks want.',
+  'effort.high.description': 'Thinks longer before acting. Costs more tokens and time.',
+  'effort.xhigh.description': 'For problems that need a plan before the first edit.',
+  'effort.max.description': 'Everything it has. Slow and expensive — keep it for the hard ones.',
+  'effort.ultracode.description':
+    'Extra high plus orchestration: the agent breaks the work up and delegates.',
+  'effort.default': 'Chosen by the CLI',
+  'effort.defaultDescription': 'No effort flag is sent; the provider decides.',
+  'effort.help':
+    'How much the agent thinks before acting. The composer can raise or lower it for one session without changing this default.',
 
   // Modos de trabalho e autonomia (espelham core/types.ts, que fica em inglês)
   'workMode.plan': 'Plan',
@@ -194,6 +211,12 @@ export const WEBVIEW_STRINGS = {
   'agents.removeConfirmTitle': 'Remove agent',
   'agents.removeConfirmBody': 'The agent profile is deleted. The account it points to is not touched.',
   'roles.manager': 'Roles',
+  'roles.openPrompt': 'Open prompt in the editor',
+  'roles.promptFileWins': 'When the prompt file exists, it wins over this text.',
+  'roles.promptNeedsId': 'Create the role first — the prompt file is named after it.',
+  'agents.promptNeedsId': 'Create the agent first — the prompt file is named after it.',
+  'prompt.createFile': 'Create prompt file',
+  'prompt.fileInCharge': 'The prompt file is in charge — edit it in the editor.',
   'roles.empty': 'No named role yet. Create one to reuse a specialty across agents.',
   'roles.removeConfirmBody':
     'Agents using this role start warning that it is missing; none of them is repointed.',
@@ -599,6 +622,10 @@ export const WEBVIEW_STRINGS = {
   'agents.openConsole': 'Open this agent’s console',
   'agents.noTools': 'This agent has not run any tool yet.',
   'agents.unnamed': 'Agent',
+  // Vários workers ao mesmo tempo entram dobrados numa linha só.
+  'agents.bundle': '{0} delegated agents',
+  'agents.bundleHide': 'Hide delegated agents',
+  'agents.bundleWorking': '{0} working',
 
   // Saída das ferramentas no chat
   'step.output': '{0} tool output',

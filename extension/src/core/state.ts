@@ -10,6 +10,7 @@ import type {
   Autonomy,
   BypassGrant,
   ChatType,
+  EffortLevel,
   ContextWindowStatus,
   CustomAgentRole,
   GitStatus,
@@ -33,6 +34,11 @@ export interface PrometheonViewState {
   readonly chatType: ChatType;
   readonly workMode: WorkMode;
   readonly autonomy: Autonomy;
+  /**
+   * Esforço de raciocínio que vale no próximo run — do composer ou do agente.
+   * Ausente quer dizer que a decisão fica com o CLI do provedor.
+   */
+  readonly effort?: EffortLevel;
   readonly bypass: BypassGrant | null;
   readonly mainAgentId: string;
   readonly agents: readonly AgentSummary[];

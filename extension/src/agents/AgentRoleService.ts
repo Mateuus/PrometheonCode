@@ -63,6 +63,21 @@ export class AgentRoleService {
     private readonly logger: Logger,
   ) {}
 
+  /**
+   * Arquivo de prompt de uma função de projeto ou máquina, criado do template
+   * quando falta. Funções de equipe ficam de fora: a fonte delas é o Hub, e um
+   * arquivo local fingindo ser a fonte mentiria para o time inteiro.
+   */
+  async ensurePromptFile(role: CustomAgentRole): Promise<import('vscode').Uri> {
+    if (role.scope === 'hub') {
+      throw new PrometheonError(
+        'Team role prompts sync through the Hub; the file editor arrives in a next phase.',
+        'roles.hub-prompt-unsupported',
+      );
+    }
+    return this.store.ensurePromptFile(role.scope, role);
+  }
+
   async list(): Promise<readonly CustomAgentRole[]> {
     const [project, machine] = await Promise.all([
       this.store.readProject(),

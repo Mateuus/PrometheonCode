@@ -4,6 +4,7 @@ import {
   type AgentProfile,
   type AgentProfileSummary,
   type CustomAgentRole,
+  type EffortLevel,
 } from '../core/types';
 import type { Logger } from '../logger';
 import type { ProviderProfileService } from '../providers/ProviderProfileService';
@@ -50,6 +51,7 @@ export interface AgentProfileInput {
   readonly customRoleId?: string;
   readonly model?: string;
   readonly systemPrompt?: string;
+  readonly effort?: EffortLevel;
   readonly autonomyMode: AgentProfile['autonomyMode'];
   readonly allowedTools: readonly string[];
   readonly deniedTools: readonly string[];
@@ -81,6 +83,12 @@ export class AgentProfileService {
       throw new AgentProfileNotFoundError(id);
     }
     return profile;
+  }
+
+  /** Arquivo de prompt do agente, criado do template quando falta. */
+  async ensurePromptFile(id: string): Promise<import('vscode').Uri> {
+    const profile = await this.require(id);
+    return this.store.ensurePromptFile(profile);
   }
 
   async create(input: AgentProfileInput): Promise<AgentProfile> {
@@ -169,6 +177,7 @@ export class AgentProfileService {
       ...(customRoleId === undefined || customRoleId === '' ? {} : { customRoleId }),
       ...(model === undefined || model === '' ? {} : { model }),
       ...(systemPrompt === undefined || systemPrompt === '' ? {} : { systemPrompt }),
+      ...(input.effort === undefined ? {} : { effort: input.effort }),
       autonomyMode: input.autonomyMode,
       allowedTools: uniqueTools(input.allowedTools),
       deniedTools: uniqueTools(input.deniedTools),

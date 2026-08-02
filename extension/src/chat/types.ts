@@ -1,7 +1,9 @@
+import type { StartAgentInput } from '../agents/AgentAdapter';
 import type { AgentQuestionRequest } from '../agents/questions';
 import type {
   ActiveAgentSummary,
   Autonomy,
+  EffortLevel,
   ChatType,
   SerializedError,
   WorkMode,
@@ -119,6 +121,8 @@ export interface ChatMessage {
   /** Preenchido quando a mensagem vem de um agente. */
   readonly agentId?: string;
   readonly agentName?: string;
+  /** Modelo que respondeu, para o cabeçalho da mensagem dizer com o que foi. */
+  readonly agentModel?: string;
   readonly content: string;
   readonly attachments?: readonly ImageAttachment[];
   /** Passos do agente até esta resposta, na ordem em que aconteceram. */
@@ -154,6 +158,8 @@ export interface SendMessageInput {
   readonly workMode: WorkMode;
   readonly autonomy: Autonomy;
   readonly mainAgentId: string;
+  /** Nome do agente do Prometheon (o perfil), quando há um. */
+  readonly agentLabel?: string;
   /** Modelo do Agent Profile principal; a conta não escolhe modelo. */
   readonly model?: string;
   /**
@@ -161,6 +167,20 @@ export interface SendMessageInput {
    * ao adaptador sem interpretar: quem conhece papéis e catálogo é o núcleo.
    */
   readonly systemPrompt?: string;
+  /** Esforço de raciocínio desta mensagem, na escala canônica. */
+  readonly effort?: EffortLevel;
+  /**
+   * Ferramenta de delegação para o agente principal desta mensagem. O chat
+   * repassa ao adaptador sem interpretar — quem decide se há a quem delegar é
+   * o núcleo.
+   */
+  readonly delegation?: StartAgentInput['delegation'];
+  /**
+   * Quem está falando. Ausente é o usuário; `system` é o Prometheon
+   * retomando a conversa por conta própria — quando o relatório de um worker
+   * chega depois que o turno acabou, por exemplo.
+   */
+  readonly author?: MessageAuthor;
 }
 
 export type ChatEvent =

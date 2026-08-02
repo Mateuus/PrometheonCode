@@ -138,7 +138,11 @@ export class LocalChatService implements ChatService {
     const userMessage = await this.append(conversation.id, {
       id: newId('msg'),
       conversationId: conversation.id,
-      author: 'user',
+      // Uma continuação disparada pelo próprio Prometheon não é fala do
+      // usuário. Marcá-la como tal faria a conversa mentir sobre quem pediu o
+      // quê — e é justamente essa distinção que impede o agente de tratar um
+      // recado automático como autorização.
+      author: input.author ?? 'user',
       content: input.content,
       ...(attachments.length === 0 ? {} : { attachments }),
       status: 'sent',
@@ -159,6 +163,8 @@ export class LocalChatService implements ChatService {
       task,
       ...(input.model === undefined ? {} : { model: input.model }),
       ...(input.systemPrompt === undefined ? {} : { systemPrompt: input.systemPrompt }),
+      ...(input.effort === undefined ? {} : { effort: input.effort }),
+      ...(input.delegation === undefined ? {} : { delegation: input.delegation }),
     });
 
     const agentMessage = await this.append(conversation.id, {
@@ -166,7 +172,10 @@ export class LocalChatService implements ChatService {
       conversationId: conversation.id,
       author: 'agent',
       agentId: adapter.id,
-      agentName: adapter.displayName,
+      // O nome do agente do Prometheon vence o do adaptador: quem responde
+      // é "Claudio Main", e o Claude Code é o motor por trás dele.
+      agentName: input.agentLabel ?? adapter.displayName,
+      ...(input.model === undefined || input.model === '' ? {} : { agentModel: input.model }),
       content: '',
       status: 'streaming',
       timestamp: Date.now(),
@@ -485,6 +494,24 @@ export class LocalChatService implements ChatService {
 
   private find(conversationId: string): Conversation | undefined {
     return this.store.getConversations().find((item) => item.id === conversationId);
+  }
+
+  /**
+   * Grava um recado do próprio Prometheon na conversa.
+   *
+   * É como o relatório de um worker que terminou fora do turno chega à tela: a
+   * conversa é o lugar onde o trabalho aparece, e um relatório que só existisse
+   * no log seria trabalho feito que ninguém vê.
+   */
+  async appendSystemMessage(conversationId: string, content: string): Promise<ChatMessage> {
+    return this.append(conversationId, {
+      id: newId('msg'),
+      conversationId,
+      author: 'system',
+      content,
+      status: 'sent',
+      timestamp: Date.now(),
+    });
   }
 
   private async append(conversationId: string, message: ChatMessage): Promise<ChatMessage> {

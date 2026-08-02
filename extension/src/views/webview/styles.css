@@ -85,7 +85,10 @@ body.vscode-high-contrast {
 body {
   margin: 0;
   padding: 0;
-  font-family: var(--vscode-font-family);
+  /* A fonte de emoji vai no fim: a do editor não tem esses glifos, e sem ela
+     um 🔎 na resposta do agente vira retângulo vazio. */
+  font-family: var(--vscode-font-family), 'Segoe UI Emoji', 'Apple Color Emoji',
+    'Noto Color Emoji', sans-serif;
   font-size: var(--vscode-font-size);
   color: var(--vscode-foreground);
   background: transparent;
@@ -119,13 +122,87 @@ body {
   border-radius: 4px;
 }
 
+/* O título é um botão: parece texto, mas abre a edição no clique. */
 .session-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 55%;
+  padding: 2px 6px;
+  margin-left: -6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
   font-weight: 600;
   letter-spacing: 0.01em;
+  text-align: left;
+  cursor: text;
+}
+
+.session-title-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* O lápis só aparece com o ponteiro em cima — fora disso, é ruído no
+   cabeçalho. Ocupa o espaço mesmo invisível, para o título não deslizar. */
+.session-title-pencil {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--prom-text-dim);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.session-title:hover:not(:disabled) {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+.session-title:hover:not(:disabled) .session-title-pencil,
+.session-title:focus-visible .session-title-pencil {
+  opacity: 1;
+}
+
+/* Sem conversa editável, nem o espaço do lápis faz sentido. */
+.session-title:disabled .session-title-pencil {
+  display: none;
+}
+
+.session-title:focus-visible {
+  outline: none;
+  border-color: var(--prom-accent);
+}
+
+/* Desabilitado no Web Chat: lá o título pertence ao Hub. */
+.session-title:disabled {
+  cursor: default;
+  padding-left: 0;
+  margin-left: 0;
+}
+
+/* Ocupa o lugar exato do rótulo, para o cabeçalho não pular na edição. */
+.session-title-input {
+  flex: 0 1 auto;
   max-width: 55%;
+  padding: 2px 6px;
+  margin-left: -6px;
+  border: 1px solid var(--prom-accent);
+  border-radius: 6px;
+  background: var(--prom-surface-sunken);
+  color: var(--vscode-input-foreground);
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.session-title-input:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--prom-accent-glow);
 }
 
 /* ---------- Popover de sessões ---------- */
@@ -490,6 +567,94 @@ textarea:focus-visible {
   border-left-color: var(--vscode-errorForeground);
 }
 
+/* ---------- Markdown da conversa ----------
+   O `pre-wrap` de cima preserva as quebras do texto cru, que é o que a
+   mensagem mostra enquanto chega. Depois de formatada, quem espaça são os
+   blocos — mantê-lo faria cada parágrafo carregar as quebras de linha duas
+   vezes. */
+.message .content:has(p, ul, ol, pre, h3, h4, h5, h6, blockquote) {
+  white-space: normal;
+}
+
+.message .content p {
+  margin: 0 0 8px;
+}
+
+.message .content > *:last-child {
+  margin-bottom: 0;
+}
+
+.md-heading {
+  margin: 12px 0 6px;
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.md-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+.md-list li {
+  margin: 2px 0;
+}
+
+.message .content blockquote {
+  margin: 0 0 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--prom-border);
+  color: var(--prom-text-dim);
+}
+
+.md-inline-code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background, var(--prom-surface-input));
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
+}
+
+/* O bloco rola sozinho: uma linha longa de código não pode alargar a coluna
+   inteira da conversa. */
+.md-code {
+  position: relative;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border: 1px solid var(--prom-border);
+  border-radius: var(--am-radius);
+  background: var(--vscode-textCodeBlock-background, var(--prom-surface-input));
+}
+
+/* A linguagem, quando declarada, fica no canto: identifica o trecho sem
+   ocupar linha nem competir com o código. */
+.md-code code[data-language]::before {
+  content: attr(data-language);
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 0.75em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--prom-text-dim);
+}
+
+.md-code code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
+  white-space: pre;
+}
+
+.message .content a {
+  color: var(--vscode-textLink-foreground);
+}
+
+.message .content hr {
+  margin: 10px 0;
+  border: none;
+  border-top: 1px solid var(--prom-border);
+}
+
 .message.cancelled .content {
   opacity: 0.7;
 }
@@ -562,7 +727,8 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 10px 12px 2px;
+  /* Colado no fim da conversa, respirando do que vem abaixo. */
+  padding: 4px 12px 8px;
   font-size: 0.94em;
 }
 
@@ -580,6 +746,45 @@ textarea:focus-visible {
 
 .working-word.fading {
   opacity: 0;
+}
+
+/* Três pontos pulsando, como o CLI faz: dizem "ainda estou aqui" sem palavra
+   nenhuma e sem barra de progresso que finge saber quanto falta. */
+.working-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 1px;
+}
+
+.working-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.25;
+  animation: prom-dots 1.2s ease-in-out infinite;
+}
+
+.working-dots i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.working-dots i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes prom-dots {
+  0%,
+  70%,
+  100% {
+    opacity: 0.25;
+    transform: none;
+  }
+  35% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
 }
 
 .working-elapsed {
@@ -813,12 +1018,39 @@ details.step[open] > summary .step-caret {
 
 .agent {
   display: grid;
-  grid-template-columns: auto auto auto 1fr auto;
+  /* nome · função · estado · motor/modelo · tarefa · interromper */
+  grid-template-columns: auto auto auto auto 1fr auto;
   gap: 6px;
   align-items: center;
   padding: 3px 4px;
   border-radius: var(--am-radius);
   background: var(--vscode-input-background);
+}
+
+/* Motor e modelo: informação de apoio, nunca competindo com o nome. */
+/* A linha dos workers dobrados. Marcada à esquerda para ler como um grupo, e
+   não como mais um agente na fila. */
+.agent-bundle {
+  grid-template-columns: auto auto 1fr;
+  border-left: 2px solid var(--prom-accent, var(--vscode-focusBorder));
+  padding-left: 6px;
+}
+
+.agent-bundle .agent-name::before {
+  content: '▸ ';
+  color: var(--prom-text-dim);
+}
+
+.agent-bundle .agent-name[aria-expanded='true']::before {
+  content: '▾ ';
+}
+
+.agent-engine {
+  font-size: 0.82em;
+  color: var(--prom-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* O nome é botão, mas não parece um: quem lê a lista vê texto, e a affordance
@@ -2057,8 +2289,18 @@ input[type='checkbox']:disabled {
   z-index: 60;
 }
 
+/* Largura de trabalho, não de aviso: o formulário tem campo, seletor com
+   descrição e botões, e apertá-los num cartão estreito não economiza nada. */
 .account-dialog .dialog-card {
-  width: min(380px, 100%);
+  width: min(480px, 100%);
+  /* O `overflow: hidden` do cartão cortava o menu do seletor: a segunda opção
+     ficava fora da área visível e parecia não existir. Um diálogo curto não
+     precisa recortar nada — e o menu tem de poder passar da borda. */
+  overflow: visible;
+}
+
+.account-dialog .settings-form {
+  overflow: visible;
 }
 
 /* Dentro do diálogo, o formulário é o conteúdo — dispensa a própria moldura. */
@@ -2166,6 +2408,10 @@ input[type='checkbox']:disabled {
 
 .roles-body {
   min-height: 0;
+  /* `auto` só no eixo que rola de verdade. Com `overflow-y: auto` sozinho, o
+     eixo horizontal vira `auto` por implicação e o menu do seletor é cortado
+     na borda — foi assim que a segunda opção do provedor sumiu. */
+  overflow-x: visible;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -2239,8 +2485,9 @@ input[type='checkbox']:disabled {
   z-index: 70;
 }
 
+/* Confirmação continua estreita: é uma pergunta curta, não um formulário. */
 .confirm-card {
-  width: min(340px, 100%);
+  width: min(400px, 100%);
 }
 
 .confirm-body {
@@ -2549,12 +2796,16 @@ input[type='checkbox']:disabled {
   bottom: calc(100% + 6px);
   left: 0;
   z-index: 30;
+  /* Nunca mais largo que o painel: num corredor estreito, um menu de 248px
+     ancorado à direita ainda precisa caber inteiro na janela. */
   width: max(248px, 100%);
+  max-width: calc(100vw - 16px);
   padding: 6px;
   border-radius: 10px;
   border: 1px solid var(--prom-border);
   background: var(--prom-surface);
   box-shadow: 0 10px 28px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
+  overflow-y: auto;
 }
 
 .menu-title {
@@ -2830,6 +3081,7 @@ input[type='checkbox']:disabled {
 /* ---------- Excluir sessão ---------- */
 
 .session-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -2842,6 +3094,31 @@ input[type='checkbox']:disabled {
 
 /* Só aparece quando a linha recebe atenção: uma lixeira por sessão, sempre
    visível, transforma a lista de conversas numa fileira de botões de apagar. */
+/* As ações flutuam sobre o canto direito da linha — onde a hora está. No
+   hover a hora some e elas aparecem, sem a linha mudar de largura. */
+.session-actions {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.session-row:hover .session-actions,
+.session-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.session-row:hover .session-age {
+  visibility: hidden;
+}
+
+.session-action,
 .session-delete {
   flex: 0 0 auto;
   display: inline-flex;
@@ -2852,14 +3129,27 @@ input[type='checkbox']:disabled {
   background: transparent;
   color: var(--vscode-icon-foreground, var(--vscode-foreground));
   font-size: 0.78em;
-  opacity: 0;
+  opacity: 0.75;
   cursor: pointer;
 }
 
-.session-row:hover .session-delete,
-.session-delete:focus-visible,
 .session-delete.armed {
-  opacity: 0.8;
+  opacity: 1;
+}
+
+.session-action:hover,
+.session-delete:hover,
+.session-action:focus-visible,
+.session-delete:focus-visible {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+/* Campo de renomeação: ocupa a linha inteira, no lugar do item. */
+.session-rename-input {
+  width: 100%;
+  font-size: 0.9em;
+  font-weight: 600;
 }
 
 .session-delete:hover,

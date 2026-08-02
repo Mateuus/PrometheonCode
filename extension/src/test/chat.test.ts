@@ -4,6 +4,7 @@ import type {
   AgentCapabilities,
   AgentEvent,
   AgentSession,
+  StartAgentInput,
 } from '../agents/AgentAdapter';
 import { formatAnswers, type AgentQuestionOutcome } from '../agents/questions';
 import { AgentRegistry } from '../agents/AgentRegistry';
@@ -29,13 +30,17 @@ class ScriptedAdapter implements AgentAdapter {
     terminal: false,
   };
 
+  /** Guarda o que o chat pediu, para o teste conferir o que chegou ao adaptador. */
+  lastStart: StartAgentInput | null = null;
+
   constructor(private readonly script: readonly AgentEvent[]) {}
 
   isAvailable(): Promise<boolean> {
     return Promise.resolve(true);
   }
 
-  start(): Promise<AgentSession> {
+  start(input: StartAgentInput): Promise<AgentSession> {
+    this.lastStart = input;
     return Promise.resolve({ id: 'scripted-session', agentId: this.id, startedAt: Date.now() });
   }
 
@@ -151,13 +156,14 @@ async function askingChat(): Promise<{
  */
 async function scriptedChat(
   script: readonly AgentEvent[],
-): Promise<{ chat: LocalChatService; conversationId: string }> {
+): Promise<{ chat: LocalChatService; conversationId: string; adapter: ScriptedAdapter }> {
   const api = await getApi();
   const registry = new AgentRegistry();
-  registry.register(new ScriptedAdapter(script));
+  const adapter = new ScriptedAdapter(script);
+  registry.register(adapter);
   const chat = new LocalChatService(api.localState, registry, new Logger());
   const conversation = await chat.createConversation({ chatType: 'local' });
-  return { chat, conversationId: conversation.id };
+  return { chat, conversationId: conversation.id, adapter };
 }
 
 suite('Chat', () => {
@@ -324,6 +330,31 @@ suite('Chat', () => {
     // Uma mensagem só de imagem também nomeia a sessão.
     const summaries = await api.localChat.listConversations();
     assert.equal(summaries.find((item) => item.id === conversation.id)?.title, '1 image');
+  });
+
+  test('a ferramenta de delegação chega ao adaptador', async () => {
+    // Este é o fio que ligava o núcleo ao CLI e estava cortado: o núcleo
+    // montava o endereço da ferramenta, o chat descartava em silêncio, e o
+    // agente rodava sem saber que podia delegar.
+    const { chat, conversationId, adapter } = await scriptedChat([{ type: 'completed', text: 'ok' }]);
+    const delegation = {
+      url: 'http://127.0.0.1:1234/mcp',
+      token: 'tk',
+      toolNames: ['mcp__prometheon__prometheon_delegate'],
+    };
+
+    for await (const _event of chat.sendMessage({
+      conversationId,
+      content: 'delegue',
+      workMode: 'agent-team',
+      autonomy: 'auto',
+      mainAgentId: 'scripted',
+      delegation,
+    })) {
+      // só consumir
+    }
+
+    assert.deepEqual(adapter.lastStart?.delegation, delegation);
   });
 
   test('os passos do agente chegam ao consumidor na ordem certa', async () => {

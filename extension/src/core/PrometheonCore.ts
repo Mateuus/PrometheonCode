@@ -3,6 +3,10 @@ import { promisify } from 'node:util';
 import * as vscode from 'vscode';
 import type { AgentProfileService } from '../agents/AgentProfileService';
 import type { AgentRegistry } from '../agents/AgentRegistry';
+import { DelegationServer } from '../agents/DelegationServer';
+import { ConcurrencyGuard } from '../agents/ConcurrencyGuard';
+import { describeAgentFailure } from '../agents/failures';
+import type { StartAgentInput } from '../agents/AgentAdapter';
 import type { AgentRoleService } from '../agents/AgentRoleService';
 import { buildSkillIndex, effectiveAutonomy, selectSkills } from '../skills/SkillIndexBuilder';
 import type { SkillRegistry } from '../skills/SkillRegistry';
@@ -17,6 +21,7 @@ import type { WebChatService } from '../chat/WebChatService';
 import { UNTITLED } from '../chat/LocalChatService';
 import {
   IMAGE_MIME_TYPES,
+  type AgentStep,
   type ChatMessage,
   type ConversationSummary,
   type ImageAttachment,
@@ -78,6 +83,8 @@ import {
   HUB_STATE_LABELS,
   WORK_MODES,
   WORK_MODE_DESCRIPTIONS,
+  AGENT_ROLE_DESCRIPTIONS,
+  AGENT_ROLE_LABELS,
   WORK_MODE_LABELS,
   type ActiveAgentSummary,
   type AgentSummary,
@@ -89,6 +96,7 @@ import {
   type AccountSummary,
   type ActivityStatus,
   type ContextWindowStatus,
+  type EffortLevel,
   type AgentProfileSummary,
   type CustomAgentRole,
   type GitStatus,
@@ -174,6 +182,14 @@ export class PrometheonCore implements vscode.Disposable {
   private mainAgentId = 'mock';
   private agents: readonly AgentSummary[] = [];
   private activeAgents: ActiveAgentSummary[] = [];
+  /** Delegações já feitas no pedido em curso; zera a cada mensagem do usuário. */
+  private delegationsThisRun = 0;
+  /** Vagas de execução dos workers; a reserva é feita antes de qualquer espera. */
+  private readonly concurrency = new ConcurrencyGuard();
+  /** Delegações longas, por bilhete, esperando coleta. */
+  private readonly delegations = new Map<string, PendingDelegation>();
+  /** Relatórios que chegaram tarde e ainda não foram levados ao orquestrador. */
+  private readonly finishedReports: string[] = [];
   private conversationId: string | null = null;
   private conversationTitle: string = UNTITLED;
   private messages: readonly ChatMessage[] = [];
@@ -183,6 +199,11 @@ export class PrometheonCore implements vscode.Disposable {
   /** Pergunta aberta do agente; some quando é respondida ou o run acaba. */
   private pendingQuestion: AgentQuestionRequest | null = null;
   private hubStatus: HubConnectionStatus = { state: 'local-only' };
+  /**
+   * Esforço escolhido no composer. `null` significa "o do agente" — o padrão
+   * do perfil continua valendo até alguém decidir outra coisa nesta sessão.
+   */
+  private sessionEffort: EffortLevel | null = null;
   /** Vigia do login de conta em andamento; o mais recente é o único que vale. */
   private loginWatch: {
     profileId: string;
@@ -191,6 +212,8 @@ export class PrometheonCore implements vscode.Disposable {
   } | null = null;
   /** Última sonda dos servidores MCP; vazio até alguém pedir o teste. */
   private mcpProbes: Readonly<Record<string, McpProbeStatus>> = {};
+  /** Servidor da ferramenta de delegação; nasce na primeira execução em equipe. */
+  private delegationServer: DelegationServer | null = null;
   /** Projetos do Hub; só existem depois de uma conexão autenticada. */
   private webProjects: readonly ProjectOption[] = [];
   private speechStatus: SpeechStatus = {
@@ -334,12 +357,16 @@ export class PrometheonCore implements vscode.Disposable {
   }
 
   get snapshot(): PrometheonViewState {
+    const effort = this.effortForRun();
     return {
       extensionVersion: this.deps.extensionVersion,
       language: languageChoice(),
       chatType: this.chatType,
       workMode: this.workMode,
       autonomy: this.autonomy,
+      // O efetivo, não o escolhido: a interface mostra o que vai valer no
+      // próximo run, venha do composer ou do padrão do agente.
+      ...(effort === undefined ? {} : { effort }),
       bypass: this.bypass,
       mainAgentId: this.mainAgentId,
       agents: this.agents,
@@ -441,6 +468,9 @@ export class PrometheonCore implements vscode.Disposable {
       case 'chat.deleteSession':
         await this.deleteSession(message.payload.conversationId);
         return;
+      case 'chat.renameSession':
+        await this.renameSession(message.payload.conversationId, message.payload.title);
+        return;
       case 'chat.attachImages':
         await this.attachImages();
         return;
@@ -487,6 +517,9 @@ export class PrometheonCore implements vscode.Disposable {
       case 'agentProfiles.update':
         await this.updateAgentProfile(message.payload.id, message.payload.profile);
         return;
+      case 'agentProfiles.openPrompt':
+        await this.openAgentPrompt(message.payload.id);
+        return;
       case 'agentProfiles.remove':
         await this.removeAgentProfile(message.payload.id);
         return;
@@ -501,6 +534,9 @@ export class PrometheonCore implements vscode.Disposable {
         return;
       case 'agentRoles.remove':
         await this.removeCustomRole(message.payload.id);
+        return;
+      case 'agentRoles.openPrompt':
+        await this.openRolePrompt(message.payload.id);
         return;
       case 'skills.refresh':
         await this.refreshSkills();
@@ -555,6 +591,9 @@ export class PrometheonCore implements vscode.Disposable {
       case 'settings.setAutonomy':
         await this.setAutonomy(message.payload.autonomy);
         return;
+      case 'settings.setEffort':
+        await this.setEffort(message.payload.effort);
+        return;
       case 'settings.selectMainAgent':
         await this.setMainAgent(message.payload.agentId);
         return;
@@ -602,7 +641,11 @@ export class PrometheonCore implements vscode.Disposable {
 
   // ---------- Chat ----------
 
-  async send(content: string, drafts: readonly DraftAttachment[] = []): Promise<void> {
+  async send(
+    content: string,
+    drafts: readonly DraftAttachment[] = [],
+    author: 'user' | 'system' = 'user',
+  ): Promise<void> {
     if (this.busy) {
       return;
     }
@@ -625,6 +668,28 @@ export class PrometheonCore implements vscode.Disposable {
     try {
       const systemPrompt = this.systemPromptForMainAgent();
       const model = this.mainAgentProfile?.profile.model;
+      const effort = this.effortForRun();
+      // O orçamento vale por pedido do usuário. Uma retomada automática é
+      // continuação do mesmo pedido: zerar ali daria crédito infinito a quem
+      // delega, retoma e delega de novo.
+      if (author === 'user') {
+        this.delegationsThisRun = 0;
+      }
+      // A ferramenta de delegar só existe no modo de equipe e quando há a quem
+      // delegar — oferecê-la sem isso seria prometer o que não se cumpre.
+      const delegation =
+        this.chatType === 'local' &&
+        this.workMode === 'agent-team' &&
+        this.delegatableAgents().length > 0
+          ? await this.delegationEndpoint()
+          : undefined;
+      // Sem esta linha, a orquestração falha muda: o agente responde sozinho e
+      // nada diz que a ferramenta não chegou até ele.
+      this.deps.logger.info(
+        delegation === undefined
+          ? `Delegação desligada (chat=${this.chatType}, modo=${this.workMode}, delegáveis=${String(this.delegatableAgents().length)}).`
+          : `Delegação ligada: ${String(this.delegatableAgents().length)} agente(s) disponíveis em ${delegation.url}.`,
+      );
       for await (const event of chat.sendMessage({
         conversationId,
         content,
@@ -636,8 +701,15 @@ export class PrometheonCore implements vscode.Disposable {
         // O executor é sempre um adaptador; quando o principal é um perfil, o
         // adaptador sai do provedor da conta vinculada.
         mainAgentId: this.executionAgentId(),
+        // O nome que a mensagem exibe é o do agente do Prometheon.
+        ...(this.mainAgentProfile === undefined
+          ? {}
+          : { agentLabel: this.mainAgentProfile.profile.name }),
         ...(model === undefined || model === '' ? {} : { model }),
         ...(systemPrompt === '' ? {} : { systemPrompt }),
+        ...(effort === undefined ? {} : { effort }),
+        ...(delegation === undefined ? {} : { delegation }),
+        ...(author === 'user' ? {} : { author }),
       })) {
         if (event.type === 'agent.status') {
           this.upsertActiveAgent(event.agent);
@@ -685,6 +757,25 @@ export class PrometheonCore implements vscode.Disposable {
         }
         this.deps.bus.emit('chat.event', event);
         if (event.type === 'run.failed') {
+          // O CLI fala consigo mesmo: "401 OAuth access token has expired" diz
+          // o que houve, não o que fazer. Quem lê precisa saber que é a conta e
+          // onde reconectá-la — o texto do provedor fica, porque a classificação
+          // é palpite sobre a frase dele.
+          const diagnosis = describeAgentFailure(event.error.message);
+          // Sem classificação não há o que acrescentar: repetir a mesma frase
+          // num aviso ao lado da mensagem seria só barulho.
+          if (diagnosis.kind !== 'unknown') {
+            const account = this.accounts.find(
+              (item) => item.profileId === this.mainAgentProfile?.profile.providerProfileId,
+            );
+            this.deps.bus.emit('notification', {
+              level: 'warning',
+              message:
+                account === undefined
+                  ? t('The agent stopped: {0}.', diagnosis.summary)
+                  : t('The agent stopped: {0} ({1}).', diagnosis.summary, account.name),
+            });
+          }
           this.deps.bus.emit('chat.error', event.error);
         }
       }
@@ -696,6 +787,11 @@ export class PrometheonCore implements vscode.Disposable {
       this.clearPendingQuestion(this.pendingQuestion?.requestId ?? null);
       this.busy = false;
       this.currentRunId = null;
+      // As sessões deste run terminaram: o agente volta a ser um só, ocioso.
+      // Sem isto, cada mensagem enviada deixava mais uma linha "trabalhando"
+      // na lista, e ela crescia a cada pergunta.
+      this.settleActiveAgents();
+      this.deps.bus.emit('agents.updated', this.activeAgents);
       this.activity = IDLE_ACTIVITY;
       this.deps.bus.emit('activity.changed', this.activity);
       await this.expireOneTaskBypass();
@@ -941,6 +1037,34 @@ export class PrometheonCore implements vscode.Disposable {
    * apagada era a aberta, uma nova é criada em seguida: ficar sem conversa
    * ativa deixaria o painel num estado em que nem enviar mensagem funciona.
    */
+  /**
+   * Renomeia a conversa. Um título dado à mão vence o automático para sempre:
+   * o batismo pela primeira mensagem só acontece enquanto a sessão é
+   * "Untitled", então nada aqui é sobrescrito depois.
+   *
+   * Conversa do Hub é do time e vive no servidor — renomeá-la é operação do
+   * site, não desta máquina; aqui a interface diz isso em vez de fingir.
+   */
+  async renameSession(conversationId: string, title: string): Promise<void> {
+    if (this.chatType === 'web') {
+      this.deps.bus.emit('notification', {
+        level: 'info',
+        message: t('Rename Hub conversations in the Prometheon Hub.'),
+      });
+      return;
+    }
+    try {
+      await this.deps.localChat.rename(conversationId, title);
+      if (conversationId === this.conversationId) {
+        this.conversationTitle = title;
+      }
+      await this.refreshSessions();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível renomear a sessão', error);
+    }
+  }
+
   async deleteSession(conversationId: string): Promise<void> {
     if (this.busy && conversationId === this.conversationId) {
       this.deps.bus.emit('notification', {
@@ -1473,6 +1597,58 @@ export class PrometheonCore implements vscode.Disposable {
    * Remove o papel. Confirma no modal porque os agentes que apontam para ele
    * ficam sem papel — e a interface passa a avisar isso em cada um.
    */
+  /**
+   * Abre (criando se preciso) o prompt em arquivo de um agente. Prompt grande
+   * merece editor de verdade — e, sendo arquivo, o próprio agente pode ler e
+   * manter o próprio manual.
+   */
+  async openAgentPrompt(id: string): Promise<void> {
+    try {
+      const file = await this.deps.agentProfiles.ensurePromptFile(id);
+      const document = await vscode.workspace.openTextDocument(file);
+      await vscode.window.showTextDocument(document, { preview: false });
+      // O arquivo vence o texto inline; reler agora deixa o painel coerente.
+      await this.refreshAccounts();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível abrir o prompt do agente', error);
+    }
+  }
+
+  /**
+   * Abre (criando se preciso) o prompt em arquivo de uma função de projeto ou
+   * máquina. O arquivo é a forma revisável do prompt: no escopo de projeto ele
+   * viaja pelo Git e muda por PR, como qualquer comportamento do time.
+   */
+  async openRolePrompt(id: string): Promise<void> {
+    const role = this.customRoles.find((candidate) => candidate.id === id);
+    if (role === undefined) {
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: `Unknown role: ${id}`,
+      });
+      return;
+    }
+    if (role.scope === 'hub') {
+      this.deps.bus.emit('notification', {
+        level: 'info',
+        message: t('Team role prompts sync through the Hub; the file editor arrives in a next phase.'),
+      });
+      return;
+    }
+    try {
+      const file = await this.deps.agentRoles.ensurePromptFile(role);
+      const document = await vscode.workspace.openTextDocument(file);
+      await vscode.window.showTextDocument(document, { preview: false });
+      // O arquivo vence o texto inline; reler agora deixa o painel coerente
+      // com o que o editor está mostrando.
+      await this.refreshCustomRoles();
+      await this.publish();
+    } catch (error) {
+      this.reportFailure('Não foi possível abrir o prompt da função', error);
+    }
+  }
+
   async removeCustomRole(id: string): Promise<void> {
     try {
       const role = await this.deps.agentRoles.require(id);
@@ -1540,12 +1716,468 @@ export class PrometheonCore implements vscode.Disposable {
     return this.deps.registry.main.id;
   }
 
+  /**
+   * Endereço da ferramenta de delegação, subindo o servidor na primeira vez.
+   * Ele vive enquanto a extensão viver — abrir e fechar a cada mensagem
+   * trocaria a porta no meio de uma conversa que o CLI está retomando.
+   */
+  private async delegationEndpoint(): Promise<StartAgentInput['delegation']> {
+    this.delegationServer ??= new DelegationServer(
+      {
+        listAgents: () =>
+          Promise.resolve(
+            this.delegatableAgents().map((summary) => this.rosterEntry(summary)),
+          ),
+        delegate: (agent, task) => this.startDelegation(agent, task),
+        collect: (ticket) => this.collectDelegation(ticket),
+      },
+      this.deps.logger,
+    );
+    return this.delegationServer.start();
+  }
+
+  /**
+   * Teto de agentes simultâneos nesta máquina.
+   *
+   * É configuração do computador, não do agente: o mesmo perfil roda num
+   * desktop de 64 GB e num notebook de 8. Cada worker é um processo de CLI.
+   */
+  private globalConcurrencyLimit(): number {
+    const configured = vscode.workspace
+      .getConfiguration('prometheon')
+      .get<number>('agents.globalConcurrency', DEFAULT_GLOBAL_CONCURRENCY);
+    return Number.isInteger(configured) && configured >= 1 && configured <= 16
+      ? configured
+      : DEFAULT_GLOBAL_CONCURRENCY;
+  }
+
+  /**
+   * Agentes que o orquestrador pode acionar: todos os habilitados, menos ele
+   * mesmo. Um agente que delegasse a si próprio giraria em falso.
+   */
+  /** Um delegável como o orquestrador o lê: nome, função, para quê e vagas. */
+  private rosterEntry(summary: AgentProfileSummary): DelegationRoster {
+    return {
+      name: summary.profile.name,
+      role: summary.customRole?.label ?? AGENT_ROLE_LABELS[summary.profile.role],
+      description: summary.customRole?.description ?? AGENT_ROLE_DESCRIPTIONS[summary.profile.role],
+      slots: summary.profile.maxConcurrentSessions,
+    };
+  }
+
+  private delegatableAgents(): readonly AgentProfileSummary[] {
+    return this.agentProfiles.filter(
+      (summary) => summary.profile.enabled && summary.profile.id !== this.mainAgentId,
+    );
+  }
+
+  /**
+   * Começa uma delegação e devolve o relatório — ou um bilhete de retirada.
+   *
+   * Uma pesquisa de verdade leva minutos, e prender a ferramenta esse tempo
+   * todo faz o cliente MCP desistir da chamada: o orquestrador recebe "timed
+   * out" enquanto o worker segue trabalhando às escuras, com o relatório
+   * inalcançável. Por isso a espera aqui é curta. O trabalho rápido volta na
+   * hora, como antes; o demorado vira um bilhete, e quando o worker termina o
+   * relatório entra sozinho na conversa — ninguém precisa ficar perguntando se
+   * já chegou.
+   */
+  private async startDelegation(agentName: string, task: string): Promise<string> {
+    const ticket = newId('task');
+    const work = this.delegateToAgent(agentName, task);
+    this.delegations.set(ticket, { ticket, agent: agentName, work });
+
+    // A recusa (agente inexistente, teto cheio) acontece em milissegundos e
+    // precisa voltar como erro — dizer "estou trabalhando nisso" para uma
+    // tarefa que nunca começou seria mentir para quem delegou.
+    const refusal = await settleWithin(work, 0);
+    if (refusal !== null && 'failure' in refusal) {
+      this.delegations.delete(ticket);
+      throw new Error(refusal.failure);
+    }
+
+    // A partir daqui ninguém espera: o relatório vai para a conversa quando
+    // ficar pronto, e o orquestrador é retomado com ele.
+    void work.then(
+      (report) => {
+        this.publishReport(agentName, ticket, report, null);
+      },
+      (error: unknown) => {
+        this.publishReport(
+          agentName,
+          ticket,
+          null,
+          error instanceof Error ? error.message : String(error),
+        );
+      },
+    );
+
+    return [
+      `Sent to "${agentName}". Ticket: ${ticket}.`,
+      'It is running now. Do not wait for it, do not sleep, do not poll: end your turn telling the user what you delegated. When every agent finishes, their reports come back to you automatically and you continue from there.',
+    ].join(' ');
+  }
+
+  /** Troca o bilhete pelo relatório, esperando um pouco se ainda não chegou. */
+  private async collectDelegation(ticket: string): Promise<string> {
+    const pending = this.delegations.get(ticket.trim());
+    if (pending === undefined) {
+      return `No delegation with ticket "${ticket}". Either it was already collected, or the ticket is wrong.`;
+    }
+
+    const outcome = await settleWithin(pending.work, DELEGATION_INLINE_WAIT_MS);
+    if (outcome === null) {
+      return `"${pending.agent}" is still working on ticket ${ticket}. Answer with what you have; the report reaches the conversation when it is done.`;
+    }
+    this.delegations.delete(ticket);
+    if ('failure' in outcome) {
+      throw new Error(outcome.failure);
+    }
+    return outcome.report;
+  }
+
+  /** Põe na conversa o relatório de um worker que terminou fora do turno. */
+  private publishReport(
+    agent: string,
+    ticket: string,
+    report: string | null,
+    failure: string | null,
+  ): void {
+    const conversation = this.conversationId;
+    if (conversation !== null) {
+      const text =
+        failure === null
+          ? `**${agent}** finished (ticket ${ticket}):
+
+${report ?? ''}`
+          : `**${agent}** failed (ticket ${ticket}): ${failure}`;
+      this.finishedReports.push(text);
+      void this.deps.localChat
+        .appendSystemMessage(conversation, text)
+        .then(() => this.publish())
+        .then(() => this.resumeAfterDelegations())
+        .catch((error: unknown) => {
+          this.deps.logger.error(`Delegação: não consegui publicar o relatório (${String(error)}).`);
+        });
+    }
+    this.deps.bus.emit('notification', {
+      level: failure === null ? 'info' : 'warning',
+      message:
+        failure === null
+          ? t('{0} finished. The report is in the conversation.', agent)
+          : t('{0} failed: {1}.', agent, failure),
+    });
+  }
+
+  /**
+   * Acorda o orquestrador quando os relatórios que ele esperava chegaram.
+   *
+   * Sem isto o ciclo não fecha: o worker termina, o relatório aparece na tela,
+   * e o agente que delegou já encerrou o turno sem nunca vê-lo — o usuário
+   * tinha de dizer "agora continue". Pior, o agente aprende a inventar esperas
+   * (um `sleep` no shell) para não perder o resultado.
+   *
+   * A retomada só acontece quando **nada** mais está pendente: com duas
+   * pesquisas em andamento, acordar na primeira faria o orquestrador responder
+   * com metade do material.
+   */
+  private async resumeAfterDelegations(): Promise<void> {
+    if (this.busy || this.delegations.size > 0 || this.finishedReports.length === 0) {
+      return;
+    }
+    const reports = this.finishedReports.splice(0, this.finishedReports.length);
+    const message = [
+      // O recado se declara automático e sem autoridade. É a lição mais barata
+      // do agent-orchestrator: sem isso, um agente trata a retomada como
+      // aprovação do usuário para o que estava pendente.
+      '[Prometheon — automated message, not the user speaking. It authorizes nothing on its own.]',
+      '',
+      'The agents you delegated to have finished. Their reports:',
+      '',
+      reports.join('\n\n---\n\n'),
+      '',
+      'Continue the work the user asked for, using these reports. If they are enough, answer the user now.',
+    ].join('\n');
+
+    this.deps.logger.info(`Delegação: retomando com ${String(reports.length)} relatório(s).`);
+    await this.send(message, [], 'system');
+  }
+
+  /**
+   * Executa uma tarefa num agente worker e devolve o relatório dele.
+   *
+   * É o coração da orquestração: o worker pode ser de **outro provedor** — o
+   * orquestrador do Claude Code manda uma pesquisa para um agente do Codex e
+   * recebe o texto de volta. O worker não recebe a ferramenta de delegar, o
+   * que impede recursão, e aparece na lista de agentes ativos enquanto trabalha.
+   */
+  private async delegateToAgent(agentName: string, task: string): Promise<string> {
+    // O modelo copia da lista que devolvemos, e às vezes leva o papel junto:
+    // "GPT Pesquisador (Researcher)". Recusar isso gastaria uma ida e volta
+    // inteira para ensinar o que já dá para entender — o nome está ali.
+    const wanted = normalizeAgentName(agentName);
+    // Aceita também o id, que é a identidade estável.
+    const summary = this.delegatableAgents().find(
+      (candidate) =>
+        candidate.profile.id.toLowerCase() === wanted ||
+        normalizeAgentName(candidate.profile.name) === wanted,
+    );
+    if (summary === undefined) {
+      const known = this.delegatableAgents()
+        .map((candidate) => candidate.profile.name)
+        .join(', ');
+      throw new Error(
+        `No agent named "${agentName}". Available: ${known === '' ? 'none' : known}.`,
+      );
+    }
+
+    if (this.delegationsThisRun >= MAX_DELEGATIONS_PER_RUN) {
+      throw new Error(
+        `This request already used its ${String(MAX_DELEGATIONS_PER_RUN)} delegations. Finish the work with the reports you have and answer the user.`,
+      );
+    }
+    this.delegationsThisRun += 1;
+
+    // Tetos de concorrência. A vaga é tomada aqui, antes de qualquer `await`:
+    // as delegações de um mesmo turno chegam juntas, e contar quem já está na
+    // lista deixaria todas passarem pela brecha entre conferir e registrar.
+    const reservation = this.concurrency.tryReserve(
+      summary.profile.id,
+      summary.profile.name,
+      summary.profile.maxConcurrentSessions,
+      this.globalConcurrencyLimit(),
+    );
+    if (!reservation.ok) {
+      throw new Error(reservation.reason);
+    }
+
+    const account = this.accounts.find(
+      (item) => item.profileId === summary.profile.providerProfileId,
+    );
+    const adapterId = account?.providerId ?? '';
+    if (!this.deps.registry.has(adapterId)) {
+      throw new Error(
+        `Agent "${summary.profile.name}" is bound to an account whose CLI is not available here.`,
+      );
+    }
+    const adapter = this.deps.registry.require(adapterId);
+    const folder = this.deps.workspace.folder?.uri.fsPath;
+    const model = summary.profile.model;
+    const prompt = this.systemPromptFor(summary);
+
+    const session = await adapter.start({
+      // O worker executa a tarefa que recebeu; quem planeja é o orquestrador.
+      workMode: 'edit',
+      autonomy: this.effectiveAutonomyForRun(),
+      role: 'worker',
+      task,
+      ...(folder === undefined ? {} : { workspaceFolder: folder }),
+      ...(model === undefined || model === '' ? {} : { model }),
+      ...(prompt === '' ? {} : { systemPrompt: prompt }),
+      ...(summary.profile.effort === undefined ? {} : { effort: summary.profile.effort }),
+    });
+
+    this.upsertActiveAgent({
+      sessionId: session.id,
+      agentId: adapter.id,
+      displayName: summary.profile.name,
+      role: 'worker',
+      status: 'working',
+      task,
+      roleLabel: summary.customRole?.label ?? AGENT_ROLE_LABELS[summary.profile.role],
+      engine: adapter.displayName,
+      ...(model === undefined || model === '' ? {} : { model: modelWithoutWindow(model) }),
+    });
+    this.deps.bus.emit('agents.updated', this.activeAgents);
+    await this.publish();
+
+    let report = '';
+    let failure: string | null = null;
+    /** O que o worker fez, para a tela dele. Não entra na conversa. */
+    const steps: AgentStep[] = [];
+    const recordStep = async (step: AgentStep): Promise<void> => {
+      const at = steps.findIndex((item) => item.id === step.id);
+      if (at === -1) {
+        steps.push(step);
+      } else {
+        steps[at] = step;
+      }
+      this.activeAgents = this.activeAgents.map((item) =>
+        item.sessionId === session.id ? { ...item, steps: [...steps] } : item,
+      );
+      this.deps.bus.emit('agents.updated', this.activeAgents);
+      await this.publish();
+    };
+
+    try {
+      for await (const event of adapter.send(session.id, {
+        content: task,
+        workMode: 'edit',
+        autonomy: this.effectiveAutonomyForRun(),
+      })) {
+        if (event.type === 'tool.requested') {
+          await recordStep({
+            id: event.toolId,
+            sessionId: session.id,
+            kind: 'tool',
+            tool: event.tool,
+            title: event.title,
+            ...(event.detail === undefined ? {} : { detail: event.detail }),
+            status: 'running',
+            startedAt: Date.now(),
+          });
+        } else if (event.type === 'tool.completed') {
+          const started = steps.find((item) => item.id === event.toolId);
+          const startedAt = started?.startedAt ?? Date.now();
+          const detail = event.detail ?? started?.detail;
+          await recordStep({
+            id: event.toolId,
+            sessionId: session.id,
+            kind: 'tool',
+            tool: started?.tool ?? 'Tool',
+            title: started?.title ?? '',
+            ...(detail === undefined ? {} : { detail }),
+            status: event.failed === true ? 'failed' : 'done',
+            startedAt,
+            durationMs: Date.now() - startedAt,
+          });
+        } else if (event.type === 'thought') {
+          await recordStep({
+            id: `${session.id}-thought-${String(steps.length)}`,
+            sessionId: session.id,
+            kind: 'thought',
+            tool: 'Thought',
+            title: '',
+            status: 'done',
+            startedAt: Date.now() - event.durationMs,
+            durationMs: event.durationMs,
+          });
+        } else if (event.type === 'completed') {
+          report = event.text;
+        } else if (event.type === 'failed') {
+          failure = event.error.message;
+        } else if (event.type === 'usage') {
+          // O gasto do worker é do mesmo run: some no total que a conta mede.
+          await this.deps.usage.record(summary.profile.providerProfileId, event.delta);
+        }
+      }
+    } finally {
+      // A vaga volta aconteça o que acontecer: vaga não devolvida é vaga
+      // perdida até a extensão reiniciar.
+      this.concurrency.release(summary.profile.id);
+      await adapter.dispose(session.id);
+      // O worker fica na lista, no estado em que parou, até o pedido do usuário
+      // terminar — é o `settleActiveAgents` do fim do run que o retira. Sumir
+      // na hora apagava a única evidência de que ele existiu: um worker que
+      // falha em um segundo aparecia e desaparecia antes de alguém ver.
+      this.activeAgents = this.activeAgents.map((item) =>
+        item.sessionId === session.id
+          ? {
+              ...item,
+              status: failure === null ? ('completed' as const) : ('failed' as const),
+              steps: [...steps],
+            }
+          : item,
+      );
+      this.deps.bus.emit('agents.updated', this.activeAgents);
+      await this.publish();
+    }
+
+    if (failure !== null) {
+      // A falha vira instrução, não só relato: o orquestrador é quem decide se
+      // tenta outro agente ou para, e ele decide com esta linha e nada mais.
+      const diagnosis = describeAgentFailure(failure);
+      this.deps.logger.warn(`Delegação: ${summary.profile.name} falhou — ${failure}`);
+      // E o usuário precisa ver: sem isto, o worker morre calado e a única
+      // pista fica dentro do raciocínio do orquestrador.
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: t('Agent "{0}" failed: {1}.', summary.profile.name, diagnosis.summary),
+      });
+      throw new Error(
+        `Agent "${summary.profile.name}" failed: ${failure}\n\n${diagnosis.advice}`,
+      );
+    }
+    return report === ''
+      ? `Agent "${summary.profile.name}" finished without a report.`
+      : await this.fitReport(report, summary.profile.name, session.id);
+  }
+
+  /**
+   * Ajusta o relatório do worker ao que cabe na conversa do orquestrador.
+   *
+   * Um pesquisador pode voltar com dezenas de milhares de caracteres. Despejar
+   * isso no contexto do pai come a janela dele e leva à espiral de compressão —
+   * ele resume, perde o fio, pergunta de novo. Então o relatório longo vai
+   * inteiro para um arquivo e o que volta é começo, fim e o caminho: nada se
+   * perde, e é o orquestrador quem decide se precisa ler o miolo.
+   */
+  private async fitReport(report: string, agentName: string, sessionId: string): Promise<string> {
+    if (report.length <= MAX_REPORT_CHARS) {
+      return report;
+    }
+
+    const folder = this.deps.workspace.folder?.uri;
+    const head = report.slice(0, Math.floor(MAX_REPORT_CHARS * 0.6));
+    const tail = report.slice(-Math.floor(MAX_REPORT_CHARS * 0.3));
+
+    if (folder === undefined) {
+      return `${head}\n\n[... ${String(report.length - head.length - tail.length)} characters omitted ...]\n\n${tail}`;
+    }
+
+    const target = vscode.Uri.joinPath(folder, '.prometheon', 'reports', `${sessionId}.md`);
+    try {
+      await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder, '.prometheon', 'reports'));
+      await vscode.workspace.fs.writeFile(target, Buffer.from(report, 'utf8'));
+    } catch (error) {
+      this.deps.logger.warn(`Delegação: não consegui salvar o relatório completo (${String(error)}).`);
+      return `${head}\n\n[... truncated ...]\n\n${tail}`;
+    }
+
+    return [
+      head,
+      `[... ${String(report.length - head.length - tail.length)} characters omitted. The full report from "${agentName}" is at ${target.fsPath} — read it if you need the middle ...]`,
+      tail,
+    ].join('\n\n');
+  }
+
+  /**
+   * Esforço que vale para o próximo run: o do composer quando alguém escolheu,
+   * senão o padrão do agente principal. `undefined` deixa a decisão com o CLI.
+   */
+  private effortForRun(): EffortLevel | undefined {
+    return this.sessionEffort ?? this.mainAgentProfile?.profile.effort;
+  }
+
+  /**
+   * Escolhe o esforço desta sessão. Escolher o mesmo valor que o agente já tem
+   * volta ao padrão dele — assim o composer não vira um segundo lugar onde a
+   * configuração do agente fica presa.
+   */
+  async setEffort(effort: EffortLevel | null): Promise<void> {
+    this.sessionEffort = effort === this.mainAgentProfile?.profile.effort ? null : effort;
+    await this.publish();
+  }
+
   systemPromptForMainAgent(): string {
     const summary = this.mainAgentProfile;
     if (summary === undefined) {
       return '';
     }
+    const base = this.systemPromptFor(summary);
+    // Só o principal recebe a cartilha de delegação, e só quando o modo pede:
+    // um worker que soubesse delegar abriria recursão, e num modo sem equipe a
+    // instrução falaria de uma ferramenta que ele não tem.
+    const team = this.delegatableAgents();
+    return this.workMode === 'agent-team' && team.length > 0
+      ? [base, orchestrationInstruction(team.map((member) => this.rosterEntry(member)))]
+          .filter((part) => part !== '')
+          .join('\n\n')
+      : base;
+  }
 
+  /** Instruções permanentes de um agente: papel, skills, grafo e prompt dele. */
+  private systemPromptFor(summary: AgentProfileSummary): string {
     const { profile, customRole } = summary;
     const selection = selectSkills(profile, customRole, this.skillCatalog.skills);
     if (selection.missing.length > 0) {
@@ -2488,15 +3120,60 @@ export class PrometheonCore implements vscode.Disposable {
     return this.deps.registry.main.id;
   }
 
+  /**
+   * Atualiza a lista de agentes ativos.
+   *
+   * A chave é a **sessão**, mas o principal é dobrado numa linha só: cada
+   * mensagem abre uma sessão nova do mesmo agente, e listá-las todas
+   * transformava a lista num histórico de perguntas. Os workers continuam um
+   * por sessão — dois deles rodando em paralelo são dois agentes de verdade.
+   */
   private upsertActiveAgent(agent: ActiveAgentSummary): void {
-    const index = this.activeAgents.findIndex((item) => item.sessionId === agent.sessionId);
+    const enriched = this.describeActiveAgent(agent);
+    const index =
+      enriched.role === 'main'
+        ? this.activeAgents.findIndex((item) => item.role === 'main')
+        : this.activeAgents.findIndex((item) => item.sessionId === enriched.sessionId);
     if (index === -1) {
-      this.activeAgents = [...this.activeAgents, agent];
+      this.activeAgents = [...this.activeAgents, enriched];
       return;
     }
     const next = [...this.activeAgents];
-    next[index] = agent;
+    next[index] = enriched;
     this.activeAgents = next;
+  }
+
+  /**
+   * Completa o que o adaptador não sabe: quem é o agente no Prometheon (o
+   * perfil e a função dele), por qual motor e modelo ele roda. O adaptador
+   * conhece só a si mesmo.
+   */
+  private describeActiveAgent(agent: ActiveAgentSummary): ActiveAgentSummary {
+    const summary = agent.role === 'main' ? this.mainAgentProfile : undefined;
+    if (summary === undefined) {
+      return { ...agent, engine: agent.displayName };
+    }
+    const roleLabel =
+      summary.customRole?.label ?? AGENT_ROLE_LABELS[summary.profile.role];
+    const model = this.reportedModel ?? summary.profile.model ?? '';
+    return {
+      ...agent,
+      displayName: summary.profile.name,
+      roleLabel,
+      engine: summary.providerName ?? agent.displayName,
+      ...(model === '' ? {} : { model: modelWithoutWindow(model) }),
+    };
+  }
+
+  /**
+   * Fecha o ciclo de um run: workers somem e o principal fica ocioso. Uma
+   * sessão terminada continuar na lista como "trabalhando" é pior do que não
+   * mostrar nada — é dizer que há trabalho acontecendo quando não há.
+   */
+  private settleActiveAgents(): void {
+    this.activeAgents = this.activeAgents
+      .filter((agent) => agent.role === 'main')
+      .map((agent) => ({ ...agent, status: 'idle' as const, task: null }));
   }
 
   private async persistOrchestration(patch: {
@@ -2670,6 +3347,7 @@ export class PrometheonCore implements vscode.Disposable {
 
   dispose(): void {
     this.stopLoginWatch();
+    this.delegationServer?.dispose();
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
@@ -2723,6 +3401,129 @@ function imageMimeType(fsPath: string): ImageMimeType | null {
 
 function baseName(fsPath: string): string {
   return fsPath.split(/[\\/]/).pop() ?? fsPath;
+}
+
+/**
+ * Cartilha do orquestrador, somada ao prompt dele no modo de equipe.
+ *
+ * Ela existe porque o modelo não adivinha que tem uma equipe: sem instrução, o
+ * CLI faz tudo sozinho e a ferramenta fica parada. O texto diz **quando**
+ * delegar (trabalho que um especialista faz melhor) e **como** (uma tarefa
+ * autocontida por chamada), e insiste no ponto que mais quebra na prática: o
+ * worker não vê a conversa, então a tarefa precisa carregar o contexto.
+ */
+/**
+ * Quantos agentes podem trabalhar ao mesmo tempo nesta máquina, por padrão.
+ *
+ * Seis é o número dos estudos: com profundidade 1 e três filhos por pai, o
+ * pior caso cabe folgado; subir isso sem olhar a memória da máquina é como
+ * abrir seis editores e esperar que nenhum trave.
+ */
+/**
+ * Nome de agente como ele chega da ferramenta: sem o papel entre parênteses,
+ * sem aspas e sem diferença de caixa ou de espaço.
+ */
+export function normalizeAgentName(value: string): string {
+  return value
+    .replace(/\([^)]*\)\s*$/, '')
+    .replace(/^["'`]|["'`]$/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Quanto `prometheon_collect` espera por um relatório que ainda não chegou.
+ *
+ * Delegar não espera nada — o worker roda solto e o relatório volta pela
+ * conversa, como no `delegate_task` do Hermes e no `ao spawn`. Esta janela é só
+ * a cortesia de quem veio buscar um trabalho quase pronto: mais que isto e o
+ * cliente MCP corta a chamada.
+ */
+const DELEGATION_INLINE_WAIT_MS = 30 * 1000;
+
+/** Delegação em andamento, esperando quem venha buscar. */
+interface PendingDelegation {
+  readonly ticket: string;
+  readonly agent: string;
+  readonly work: Promise<string>;
+}
+
+/** Resultado de uma promessa, quando ela chega dentro do prazo. */
+type Settled = { readonly report: string } | { readonly failure: string };
+
+/**
+ * Espera a promessa até o prazo. `null` quer dizer "ainda não" — e nunca
+ * derruba nada: uma rejeição vira `failure`, para quem chamou decidir.
+ */
+async function settleWithin(work: Promise<string>, ms: number): Promise<Settled | null> {
+  return Promise.race([
+    work.then(
+      (report): Settled => ({ report }),
+      (error: unknown): Settled => ({
+        failure: error instanceof Error ? error.message : String(error),
+      }),
+    ),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
+}
+
+const DEFAULT_GLOBAL_CONCURRENCY = 6;
+
+/**
+ * Delegações que um único pedido do usuário pode disparar.
+ *
+ * É o freio mecânico contra o modelo que entra em laço de delegar — o teto de
+ * simultâneos não pega esse caso, porque delegar em série, mil vezes, nunca
+ * passa de um worker por vez. Quando estoura, a recusa manda concluir com o
+ * que já tem.
+ */
+const MAX_DELEGATIONS_PER_RUN = 12;
+
+/**
+ * Tamanho do relatório que ainda cabe na conversa do orquestrador. Acima
+ * disto, o texto inteiro vai para arquivo e volta um resumo com o caminho.
+ */
+const MAX_REPORT_CHARS = 24_000;
+
+/** Um agente delegável como o orquestrador o lê no prompt. */
+export interface DelegationRoster {
+  readonly name: string;
+  readonly role: string;
+  readonly description: string;
+  /** Quantas tarefas ele aceita ao mesmo tempo. */
+  readonly slots: number;
+}
+
+/**
+ * Cartilha do orquestrador, com a equipe dele dentro.
+ *
+ * A lista vai **no prompt**, e não atrás de uma ferramenta: um orquestrador que
+ * precisa perguntar quem existe antes de cada tarefa gasta uma ida e volta para
+ * descobrir o que já era para ele saber — e, quando não pergunta, faz o
+ * trabalho sozinho. `prometheon_list_agents` continua existindo para reconferir
+ * quando algo muda no meio da sessão; deixou de ser o primeiro passo obrigatório.
+ */
+export function orchestrationInstruction(agents: readonly DelegationRoster[]): string {
+  const roster = agents
+    .map(
+      (agent) =>
+        `- agent: "${agent.name}"\n  role: ${agent.role}\n  use it for: ${agent.description}\n  can run: ${String(agent.slots)} task(s) at a time`,
+    )
+    .join('\n');
+
+  return [
+    'You are the orchestrator of a Prometheon agent team. This is your team right now:',
+    '',
+    roster,
+    '',
+    'Delegate with `prometheon_delegate`, passing the name exactly as written above. You do not need to look the team up first — it is right here. Use `prometheon_list_agents` only to re-check after something changes.',
+    'Your default is to coordinate, not to do. The user picked Agent Team, which is the instruction: work with substance — research, reading through a codebase, tests, review, implementation — goes to a worker, even when you could do it yourself. Nobody has to ask you to delegate.',
+    'Do it yourself only when the user tells you to, or when there is no real work in it: a greeting, a question about this conversation, or something you can answer in a line from what you already know. If you decide to keep a substantial task, say in one line that you did and why — never take the work back in silence.',
+    'The agent you delegate to does not see this conversation. Put everything it needs in the task, and say exactly what you want back.',
+    'To run agents in parallel, make the delegate calls in the same turn instead of waiting for each report. Mind the "can run" limit above: a second task to an agent already at its limit is refused.',
+    'Delegating never blocks: it answers with a ticket, not a report, and that is the normal outcome. End your turn telling the user what you delegated. Never sleep, poll, or run shell commands to wait for an agent — when every one of them finishes, their reports come back to you automatically and you continue from there.',
+    'One task per call, and the judgement stays with you — you decide what to accept, what to redo, and what to answer.',
+  ].join('\n');
 }
 
 /** Campo opcional só entra no objeto quando tem valor — nada de `undefined`. */

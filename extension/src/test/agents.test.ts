@@ -4,12 +4,12 @@ import { MockAgentAdapter } from '../agents/MockAgentAdapter';
 import { getApi } from './helpers';
 
 suite('Registro de agentes', () => {
-  test('os dois adaptadores são registrados, e o mock é o principal de partida', async () => {
+  test('os adaptadores são registrados, e o mock é o principal de partida', async () => {
     const api = await getApi();
 
     assert.deepEqual(
       api.registry.list().map((adapter) => adapter.id),
-      ['mock', 'claude-code'],
+      ['mock', 'claude-code', 'codex-cli'],
     );
 
     // O mock vem primeiro **de propósito**: o registro promove a principal quem
@@ -33,13 +33,44 @@ suite('Registro de agentes', () => {
     assert.equal(claude?.capabilities.edit, true);
   });
 
-  test('summaries reporta os dois, com a disponibilidade real de cada um', async () => {
+  test('o adaptador do Codex declara o vocabulário de esforço dele', async () => {
+    const api = await getApi();
+    const codex = api.registry.get('codex-cli');
+
+    assert.ok(codex, 'o Codex precisa estar registrado');
+    assert.equal(codex?.transport, 'cli');
+    // Os nomes são os que a interface do Codex mostra; a escala por baixo é a
+    // mesma do Prometheon. `ultracode` fica de fora: é degrau do Claude Code.
+    assert.equal(codex?.effortLabels?.low, 'Light');
+    assert.equal(codex?.effortLabels?.max, 'Ultra');
+    assert.equal(codex?.effortLabels?.ultracode, undefined);
+    // Sem delegação: o `codex exec` não abre subagentes, e oferecer o modo
+    // Agent Team com ele escolhido falharia depois da escolha.
+    assert.equal(codex?.capabilities.delegate, false);
+  });
+
+  test('o painel oferece os dois provedores ao criar conta', async () => {
+    const api = await getApi();
+
+    // É o que alimenta o seletor "Provedor" do formulário de conta: se um
+    // adaptador não estiver aqui, ele não existe para quem usa o painel.
+    assert.deepEqual(
+      api.core.snapshot.providers.map((provider) => provider.id),
+      ['claude-code', 'codex-cli'],
+    );
+    assert.equal(
+      api.core.snapshot.providers.find((provider) => provider.id === 'codex-cli')?.name,
+      'Codex',
+    );
+  });
+
+  test('summaries reporta todos, com a disponibilidade real de cada um', async () => {
     const api = await getApi();
     const summaries = await api.registry.summaries();
 
     assert.deepEqual(
       summaries.map((summary) => summary.id),
-      ['mock', 'claude-code'],
+      ['mock', 'claude-code', 'codex-cli'],
     );
 
     const mock = summaries.find((summary) => summary.id === 'mock');

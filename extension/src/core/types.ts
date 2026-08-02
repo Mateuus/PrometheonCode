@@ -1,5 +1,6 @@
 /** Tipos centrais compartilhados entre extensão e webview. */
 
+import type { AgentStep } from '../chat/types';
 import type { ModelChoice } from '../providers/types';
 import type { TokenUsage } from '../providers/UsageTracker';
 
@@ -34,6 +35,37 @@ export const AUTONOMY_DESCRIPTIONS: Record<Autonomy, string> = {
   manual: 'Ask for approval on relevant actions.',
   auto: 'Approve safe actions and pause on risky ones.',
   bypass: 'No interactive approval inside the authorized scope.',
+};
+
+/**
+ * Esforço de raciocínio do agente, na escala canônica do Prometheon.
+ *
+ * Os dois CLIs que nos interessam têm cinco níveis e nomes próprios: o Claude
+ * Code fala `--effort low|medium|high|xhigh|max`; o Codex chama de Reasoning e
+ * usa Light/Medium/High/Extra High/Ultra. A escala aqui é a mesma para todos —
+ * quem traduz o nome e a flag é o adaptador, que é quem conhece o seu CLI.
+ */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] as const;
+
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+/** Rótulos padrão. Um adaptador com vocabulário próprio sobrescreve os seus. */
+export const EFFORT_LABELS: Record<EffortLevel, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high',
+  max: 'Max',
+  ultracode: 'Ultracode',
+};
+
+export const EFFORT_DESCRIPTIONS: Record<EffortLevel, string> = {
+  low: 'Answers fast, thinks little. Good for lookups and small edits.',
+  medium: 'The balance most tasks want.',
+  high: 'Thinks longer before acting. Costs more tokens and time.',
+  xhigh: 'For problems that need a plan before the first edit.',
+  max: 'Everything it has. Slow and expensive — keep it for the hard ones.',
+  ultracode: 'Extra high plus orchestration: the agent breaks the work up and delegates.',
 };
 
 export type BypassScope = 'agent-worktrees' | 'current-project' | 'selected-workspace';
@@ -87,6 +119,14 @@ export interface AgentSummary {
   readonly displayName: string;
   readonly transport: 'cli' | 'api' | 'mock';
   readonly available: boolean;
+  /**
+   * Como este agente chama cada nível que ele suporta. Parcial de propósito:
+   * o Claude Code tem um degrau a mais (Ultracode) que o Codex não tem, e a
+   * interface monta o menu a partir do que estiver declarado aqui. Ausente
+   * quer dizer que o adaptador não tem controle de raciocínio — e aí o
+   * seletor nem aparece, em vez de virar um botão sem efeito.
+   */
+  readonly effortLabels?: Partial<Record<EffortLevel, string>>;
 }
 
 export interface ActiveAgentSummary {
@@ -96,6 +136,24 @@ export interface ActiveAgentSummary {
   readonly role: 'main' | 'worker';
   readonly status: ActiveAgentStatus;
   readonly task: string | null;
+  /**
+   * Função do agente no Prometheon ("Orquestrador", ou o nome da função
+   * nomeada). Ausente quando quem executa é um adaptador cru, sem perfil.
+   */
+  readonly roleLabel?: string;
+  /** Motor por trás dele: "Claude Code", "Codex". */
+  readonly engine?: string;
+  /** Modelo em uso, sem a marca de janela. */
+  readonly model?: string;
+  /**
+   * O que este agente fez, para a tela dele.
+   *
+   * Só workers trazem passos aqui: os do agente principal já vivem na mensagem
+   * que ele está escrevendo. É o que permite acompanhar um worker sem que o
+   * trabalho dele apareça no meio da conversa do orquestrador — quem delegou
+   * quer o relatório, não o registro de cada ferramenta.
+   */
+  readonly steps?: readonly AgentStep[];
 }
 
 export type HubState = 'local-only' | 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -368,6 +426,11 @@ export interface CustomAgentRole {
   readonly skills: readonly string[];
   /** Instruções somadas ao system prompt do agente que usa este papel. */
   readonly systemPrompt?: string;
+  /**
+   * Adorno de runtime, nunca persistido: o `systemPrompt` acima veio do
+   * arquivo `prompts/<id>.md`, que vence o texto inline.
+   */
+  readonly promptFile?: boolean;
   readonly scope: AgentRoleScope;
 }
 
@@ -453,6 +516,8 @@ export interface AgentProfile {
   readonly customRoleId?: string;
   readonly model?: string;
   readonly systemPrompt?: string;
+  /** Esforço padrão deste agente; ausente deixa a decisão com o CLI. */
+  readonly effort?: EffortLevel;
   readonly autonomyMode: AgentAutonomyMode;
   readonly allowedTools: readonly string[];
   readonly deniedTools: readonly string[];
@@ -461,6 +526,11 @@ export interface AgentProfile {
   readonly maxConcurrentSessions: number;
   readonly contextStrategy: ContextStrategy;
   readonly enabled: boolean;
+  /**
+   * Adorno de runtime, nunca persistido: o `systemPrompt` veio do arquivo
+   * `agent-prompts/<id>.md`, que vence o texto inline.
+   */
+  readonly promptFile?: boolean;
 }
 
 /**
