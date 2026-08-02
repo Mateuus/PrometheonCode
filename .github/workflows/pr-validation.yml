@@ -74,7 +74,15 @@ jobs:
       - name: Exigir descrição e checklist preenchidos
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
         run: |
+          # O template é para quem revisa código humano. Um bot de dependência
+          # abre PR com changelog e commits da versão nova, e nenhum checklist —
+          # cobrar isso dele reprovaria todo bump automático para sempre.
+          if [ "$PR_AUTHOR_TYPE" = "Bot" ]; then
+            echo "PR aberto por bot — validação de descrição dispensada."
+            exit 0
+          fi
           if [ -z "${PR_BODY//[[:space:]]/}" ]; then
             echo "::error::A descrição do PR está vazia. Preencha o template."
             exit 1
