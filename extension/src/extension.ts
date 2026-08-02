@@ -7,6 +7,7 @@ import { SkillRegistry } from './skills/SkillRegistry';
 import { ModelCatalog } from './providers/ModelCatalog';
 import { AgentRegistry } from './agents/AgentRegistry';
 import { ClaudeCodeAgentAdapter } from './agents/ClaudeCodeAgentAdapter';
+import { CodexAgentAdapter } from './agents/CodexAgentAdapter';
 import { MockAgentAdapter } from './agents/MockAgentAdapter';
 import { LocalChatService } from './chat/LocalChatService';
 import {
@@ -27,6 +28,7 @@ import { LocalWhisperProvider } from './speech/LocalWhisperProvider';
 import { SpeechEnvironment } from './speech/SpeechEnvironment';
 import { SpeechService } from './speech/SpeechService';
 import { ClaudeCodeAdapter } from './providers/ClaudeCodeAdapter';
+import { CodexAdapter } from './providers/CodexAdapter';
 import { ProviderProfileService } from './providers/ProviderProfileService';
 import { ProviderProfileStore } from './providers/ProviderProfileStore';
 import { UsageTracker } from './providers/UsageTracker';
@@ -113,6 +115,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
   const profileStore = new ProviderProfileStore(logger);
   const profiles = new ProviderProfileService(profileStore, logger);
   profiles.register(new ClaudeCodeAdapter(logger));
+  profiles.register(new CodexAdapter(logger));
   const usage = new UsageTracker(localState);
 
   // Agent Profiles vivem em `~/.prometheon/agent-profiles.json` e sempre
@@ -151,6 +154,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
   });
 
   registry.register(claudeCode);
+
+  // Mesmo desenho do Claude Code: o agente pega o primeiro perfil habilitado
+  // do provedor, e a conta escolhida por ele é a que executa.
+  registry.register(
+    new CodexAgentAdapter(logger, async () => {
+      const available = await profiles.list();
+
+      return available.find((profile) => profile.providerId === 'codex-cli' && profile.enabled);
+    }),
+  );
 
   // O cliente do Hub existe sempre — conectar é decisão do usuário, tomada no
   // botão de entrar, não na configuração. Sem credencial guardada a extensão

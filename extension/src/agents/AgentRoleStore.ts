@@ -112,8 +112,122 @@ export class AgentRoleStore {
       }
       return [];
     }
-    return normalizeRoleList(parsed, scope, (message) => this.logger.warn(message));
+    const roles = normalizeRoleList(parsed, scope, (message) => this.logger.warn(message));
+    if (scope === 'hub') {
+      return roles;
+    }
+    // O prompt em arquivo vence o texto inline: `prompts/<id>.md` é editável
+    // no editor de verdade e, no escopo de projeto, revisável em PR — mudar o
+    // comportamento de um agente do time sem review é mudar código sem review.
+    return Promise.all(
+      roles.map(async (role) => {
+        const filePrompt = await this.readPromptFile(scope, role.id);
+        return filePrompt === null
+          ? role
+          : { ...role, systemPrompt: filePrompt, promptFile: true };
+      }),
+    );
   }
+
+  /** Pasta dos prompts em arquivo, por escopo. `hub` não tem: a fonte é a API. */
+  promptDir(scope: 'project' | 'machine'): vscode.Uri | null {
+    if (scope === 'machine') {
+      return vscode.Uri.joinPath(this.machineRoot, 'agents', 'prompts');
+    }
+    const dir = this.workspace.prometheonDir;
+    return dir === null ? null : vscode.Uri.joinPath(dir, 'agents', 'prompts');
+  }
+
+  /**
+   * Conteúdo útil de `prompts/<id>.md`: o corpo, sem o frontmatter. `null`
+   * quando o arquivo não existe ou não tem nada além do cabeçalho.
+   */
+  private async readPromptFile(
+    scope: 'project' | 'machine',
+    id: string,
+  ): Promise<string | null> {
+    const dir = this.promptDir(scope);
+    if (dir === null) {
+      return null;
+    }
+    let raw: string;
+    try {
+      raw = decoder.decode(
+        await vscode.workspace.fs.readFile(vscode.Uri.joinPath(dir, `${id}.md`)),
+      );
+    } catch {
+      return null;
+    }
+    const body = stripFrontmatter(raw).trim();
+    if (body === '') {
+      return null;
+    }
+    if (body.length > MAX_SYSTEM_PROMPT_LENGTH) {
+      this.logger.warn(
+        `Prompt da função ${id} excede ${MAX_SYSTEM_PROMPT_LENGTH} caracteres e foi truncado.`,
+      );
+      return body.slice(0, MAX_SYSTEM_PROMPT_LENGTH);
+    }
+    return body;
+  }
+
+  /**
+   * Garante o arquivo de prompt da função — criado do template quando falta,
+   * jamais sobrescrito — e devolve o caminho para abrir no editor.
+   */
+  async ensurePromptFile(
+    scope: 'project' | 'machine',
+    role: CustomAgentRole,
+  ): Promise<vscode.Uri> {
+    const dir = this.promptDir(scope);
+    if (dir === null) {
+      throw new Error('No folder is open, so there is no project to keep the prompt in.');
+    }
+    const file = vscode.Uri.joinPath(dir, `${role.id}.md`);
+    try {
+      await vscode.workspace.fs.stat(file);
+      return file;
+    } catch {
+      // Não existe: é o caminho normal da criação.
+    }
+    await vscode.workspace.fs.createDirectory(dir);
+    await vscode.workspace.fs.writeFile(file, encoder.encode(promptTemplate(role)));
+    this.logger.info(`Prompt da função ${role.id} criado em ${file.fsPath}.`);
+    return file;
+  }
+}
+
+/** Corta o frontmatter YAML (`--- ... ---`) do início, se houver. */
+export function stripFrontmatter(raw: string): string {
+  const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(raw);
+  return match === null ? raw : raw.slice(match[0].length);
+}
+
+/**
+ * Esqueleto do prompt de uma função. As seções forçam o que um bom prompt tem
+ * e um vago não tem: limites duros e critério de parada.
+ */
+function promptTemplate(role: CustomAgentRole): string {
+  return `---
+role: ${role.id}
+extends: ${role.basedOn}
+---
+
+# Missão
+${role.label}: o que este agente entrega, em uma frase.
+
+## Sempre
+- Regras positivas que valem em toda sessão.
+
+## Nunca
+- Limites duros — o que não fazer nem quando pedido.
+
+## Contexto do projeto
+- Onde olhar primeiro: pastas, docs, convenções.
+
+## Definição de pronto
+- Como provar que terminou: testes, build, evidência.
+`;
 }
 
 /** O que vai para disco. `scope` fica de fora: quem diz é o arquivo. */

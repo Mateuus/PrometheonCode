@@ -7,6 +7,28 @@ O projeto segue [SemVer](https://semver.org/lang/pt-BR/).
 
 ### Adicionado
 
+- **Orquestração multi-agente**: o agente principal delega tarefas a outros
+  agentes por uma ferramenta MCP servida pela própria extensão em `127.0.0.1`,
+  com porta efêmera e token de uso único. O worker roda em sessão própria —
+  inclusive de outro provedor — aparece na lista de agentes ativos com tela
+  própria, e o relatório dele volta pela conversa quando termina. Delegar não
+  bloqueia o turno de quem delegou: a chamada devolve um bilhete, e quando
+  todos os workers terminam o Prometheon retoma a conversa com os relatórios.
+- Limites da delegação: tetos de execução simultânea por agente e por máquina
+  (`prometheon.agents.globalConcurrency`), com a vaga reservada antes de
+  qualquer espera; orçamento de delegações por pedido; e relatório longo
+  gravado em arquivo em vez de ocupar a janela do orquestrador.
+- Falha de agente classificada em cota esgotada, login vencido, CLI ausente ou
+  erro passageiro, com a orientação correspondente para o orquestrador e um
+  aviso legível para quem está olhando o painel.
+- **Provedor e agente do Codex**, com isolamento de conta por `CODEX_HOME`.
+- Seletor de **esforço de raciocínio** na configuração do agente e no composer,
+  traduzido para o vocabulário de cada CLI.
+- Prompt de sistema do agente em **arquivo `.md`** versionado.
+- **Markdown nas respostas do chat** — ênfase, código, listas, títulos, citações
+  e links —, montado em nós do DOM: a resposta de um agente nunca vira marcação
+  executável, e link só passa com `http` ou `https`.
+
 - Painel **Prometheon** como webview com CSP rigorosa (scripts apenas por
   `nonce`, sem `unsafe-inline`, sem carregamento remoto), disponível em dois
   lugares com estado compartilhado: na Activity Bar e na Secondary Side Bar,

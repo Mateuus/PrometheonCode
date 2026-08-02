@@ -5,6 +5,7 @@ import {
   AGENT_AUTONOMY_MODES,
   AGENT_ROLES,
   CONTEXT_STRATEGIES,
+  EFFORT_LEVELS,
   MAX_CONCURRENT_SESSIONS,
   MAX_MODEL_LENGTH,
   MAX_PROFILE_NAME_LENGTH,
@@ -15,8 +16,10 @@ import {
   type AgentProfile,
   type AgentRole,
   type ContextStrategy,
+  type EffortLevel,
 } from '../core/types';
 import type { Logger } from '../logger';
+import { stripFrontmatter } from './AgentRoleStore';
 
 /**
  * Agent Profiles ficam em `~/.prometheon/agent-profiles.json`, ao lado de
@@ -42,11 +45,73 @@ export class AgentProfileStore {
     return vscode.Uri.joinPath(this.root, 'agent-profiles.json');
   }
 
+  /** Pasta dos prompts em arquivo, um `<id>.md` por agente. */
+  get promptDir(): vscode.Uri {
+    return vscode.Uri.joinPath(this.root, 'agent-prompts');
+  }
+
   async list(): Promise<readonly AgentProfile[]> {
     if (this.profiles === null) {
       this.profiles = await this.read();
     }
-    return this.profiles;
+    // O prompt em arquivo é relido a cada listagem: ele muda no editor — pela
+    // pessoa ou por um agente — fora do ciclo de gravação do JSON, e um cache
+    // aqui congelaria o manual que o run deveria seguir.
+    return Promise.all(
+      this.profiles.map(async (profile) => {
+        const filePrompt = await this.readPromptFile(profile.id);
+        return filePrompt === null
+          ? profile
+          : { ...profile, systemPrompt: filePrompt, promptFile: true };
+      }),
+    );
+  }
+
+  /**
+   * Corpo útil de `agent-prompts/<id>.md`, sem o frontmatter. `null` quando o
+   * arquivo não existe ou está vazio — aí vale o texto inline do perfil.
+   */
+  private async readPromptFile(id: string): Promise<string | null> {
+    let raw: string;
+    try {
+      raw = new TextDecoder().decode(
+        await vscode.workspace.fs.readFile(vscode.Uri.joinPath(this.promptDir, `${id}.md`)),
+      );
+    } catch {
+      return null;
+    }
+    const body = stripFrontmatter(raw).trim();
+    if (body === '') {
+      return null;
+    }
+    if (body.length > MAX_SYSTEM_PROMPT_LENGTH) {
+      this.logger.warn(
+        `Prompt do agente ${id} excede ${MAX_SYSTEM_PROMPT_LENGTH} caracteres e foi truncado.`,
+      );
+      return body.slice(0, MAX_SYSTEM_PROMPT_LENGTH);
+    }
+    return body;
+  }
+
+  /**
+   * Garante o arquivo de prompt do agente — criado do template quando falta,
+   * jamais sobrescrito — e devolve o caminho para abrir no editor.
+   */
+  async ensurePromptFile(profile: AgentProfile): Promise<vscode.Uri> {
+    const file = vscode.Uri.joinPath(this.promptDir, `${profile.id}.md`);
+    try {
+      await vscode.workspace.fs.stat(file);
+      return file;
+    } catch {
+      // Não existe: é o caminho normal da criação.
+    }
+    await vscode.workspace.fs.createDirectory(this.promptDir);
+    await vscode.workspace.fs.writeFile(
+      file,
+      new TextEncoder().encode(agentPromptTemplate(profile)),
+    );
+    this.logger.info(`Prompt do agente ${profile.id} criado em ${file.fsPath}.`);
+    return file;
   }
 
   async find(id: string): Promise<AgentProfile | undefined> {
@@ -93,9 +158,15 @@ export class AgentProfileStore {
   }
 
   private async write(profiles: readonly AgentProfile[]): Promise<void> {
-    this.profiles = [...profiles];
+    // `promptFile` é adorno de runtime — se fosse para o JSON, uma cópia do
+    // arquivo apagado continuaria dizendo que ele existe.
+    const clean = profiles.map((profile) => {
+      const { promptFile: _promptFile, ...rest } = profile;
+      return rest;
+    });
+    this.profiles = [...clean];
     await vscode.workspace.fs.createDirectory(this.root);
-    const content = `${JSON.stringify(profiles, null, 2)}\n`;
+    const content = `${JSON.stringify(clean, null, 2)}\n`;
     await vscode.workspace.fs.writeFile(this.file, new TextEncoder().encode(content));
     this.logger.info(`Agent Profiles gravados (${profiles.length}).`);
   }
@@ -186,7 +257,9 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | null {
       : text(value['systemPrompt'], MAX_SYSTEM_PROMPT_LENGTH);
   const customRoleId =
     value['customRoleId'] === undefined ? undefined : text(value['customRoleId'], 96);
-  if (model === null || systemPrompt === null || customRoleId === null) {
+  const effort =
+    value['effort'] === undefined ? undefined : oneOf<EffortLevel>(value['effort'], EFFORT_LEVELS);
+  if (model === null || systemPrompt === null || customRoleId === null || effort === null) {
     return null;
   }
 
@@ -200,6 +273,7 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | null {
     ...(customRoleId === undefined || role !== 'custom' ? {} : { customRoleId }),
     ...(model === undefined ? {} : { model }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
+    ...(effort === undefined ? {} : { effort }),
     autonomyMode,
     allowedTools,
     deniedTools,
@@ -220,4 +294,31 @@ function dropDuplicateIds(profiles: readonly AgentProfile[]): AgentProfile[] {
     seen.add(profile.id);
     return true;
   });
+}
+
+/**
+ * Esqueleto do prompt de um agente — o mesmo formato do prompt de função:
+ * limites duros e critério de parada, que é o que separa manual de desejo.
+ */
+function agentPromptTemplate(profile: AgentProfile): string {
+  return `---
+agent: ${profile.id}
+name: ${profile.name}
+---
+
+# Missão
+${profile.name}: o que este agente entrega, em uma frase.
+
+## Sempre
+- Regras positivas que valem em toda sessão.
+
+## Nunca
+- Limites duros — o que não fazer nem quando pedido.
+
+## Contexto do projeto
+- Onde olhar primeiro: pastas, docs, convenções.
+
+## Definição de pronto
+- Como provar que terminou: testes, build, evidência.
+`;
 }

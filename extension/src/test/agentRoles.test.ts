@@ -1,6 +1,11 @@
 import * as assert from 'node:assert/strict';
 import { mergeByPrecedence } from '../agents/AgentRoleService';
-import { normalizeCustomRole, normalizeRoleList, roleId } from '../agents/AgentRoleStore';
+import {
+  normalizeCustomRole,
+  normalizeRoleList,
+  roleId,
+  stripFrontmatter,
+} from '../agents/AgentRoleStore';
 import { resolveAgentProfiles } from '../agents/AgentProfileService';
 import {
   MAX_ROLE_DESCRIPTION_LENGTH,
@@ -183,5 +188,28 @@ suite('Papéis nomeados', () => {
     // Sem papel o agente não sabe o que é; entrar em sessão assim é o pior dos
     // dois casos, então é esse o aviso que a interface mostra.
     assert.match(String(resolved?.warning), /does not exist here/);
+  });
+});
+
+suite('Prompt de função em arquivo', () => {
+  test('o frontmatter sai e o corpo fica', () => {
+    const raw = '---\nrole: teste\nextends: tester\n---\n\n# Missão\nFazer X.\n';
+    assert.equal(stripFrontmatter(raw), '\n# Missão\nFazer X.\n');
+  });
+
+  test('arquivo sem frontmatter volta intacto', () => {
+    assert.equal(stripFrontmatter('# Missão\nFazer X.\n'), '# Missão\nFazer X.\n');
+  });
+
+  test('um "---" no meio do corpo não é frontmatter', () => {
+    // Só o cabeçalho do INÍCIO do arquivo é metadado; um separador horizontal
+    // no meio do prompt é conteúdo e precisa sobreviver.
+    const raw = '# Missão\n\n---\n\n## Sempre\n';
+    assert.equal(stripFrontmatter(raw), raw);
+  });
+
+  test('frontmatter com CRLF também é cortado', () => {
+    const raw = '---\r\nrole: t\r\n---\r\ncorpo\r\n';
+    assert.equal(stripFrontmatter(raw), 'corpo\r\n');
   });
 });

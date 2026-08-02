@@ -61,6 +61,9 @@ export class AgentRegistry {
         displayName: adapter.displayName,
         transport: adapter.transport,
         available: await adapter.isAvailable(),
+        // Só quem tem controle de raciocínio declara os rótulos — é assim que
+        // a interface sabe se deve oferecer o seletor de esforço.
+        ...(adapter.effortLabels === undefined ? {} : { effortLabels: adapter.effortLabels }),
       })),
     );
   }

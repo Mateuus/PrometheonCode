@@ -17,6 +17,7 @@ import {
   AUTONOMY_LEVELS,
   CHAT_TYPES,
   CONTEXT_STRATEGIES,
+  EFFORT_LEVELS,
   MAX_CONCURRENT_SESSIONS,
   MAX_ROLE_DESCRIPTION_LENGTH,
   MAX_ROLE_LABEL_LENGTH,
@@ -48,6 +49,7 @@ import {
   type CommitLanguage,
   type CommitStyle,
   type ContextStrategy,
+  type EffortLevel,
   type GraphRebuildTrigger,
   type HubConnectionStatus,
   type McpKeyValue,
@@ -91,6 +93,7 @@ export interface AgentProfileDraft {
   readonly customRoleId?: string;
   readonly model?: string;
   readonly systemPrompt?: string;
+  readonly effort?: EffortLevel;
   readonly autonomyMode: AgentAutonomyMode;
   readonly allowedTools: readonly string[];
   readonly deniedTools: readonly string[];
@@ -127,6 +130,10 @@ export type WebviewToExtensionMessage =
   | { readonly type: 'chat.clearLocal' }
   | { readonly type: 'chat.openSession'; readonly payload: { readonly conversationId: string } }
   | { readonly type: 'chat.deleteSession'; readonly payload: { readonly conversationId: string } }
+  | {
+      readonly type: 'chat.renameSession';
+      readonly payload: { readonly conversationId: string; readonly title: string };
+    }
   | { readonly type: 'chat.attachImages' }
   /** Abre a saída integral de um passo numa aba somente leitura do editor. */
   | {
@@ -186,6 +193,8 @@ export type WebviewToExtensionMessage =
       readonly payload: { readonly id: string; readonly role: CustomRoleDraft };
     }
   | { readonly type: 'agentRoles.remove'; readonly payload: { readonly id: string } }
+  | { readonly type: 'agentRoles.openPrompt'; readonly payload: { readonly id: string } }
+  | { readonly type: 'agentProfiles.openPrompt'; readonly payload: { readonly id: string } }
   | { readonly type: 'skills.refresh' }
   /** Cria a pasta e o SKILL.md de template no escopo pedido e abre no editor. */
   | {
@@ -209,6 +218,8 @@ export type WebviewToExtensionMessage =
   | { readonly type: 'chat.selectProject'; readonly payload: { readonly projectId: string } }
   | { readonly type: 'settings.setWorkMode'; readonly payload: { readonly mode: WorkMode } }
   | { readonly type: 'settings.setAutonomy'; readonly payload: { readonly autonomy: Autonomy } }
+  /** `null` volta ao esforço padrão do agente principal. */
+  | { readonly type: 'settings.setEffort'; readonly payload: { readonly effort: EffortLevel | null } }
   | { readonly type: 'settings.selectMainAgent'; readonly payload: { readonly agentId: string } }
   /** Troca o modelo da conta que o agente principal usa. */
   | { readonly type: 'settings.setModel'; readonly payload: { readonly model: string } }
@@ -305,6 +316,9 @@ export type ExtensionToWebviewMessage =
 
 /** Limite defensivo: a webview não deve conseguir enviar payload gigante. */
 export const MAX_MESSAGE_LENGTH = 32_000;
+
+/** Título de sessão é rótulo de uma linha, não resumo: cabe no cabeçalho. */
+export const MAX_SESSION_TITLE = 120;
 
 /** Limites dos anexos. Imagens ficam em base64 no estado local do workspace. */
 export const MAX_ATTACHMENTS_PER_MESSAGE = 4;
@@ -492,8 +506,12 @@ function parseAgentProfileDraft(raw: unknown): AgentProfileDraft | null {
   const model = optionalText(raw['model'], MAX_MODEL_LENGTH);
   const systemPrompt = optionalText(raw['systemPrompt'], MAX_SYSTEM_PROMPT_LENGTH);
   const customRoleId = optionalText(raw['customRoleId'], 96);
+  // Ausente é escolha válida: quer dizer "deixe com o CLI".
+  const effort =
+    raw['effort'] === undefined ? undefined : oneOf(raw['effort'], EFFORT_LEVELS) ?? null;
 
   if (
+    effort === null ||
     name === null ||
     providerProfileId === null ||
     role === null ||
@@ -518,6 +536,7 @@ function parseAgentProfileDraft(raw: unknown): AgentProfileDraft | null {
     ...(customRoleId === undefined ? {} : { customRoleId }),
     ...(model === undefined ? {} : { model }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
+    ...(effort === undefined ? {} : { effort }),
     autonomyMode,
     allowedTools,
     deniedTools,
@@ -1019,6 +1038,16 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
       return id === null ? null : { type: 'agentRoles.remove', payload: { id } };
     }
 
+    case 'agentRoles.openPrompt': {
+      const id = payload === undefined ? null : nonEmptyString(payload['id'], 96);
+      return id === null ? null : { type: 'agentRoles.openPrompt', payload: { id } };
+    }
+
+    case 'agentProfiles.openPrompt': {
+      const id = payload === undefined ? null : nonEmptyString(payload['id'], 128);
+      return id === null ? null : { type: 'agentProfiles.openPrompt', payload: { id } };
+    }
+
     case 'skills.open': {
       // Só o nome atravessa a fronteira. Um caminho vindo da webview viraria
       // leitura arbitrária de disco; aqui o Core resolve pelo catálogo.
@@ -1067,6 +1096,17 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
       return conversationId === null
         ? null
         : { type: 'chat.deleteSession', payload: { conversationId } };
+    }
+
+    case 'chat.renameSession': {
+      const conversationId =
+        payload === undefined ? null : nonEmptyString(payload['conversationId'], 128);
+      // Título é linha única: quebra vira espaço antes de chegar ao núcleo.
+      const raw = payload === undefined ? null : nonEmptyString(payload['title'], MAX_SESSION_TITLE);
+      const title = raw === null ? null : raw.replace(/\s+/g, ' ').trim();
+      return conversationId === null || title === null || title === ''
+        ? null
+        : { type: 'chat.renameSession', payload: { conversationId, title } };
     }
 
     case 'context.setAutoCompact': {
@@ -1119,6 +1159,16 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
     case 'settings.setAutonomy': {
       const autonomy = payload === undefined ? null : oneOf(payload['autonomy'], AUTONOMY_LEVELS);
       return autonomy === null ? null : { type: 'settings.setAutonomy', payload: { autonomy } };
+    }
+
+    case 'settings.setEffort': {
+      // `null` é escolha válida — é o pedido de voltar ao padrão do agente.
+      const raw = payload?.['effort'];
+      if (raw === null) {
+        return { type: 'settings.setEffort', payload: { effort: null } };
+      }
+      const effort = payload === undefined ? null : oneOf(raw, EFFORT_LEVELS);
+      return effort === null ? null : { type: 'settings.setEffort', payload: { effort } };
     }
 
     case 'settings.setLanguage': {

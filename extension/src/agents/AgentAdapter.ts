@@ -3,6 +3,7 @@ import type { TokenUsage } from '../providers/UsageTracker';
 import type {
   ActiveAgentStatus,
   Autonomy,
+  EffortLevel,
   SerializedError,
   WorkMode,
 } from '../core/types';
@@ -43,6 +44,21 @@ export interface StartAgentInput {
    * pronto — quem monta é o núcleo, que conhece papel, catálogo e perfil.
    */
   readonly systemPrompt?: string;
+  /**
+   * Esforço de raciocínio pedido para esta sessão, na escala canônica. Cada
+   * adaptador traduz para o que o seu CLI entende; quem não suporta ignora.
+   */
+  readonly effort?: EffortLevel;
+  /**
+   * Ferramenta de delegação oferecida a **este** agente. Só o principal a
+   * recebe: um worker que pudesse delegar abriria recursão sem fim, e o
+   * documento é claro que quem coordena é um só.
+   */
+  readonly delegation?: {
+    readonly url: string;
+    readonly token: string;
+    readonly toolNames: readonly string[];
+  };
 }
 
 export interface AgentInput {
@@ -127,6 +143,11 @@ export interface AgentAdapter {
   readonly displayName: string;
   readonly transport: AgentTransport;
   readonly capabilities: AgentCapabilities;
+  /**
+   * Nome de cada nível de esforço neste CLI. Ausente quer dizer que ele não
+   * tem controle de raciocínio, e a interface não oferece o seletor.
+   */
+  readonly effortLabels?: Partial<Record<EffortLevel, string>>;
 
   isAvailable(): Promise<boolean>;
   start(input: StartAgentInput): Promise<AgentSession>;

@@ -2,7 +2,7 @@
   "name": "prometheon-code",
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
-  "version": "0.0.1",
+  "version": "0.3.1",
   "publisher": "prometheon",
   "license": "MIT",
   "private": true,
@@ -228,6 +228,14 @@
           "description": "%configuration.speech.pythonPath%",
           "order": 3
         },
+        "prometheon.agents.globalConcurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 6,
+          "description": "%configuration.agents.globalConcurrency%",
+          "order": 4
+        },
         "prometheon.hub.url": {
           "type": "string",
           "default": "",
@@ -274,6 +282,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
+    "@types/jsdom": "^28.0.3",
     "@types/mocha": "^10.0.10",
     "@types/node": "^20.19.9",
     "@types/vscode": "^1.106.0",
@@ -282,6 +291,7 @@
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
     "eslint": "^9.39.0",
+    "jsdom": "^29.1.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.4"
   },

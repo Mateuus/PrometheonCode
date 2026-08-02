@@ -10,6 +10,7 @@ import type {
   ConversationSummary,
   ImageAttachment,
 } from '../../chat/types';
+import { renderMarkdown } from './markdown';
 import type { LanguageChoice } from '../../i18n/language';
 import type { ModelChoice } from '../../providers/types';
 import {
@@ -35,6 +36,9 @@ import {
   CONTEXT_STRATEGIES,
   CONTEXT_STRATEGY_DESCRIPTIONS,
   CONTEXT_STRATEGY_LABELS,
+  EFFORT_DESCRIPTIONS,
+  modelWithoutWindow,
+  EFFORT_LEVELS,
   HUB_STATE_LABELS,
   MAX_CONCURRENT_SESSIONS,
   MAX_MODEL_LENGTH,
@@ -62,6 +66,7 @@ import {
   type CommitLanguage,
   type CommitStyle,
   type ContextStrategy,
+  type EffortLevel,
   type CustomAgentRole,
   type GraphRebuildTrigger,
   type SkillSummary,
@@ -74,6 +79,7 @@ import {
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_ATTACHMENT_BYTES,
+  MAX_SESSION_TITLE,
   SETTINGS_SECTIONS,
   type AgentProfileDraft,
   type CustomRoleDraft,
@@ -147,7 +153,10 @@ function svgElement<T extends SVGElement>(id: string): T {
 }
 
 const dom = {
-  sessionTitle: element<HTMLSpanElement>('session-title'),
+  effortAnchor: element<HTMLDivElement>('effort-anchor'),
+  sessionTitle: element<HTMLButtonElement>('session-title'),
+  sessionTitleText: element<HTMLSpanElement>('session-title-text'),
+  sessionTitleInput: element<HTMLInputElement>('session-title-input'),
   toggleSessions: element<HTMLButtonElement>('toggle-sessions'),
   newSession: element<HTMLButtonElement>('new-session'),
   sessionsPopover: element<HTMLDivElement>('sessions-popover'),
@@ -357,7 +366,42 @@ class OptionMenu {
     this.renderItems();
     this.menu.hidden = false;
     this.button.setAttribute('aria-expanded', 'true');
+    this.fitToViewport();
     this.menu.querySelector<HTMLButtonElement>('.menu-item.active')?.focus();
+  }
+
+  /**
+   * Puxa o menu para dentro da janela quando ele estoura a borda.
+   *
+   * O painel é estreito e os pills ficam à direita: ancorado à esquerda do
+   * botão, o menu saía da tela e metade das opções ficava inalcançável. A
+   * medida é feita depois de exibir — antes disso ele não tem tamanho.
+   */
+  private fitToViewport(): void {
+    this.menu.style.left = '0';
+    this.menu.style.right = 'auto';
+    this.menu.style.maxHeight = '';
+
+    const margin = 8;
+    const box = this.menu.getBoundingClientRect();
+    if (box.right > window.innerWidth - margin) {
+      // Alinhar pela direita resolve o caso comum; se ainda não couber, o
+      // deslocamento explícito cola o menu na margem da janela.
+      this.menu.style.left = 'auto';
+      this.menu.style.right = '0';
+      const shifted = this.menu.getBoundingClientRect();
+      if (shifted.left < margin) {
+        this.menu.style.right = `${shifted.left - margin}px`;
+      }
+    }
+
+    // Altura: o menu abre para cima, então o teto é o espaço acima do botão.
+    // Um teto pequeno demais esconderia opções — abaixo de 120px é melhor
+    // deixar o menu inteiro e confiar na rolagem da janela.
+    const above = this.button.getBoundingClientRect().top - margin * 2;
+    if (above > 120) {
+      this.menu.style.maxHeight = `${above}px`;
+    }
   }
 
   close(): void {
@@ -481,6 +525,16 @@ const menus = {
     element<HTMLDivElement>('main-agent-menu'),
     (agentId) => post({ type: 'settings.selectMainAgent', payload: { agentId } }),
   ),
+  effort: new OptionMenu(
+    element<HTMLButtonElement>('effort-button'),
+    element<HTMLDivElement>('effort-menu'),
+    (value) => {
+      const effort = EFFORT_LEVELS.find((candidate) => candidate === value);
+      if (effort !== undefined) {
+        post({ type: 'settings.setEffort', payload: { effort } });
+      }
+    },
+  ),
 };
 
 /**
@@ -488,6 +542,37 @@ const menus = {
  * carregam papel, conta, modelo e prompt — e os adaptadores crus fecham a
  * lista, para quem ainda não montou perfil nenhum.
  */
+/**
+ * Rótulos de esforço do agente que vai executar. O perfil aponta para uma
+ * conta, e é o adaptador daquele provedor que dá nome aos níveis — "Extra
+ * high" no Claude Code, "Extra High" no Codex.
+ */
+function effortLabelsFor(
+  snapshot: PrometheonViewState,
+): Partial<Record<EffortLevel, string>> | undefined {
+  const profile = snapshot.agentProfiles.find(
+    (summary) => summary.profile.id === snapshot.mainAgentId,
+  );
+  const engine =
+    profile === undefined
+      ? snapshot.agents.find((agent) => agent.id === snapshot.mainAgentId)
+      : snapshot.agents.find((agent) => agent.displayName === profile.providerName);
+  return engine?.effortLabels;
+}
+
+/**
+ * Opções de esforço na ordem da escala, só com os níveis que o adaptador
+ * declarou: o Claude Code tem o degrau extra do Ultracode, o Codex não.
+ */
+function effortOptions(labels: Partial<Record<EffortLevel, string>>): readonly MenuOption[] {
+  return EFFORT_LEVELS.filter((level) => labels[level] !== undefined).map((level) => ({
+    value: level,
+    label: labels[level] ?? level,
+    description: s(EFFORT_DESCRIPTIONS[level]),
+    icon: 'sliders',
+  }));
+}
+
 function mainAgentOptions(snapshot: PrometheonViewState): readonly MenuOption[] {
   const profiles = snapshot.agentProfiles
     .filter((summary) => summary.profile.enabled)
@@ -1278,8 +1363,9 @@ let wordIndex = 0;
 let wordTimer = 0;
 let wordFadeTimer = 0;
 
+/** Sem reticências no texto: quem pontua são os três pontos animados ao lado. */
 function currentWord(): string {
-  return `${s(WORKING_WORDS[wordIndex] ?? 'Working')}…`;
+  return s(WORKING_WORDS[wordIndex] ?? 'Working');
 }
 
 function startWorkingWords(): void {
@@ -1452,6 +1538,8 @@ interface AgentDraft {
   /** O campo de modelo está em modo texto livre, fora da lista do provedor. */
   modelIsCustom: boolean;
   systemPrompt: string;
+  /** Esforço padrão; vazio significa "deixe com o CLI". */
+  effort: string;
   autonomyMode: AgentAutonomyMode;
   allowedTools: string;
   deniedTools: string;
@@ -2688,6 +2776,7 @@ function newAgentDraft(providerProfileId: string): AgentDraft {
     model: '',
     modelIsCustom: false,
     systemPrompt: '',
+    effort: '',
     autonomyMode: 'manual',
     allowedTools: '',
     deniedTools: '',
@@ -2713,6 +2802,7 @@ function draftFromSummary(summary: AgentProfileSummary): AgentDraft {
     // escolhido de propósito e não pode aparecer como "Chosen by the CLI".
     modelIsCustom: isUnlistedModel(profile.model ?? '', summary),
     systemPrompt: profile.systemPrompt ?? '',
+    effort: profile.effort ?? '',
     autonomyMode: profile.autonomyMode,
     allowedTools: profile.allowedTools.join(', '),
     deniedTools: profile.deniedTools.join(', '),
@@ -3324,20 +3414,9 @@ function renderAgentForm(
     ),
     roleField(draft, update),
     modelField(draft, accounts, update),
-    field(
-      s('System prompt'),
-      textArea({
-        name: 'agent-prompt',
-        value: draft.systemPrompt,
-        placeholder: s('How this agent should behave.'),
-        maxLength: MAX_SYSTEM_PROMPT_LENGTH,
-        onInput: (value) => update({ systemPrompt: value }),
-      }),
-      undefined,
-      s(
-        'Standing instructions added to every session of this agent. The project rules and the task itself come on top of them.',
-      ),
-    ),
+    agentPromptField(draft, update),
+    agentPromptFileRow(draft),
+    effortField(draft, update),
     menuField(
       s('Autonomy'),
       AGENT_AUTONOMY_MODES.map((mode) => ({
@@ -3902,18 +3981,8 @@ function renderRoleForm(draft: RoleDraft): HTMLElement {
       s('Skills every agent with this role starts with. Each agent can still add its own.'),
       s('Skills every agent with this role starts with. Each agent can still add its own.'),
     ),
-    field(
-      s('System prompt'),
-      textArea({
-        name: 'role-prompt',
-        value: draft.systemPrompt,
-        placeholder: s('How this agent should behave.'),
-        maxLength: MAX_SYSTEM_PROMPT_LENGTH,
-        onInput: (value) => update({ systemPrompt: value }),
-      }),
-      undefined,
-      s('Added to the system prompt of every agent with this role, before the prompt of the agent itself.'),
-    ),
+    rolePromptField(draft, update),
+    ...(draft.scope === 'hub' ? [] : [rolePromptFileRow(draft)]),
     actionRow(
       actionButton(draft.id === null ? s('Create role') : s('Save role'), 'primary', () =>
         submitRoleDraft(),
@@ -3925,6 +3994,172 @@ function renderRoleForm(draft: RoleDraft): HTMLElement {
     ),
   );
   return form;
+}
+
+/**
+ * Botão que leva ao prompt em arquivo (`agents/prompts/<id>.md`). O arquivo é
+ * nomeado pelo id, então uma função nova precisa ser criada antes.
+ */
+/**
+ * Esforço padrão do agente. "Escolha do CLI" é a primeira opção porque é o
+ * padrão honesto: sem escolha nossa, quem decide é o provedor.
+ */
+function effortField(
+  draft: AgentDraft,
+  update: (patch: Partial<AgentDraft>, redraw?: boolean) => void,
+): HTMLElement {
+  const labels =
+    state === null
+      ? undefined
+      : effortLabelsForAccount(state, draft.providerProfileId);
+  if (labels === undefined) {
+    // Provedor sem controle de raciocínio: nada a configurar aqui.
+    return document.createDocumentFragment() as unknown as HTMLElement;
+  }
+  return menuField(
+    s('Effort'),
+    [
+      {
+        value: '',
+        label: s('Chosen by the CLI'),
+        description: s('No effort flag is sent; the provider decides.'),
+        icon: 'sparkle',
+      },
+      ...effortOptions(labels),
+    ],
+    draft.effort,
+    (value) => update({ effort: value }, true),
+    undefined,
+    s(
+      'How much the agent thinks before acting. The composer can raise or lower it for one session without changing this default.',
+    ),
+  );
+}
+
+/** Rótulos de esforço do provedor por trás de uma conta. */
+function effortLabelsForAccount(
+  snapshot: PrometheonViewState,
+  providerProfileId: string,
+): Partial<Record<EffortLevel, string>> | undefined {
+  const account = snapshot.accounts.find((item) => item.profileId === providerProfileId);
+  return snapshot.agents.find((agent) => agent.displayName === account?.providerName)
+    ?.effortLabels;
+}
+
+/** O prompt deste agente veio do arquivo? Lido do snapshot, sempre fresco. */
+function agentPromptFromFile(draft: AgentDraft): boolean {
+  return (
+    draft.id !== null &&
+    state?.agentProfiles.find((summary) => summary.profile.id === draft.id)?.profile
+      .promptFile === true
+  );
+}
+
+/**
+ * Campo de prompt do agente. Com o arquivo existindo, o texto mostrado é o do
+ * arquivo e o campo trava: editar aqui seria digitar num texto que o arquivo
+ * sobrescreve — o caminho certo é o editor.
+ */
+function agentPromptField(
+  draft: AgentDraft,
+  update: (patch: Partial<AgentDraft>, redraw?: boolean) => void,
+): HTMLElement {
+  const fromFile = agentPromptFromFile(draft);
+  const input = textArea({
+    name: 'agent-prompt',
+    value: draft.systemPrompt,
+    placeholder: s('How this agent should behave.'),
+    maxLength: MAX_SYSTEM_PROMPT_LENGTH,
+    onInput: (value) => update({ systemPrompt: value }),
+  });
+  input.disabled = fromFile;
+  return field(
+    s('System prompt'),
+    input,
+    fromFile
+      ? s('The prompt file is in charge — edit it in the editor.')
+      : s('When the prompt file exists, it wins over this text.'),
+    s(
+      'Standing instructions added to every session of this agent. The project rules and the task itself come on top of them.',
+    ),
+  );
+}
+
+/**
+ * Botão que leva ao prompt em arquivo do agente (`~/.prometheon/agent-prompts/
+ * <id>.md`). Prompt grande merece editor de verdade — e, sendo arquivo, o
+ * próprio agente pode manter o próprio manual.
+ */
+function agentPromptFileRow(draft: AgentDraft): HTMLElement {
+  const fromFile = agentPromptFromFile(draft);
+  const open = actionButton(
+    fromFile ? s('Open prompt in the editor') : s('Create prompt file'),
+    'link',
+    () => {
+      // Sem id não há nome para o arquivo. Avisar é melhor do que desabilitar:
+      // um link que parece clicável e não responde é indistinguível de bug.
+      if (draft.id === null) {
+        showNotification(s('Create the agent first — the prompt file is named after it.'), 'warning');
+        return;
+      }
+      post({ type: 'agentProfiles.openPrompt', payload: { id: draft.id } });
+    },
+  );
+  return actionRow(open);
+}
+
+/** O prompt desta função veio do arquivo? Lido do snapshot, sempre fresco. */
+function rolePromptFromFile(draft: RoleDraft): boolean {
+  return (
+    draft.id !== null &&
+    state?.customRoles.find((role) => role.id === draft.id)?.promptFile === true
+  );
+}
+
+/** Campo de prompt da função — trava quando o arquivo é quem manda. */
+function rolePromptField(
+  draft: RoleDraft,
+  update: (patch: Partial<RoleDraft>, redraw?: boolean) => void,
+): HTMLElement {
+  const fromFile = draft.scope !== 'hub' && rolePromptFromFile(draft);
+  const input = textArea({
+    name: 'role-prompt',
+    value: draft.systemPrompt,
+    placeholder: s('How this agent should behave.'),
+    maxLength: MAX_SYSTEM_PROMPT_LENGTH,
+    onInput: (value) => update({ systemPrompt: value }),
+  });
+  input.disabled = fromFile;
+  return field(
+    s('System prompt'),
+    input,
+    draft.scope === 'hub'
+      ? undefined
+      : fromFile
+        ? s('The prompt file is in charge — edit it in the editor.')
+        : s('When the prompt file exists, it wins over this text.'),
+    s('Added to the system prompt of every agent with this role, before the prompt of the agent itself.'),
+  );
+}
+
+/**
+ * Botão que leva ao prompt em arquivo (`agents/prompts/<id>.md`). O arquivo é
+ * nomeado pelo id, então uma função nova precisa ser criada antes.
+ */
+function rolePromptFileRow(draft: RoleDraft): HTMLElement {
+  const fromFile = rolePromptFromFile(draft);
+  const open = actionButton(
+    fromFile ? s('Open prompt in the editor') : s('Create prompt file'),
+    'link',
+    () => {
+      if (draft.id === null) {
+        showNotification(s('Create the role first — the prompt file is named after it.'), 'warning');
+        return;
+      }
+      post({ type: 'agentRoles.openPrompt', payload: { id: draft.id } });
+    },
+  );
+  return actionRow(open);
 }
 
 function submitRoleDraft(): void {
@@ -3999,6 +4234,8 @@ function submitAgentDraft(): void {
     ...(draft.customRoleId === '' ? {} : { customRoleId: draft.customRoleId }),
     ...(model === '' ? {} : { model }),
     ...(systemPrompt === '' ? {} : { systemPrompt }),
+    // Vazio é escolha: significa não mandar flag de esforço nenhuma ao CLI.
+    ...(draft.effort === '' ? {} : { effort: draft.effort as EffortLevel }),
     autonomyMode: draft.autonomyMode,
     allowedTools: splitList(draft.allowedTools),
     deniedTools: splitList(draft.deniedTools),
@@ -5467,6 +5704,9 @@ function closePopover(): void {
   dom.toggleSessions.setAttribute('aria-expanded', 'false');
 }
 
+/** Sessão em renomeação na lista; só uma por vez. */
+let renamingSessionId: string | null = null;
+
 function renderSessions(): void {
   const sessions = state?.sessions ?? [];
   const query = dom.sessionSearch.value.trim().toLowerCase();
@@ -5488,6 +5728,14 @@ function renderSessions(): void {
 
 function renderSessionItem(session: ConversationSummary): HTMLElement {
   const item = document.createElement('li');
+
+  // Em edição, a linha inteira vira o campo: renomear acontece onde o nome
+  // está, sem diálogo e sem tirar a lista da frente.
+  if (renamingSessionId === session.id) {
+    item.className = 'session-row';
+    item.append(renameSessionInput(session));
+    return item;
+  }
 
   const button = document.createElement('button');
   button.type = 'button';
@@ -5513,6 +5761,19 @@ function renderSessionItem(session: ConversationSummary): HTMLElement {
     }
   });
 
+  // Renomear troca a linha pelo campo, no lugar em que o nome já está.
+  const rename = document.createElement('button');
+  rename.type = 'button';
+  rename.className = 'session-action';
+  rename.title = s('Rename this conversation');
+  rename.setAttribute('aria-label', sf('Rename {0}', session.title));
+  rename.append(...nodes(icon('pencil')));
+  rename.addEventListener('click', (event) => {
+    event.stopPropagation();
+    renamingSessionId = session.id;
+    renderSessions();
+  });
+
   // Excluir pede uma segunda intenção no próprio item: um diálogo do sistema
   // aqui tiraria o foco do popover e ele fecharia antes da resposta.
   const remove = document.createElement('button');
@@ -5534,9 +5795,67 @@ function renderSessionItem(session: ConversationSummary): HTMLElement {
     post({ type: 'chat.deleteSession', payload: { conversationId: session.id } });
   });
 
+  // As ações ficam num grupo posicionado sobre a hora: no hover ela some e
+  // eles aparecem no mesmo lugar, sem a linha mudar de largura.
+  const actions = document.createElement('span');
+  actions.className = 'session-actions';
+  // No Web Chat o título é do Hub: a lista oferece abrir e apagar, não renomear.
+  actions.append(...(state?.chatType === 'web' ? [] : [rename]), remove);
+
   item.className = 'session-row';
-  item.append(button, remove);
+  item.append(button, actions);
   return item;
+}
+
+/** Campo que substitui a linha durante a renomeação. Enter salva, Esc desiste. */
+function renameSessionInput(session: ConversationSummary): HTMLInputElement {
+  let draft = session.title;
+  let done = false;
+
+  const finish = (commit: boolean): void => {
+    if (done) {
+      return;
+    }
+    done = true;
+    renamingSessionId = null;
+    const title = draft.replace(/\s+/g, ' ').trim();
+    if (commit && title !== '' && title !== session.title) {
+      post({ type: 'chat.renameSession', payload: { conversationId: session.id, title } });
+    }
+    renderSessions();
+  };
+
+  const input = textInput({
+    name: 'session-rename',
+    value: session.title,
+    maxLength: MAX_SESSION_TITLE,
+    onInput: (value) => {
+      draft = value;
+    },
+  });
+  input.className = 'field-input session-rename-input';
+  input.setAttribute('aria-label', s('Rename this conversation'));
+  // O clique dentro do campo não pode chegar ao documento: lá ele fecharia o
+  // popover inteiro e levaria a edição junto.
+  input.addEventListener('mousedown', (event) => event.stopPropagation());
+  input.addEventListener('click', (event) => event.stopPropagation());
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      finish(true);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      finish(false);
+    }
+  });
+  input.addEventListener('blur', () => finish(true));
+  // O `focus` imediato não pega: o nó ainda não está no documento.
+  setTimeout(() => {
+    input.focus();
+    input.select();
+  }, 0);
+  return input;
 }
 
 // ---------- Perguntas do agente ----------
@@ -5929,6 +6248,23 @@ function upsertStep(messageId: string, step: AgentStep): void {
  * agora?", que a conversa responde mal porque intercala tudo numa timeline só.
  */
 let consoleSessionId: string | null = null;
+/** Os workers estão abertos um a um, ou dobrados numa linha só. */
+let workersExpanded = false;
+
+/** Texto cru das mensagens que ainda estão chegando, por id. */
+const streaming = new Map<string, string>();
+
+/**
+ * Escreve o conteúdo de uma mensagem: formatado quando está pronto, cru
+ * enquanto chega.
+ */
+function setContent(node: HTMLElement, content: string, isStreaming: boolean): void {
+  if (isStreaming) {
+    node.textContent = content;
+    return;
+  }
+  node.replaceChildren(renderMarkdown(content));
+}
 
 function openAgentConsole(sessionId: string | null): void {
   consoleSessionId = sessionId;
@@ -5998,6 +6334,12 @@ function renderAgentViews(): void {
 
 /** Passos de uma sessão, na ordem em que aconteceram. */
 function stepsOfSession(sessionId: string): readonly AgentStep[] {
+  // Worker traz os passos consigo: o trabalho dele nunca entrou na conversa do
+  // orquestrador, e é justamente por isso que ele precisa de tela própria.
+  const worker = state?.activeAgents.find((agent) => agent.sessionId === sessionId);
+  if (worker?.steps !== undefined) {
+    return worker.steps;
+  }
   const steps: AgentStep[] = [];
   for (const message of state?.messages ?? []) {
     for (const step of message.steps ?? []) {
@@ -6069,6 +6411,15 @@ function renderMessage(message: ChatMessage): HTMLElement {
     header.append(badge);
   }
 
+  // O modelo fica ao lado do motor: a mesma resposta pode vir de um modelo
+  // diferente amanhã, e saber com qual ela foi feita importa ao reler.
+  if (message.agentModel !== undefined && message.agentModel !== '') {
+    const model = document.createElement('span');
+    model.className = 'agent-badge model-badge';
+    model.textContent = modelWithoutWindow(message.agentModel);
+    header.append(model);
+  }
+
   const time = document.createElement('time');
   time.textContent = formatTime(message.timestamp);
   header.append(time);
@@ -6084,7 +6435,13 @@ function renderMessage(message: ChatMessage): HTMLElement {
 
   const body = document.createElement('div');
   body.className = 'content';
-  body.textContent = message.content;
+  setContent(body, message.content, message.status === 'streaming');
+  // Enquanto não há uma palavra sequer, a mensagem inteira — cabeçalho e tudo
+  // — fica fora da tela: um cartão com nome, modelo e hora sem resposta abaixo
+  // é moldura vazia. Quem diz que o agente está trabalhando é a timeline de
+  // passos e o indicador no fim da conversa.
+  const empty = message.status === 'streaming' && message.content === '';
+  item.hidden = empty && (message.steps ?? []).length === 0;
 
   // Os passos vêm antes da resposta: é a ordem em que o trabalho aconteceu.
   item.append(header, renderStepList(message), body);
@@ -6126,8 +6483,18 @@ function renderMessages(messages: readonly ChatMessage[]): void {
 
 function renderAgents(agents: readonly ActiveAgentSummary[]): void {
   dom.agentsCount.textContent = String(agents.length);
-  dom.agentsList.replaceChildren(
-    ...agents.map((agent) => {
+
+  // Um orquestrador que dispara cinco pesquisadores viraria cinco linhas
+  // empurrando a conversa para fora da tela. Os workers entram numa linha só,
+  // que abre quando se quer olhar de perto — o principal fica sempre à vista,
+  // porque é ele que responde.
+  const workers = agents.filter((agent) => agent.role === 'worker');
+  const visible =
+    workers.length > 1 && !workersExpanded
+      ? agents.filter((agent) => agent.role !== 'worker')
+      : agents;
+
+  const rows = visible.map((agent) => {
       const item = document.createElement('li');
       item.className = `agent agent-${agent.status}`;
       if (agent.sessionId === consoleSessionId) {
@@ -6146,31 +6513,106 @@ function renderAgents(agents: readonly ActiveAgentSummary[]): void {
         openAgentConsole(consoleSessionId === agent.sessionId ? null : agent.sessionId),
       );
 
+      // A função do agente no Prometheon vem primeiro — "Orquestrador" diz
+      // mais sobre ele do que "principal", que é só o posto nesta execução.
       const role = document.createElement('span');
       role.className = `agent-role agent-role-${agent.role}`;
-      role.textContent = s(agent.role);
+      role.textContent = agent.roleLabel ?? s(agent.role);
 
       const status = document.createElement('span');
       status.className = 'agent-status';
       status.textContent = s(agent.status);
 
+      // Motor e modelo numa linha apagada: é o "por onde" da execução.
+      const engine = document.createElement('span');
+      engine.className = 'agent-engine';
+      engine.textContent = [agent.engine, agent.model]
+        .filter((part): part is string => part !== undefined && part !== '')
+        .join(' · ');
+
       const task = document.createElement('span');
       task.className = 'agent-task';
       task.textContent = agent.task ?? '';
+      task.title = agent.task ?? '';
 
-      const stop = document.createElement('button');
-      stop.type = 'button';
-      stop.className = 'agent-stop';
-      stop.textContent = s('Stop');
-      stop.disabled = agent.status === 'completed' || agent.status === 'stopped';
-      stop.addEventListener('click', () =>
-        post({ type: 'agents.stop', payload: { sessionId: agent.sessionId } }),
-      );
+      // Interromper só existe enquanto há execução: um botão desabilitado ao
+      // lado de um agente ocioso é ruído com cara de ação disponível.
+      const running =
+        agent.status === 'starting' ||
+        agent.status === 'working' ||
+        agent.status === 'waiting' ||
+        agent.status === 'blocked';
 
-      item.append(name, role, status, task, stop);
+      item.append(name, role, status, engine, task);
+
+      if (running) {
+        const stop = document.createElement('button');
+        stop.type = 'button';
+        stop.className = 'agent-stop';
+        stop.textContent = s('Stop');
+        stop.addEventListener('click', () =>
+          post({ type: 'agents.stop', payload: { sessionId: agent.sessionId } }),
+        );
+        item.append(stop);
+      }
       return item;
-    }),
-  );
+  });
+
+  if (workers.length > 1) {
+    rows.splice(rows.length, 0, workersBundle(workers));
+  }
+
+  dom.agentsList.replaceChildren(...rows);
+}
+
+/**
+ * A linha que representa os workers em conjunto. Fechada, diz quantos são e
+ * quantos ainda trabalham; aberta, some e dá lugar a cada um deles.
+ */
+function workersBundle(workers: readonly ActiveAgentSummary[]): HTMLLIElement {
+  const item = document.createElement('li');
+  item.className = 'agent agent-bundle';
+
+  const busy = workers.filter(
+    (agent) =>
+      agent.status === 'starting' ||
+      agent.status === 'working' ||
+      agent.status === 'waiting' ||
+      agent.status === 'blocked',
+  ).length;
+
+  const name = document.createElement('button');
+  name.type = 'button';
+  name.className = 'agent-name';
+  name.textContent = workersExpanded
+    ? s('Hide delegated agents')
+    : sf('{0} delegated agents', workers.length);
+  name.setAttribute('aria-expanded', String(workersExpanded));
+  name.addEventListener('click', () => {
+    workersExpanded = !workersExpanded;
+    renderAgents(state?.activeAgents ?? []);
+  });
+
+  const status = document.createElement('span');
+  status.className = 'agent-status';
+  status.textContent = busy === 0 ? s('idle') : sf('{0} working', busy);
+
+  // Os nomes ficam na linha de apoio: sem eles, "3 agentes" não diz quem.
+  const engine = document.createElement('span');
+  engine.className = 'agent-engine';
+  engine.textContent = workers.map((agent) => agent.displayName).join(' · ');
+
+  item.append(name, status, engine);
+  return item;
+}
+
+/** Traz para a tela a mensagem que estava escondida esperando conteúdo. */
+function revealMessage(body: HTMLElement): void {
+  body.hidden = false;
+  const message = body.closest('.message');
+  if (message instanceof HTMLElement) {
+    message.hidden = false;
+  }
 }
 
 function scrollToEnd(): void {
@@ -6202,8 +6644,13 @@ function render(next: PrometheonViewState): void {
     segment.setAttribute('aria-selected', String(active));
   }
 
-  dom.sessionTitle.textContent = next.conversationTitle;
-  dom.sessionTitle.title = next.conversationTitle;
+  // Um redesenho no meio da digitação não pode roubar o que está sendo escrito.
+  if (dom.sessionTitleInput.hidden) {
+    dom.sessionTitleText.textContent = next.conversationTitle;
+    dom.sessionTitle.title = next.conversationTitle;
+  }
+  // Conversa do Hub é renomeada no site; aqui o título é só leitura.
+  dom.sessionTitle.disabled = next.chatType === 'web' || next.conversationId === null;
   if (isPopoverOpen()) {
     renderSessions();
   }
@@ -6268,6 +6715,14 @@ function render(next: PrometheonViewState): void {
   );
   menus.mainAgent.update(mainAgentOptions(next), next.mainAgentId);
 
+  // O seletor de esforço só existe para agente que tem esse controle — quem
+  // decide é o adaptador, declarando (ou não) os rótulos dele.
+  const effortLabels = effortLabelsFor(next);
+  dom.effortAnchor.hidden = effortLabels === undefined;
+  if (effortLabels !== undefined) {
+    menus.effort.update(effortOptions(effortLabels), next.effort ?? 'medium');
+  }
+
   renderAgents(next.activeAgents);
 
   const bypass = next.bypass;
@@ -6331,14 +6786,31 @@ function applyChatEvent(event: Extract<ExtensionToWebviewMessage, { type: 'chat.
       break;
 
     case 'step.started':
-    case 'step.completed':
+    case 'step.completed': {
       upsertStep(payload.messageId, payload.step);
+      // O primeiro passo já é conteúdo: a partir dele a mensagem tem o que
+      // mostrar, mesmo antes da primeira letra da resposta.
+      const node = contentNodes.get(payload.messageId);
+      if (node !== undefined) {
+        const message = node.closest('.message');
+        if (message instanceof HTMLElement) {
+          message.hidden = false;
+        }
+      }
       break;
+    }
 
     case 'message.delta': {
       const node = contentNodes.get(payload.messageId);
       if (node !== undefined) {
-        node.textContent = `${node.textContent ?? ''}${payload.delta}`;
+        // Em streaming o texto continua cru: formatar a cada pedaço faria a
+        // marcação piscar enquanto ela ainda está pela metade — um `**` que
+        // ainda não fechou não é ênfase, é meia palavra.
+        streaming.set(payload.messageId, `${streaming.get(payload.messageId) ?? ''}${payload.delta}`);
+        node.textContent = streaming.get(payload.messageId) ?? '';
+        // A primeira letra faz a mensagem aparecer: até aqui ela estava fora
+        // da tela para não mostrar um cartão sem resposta.
+        revealMessage(node);
         scrollToEnd();
       }
       break;
@@ -6347,7 +6819,13 @@ function applyChatEvent(event: Extract<ExtensionToWebviewMessage, { type: 'chat.
     case 'message.completed': {
       const node = contentNodes.get(payload.messageId);
       if (node !== undefined) {
-        node.textContent = payload.content;
+        streaming.delete(payload.messageId);
+        setContent(node, payload.content, false);
+        // Resposta vazia continua fora da tela: uma moldura em branco no fim
+        // do run faria parecer que algo se perdeu.
+        if (payload.content !== '') {
+          revealMessage(node);
+        }
         const message = node.closest('.message');
         message?.classList.replace('status-streaming', 'status-sent');
         if (payload.usage !== undefined) {
@@ -6551,6 +7029,61 @@ dom.newSession.addEventListener('click', () => {
   closePopover();
   post({ type: 'chat.newLocal' });
 });
+
+// ---------- Renomear a conversa aberta ----------
+
+/**
+ * Abre a edição do título no lugar do rótulo. O input ocupa exatamente o mesmo
+ * espaço, para o cabeçalho não pular quando a edição começa.
+ */
+function startTitleEdit(): void {
+  const title = state?.conversationTitle ?? '';
+  dom.sessionTitleInput.value = title;
+  dom.sessionTitleInput.hidden = false;
+  dom.sessionTitle.hidden = true;
+  dom.sessionTitleInput.focus();
+  dom.sessionTitleInput.select();
+}
+
+/** Fecha a edição. `commit` grava; cancelar devolve o título que já valia. */
+function endTitleEdit(commit: boolean): void {
+  if (dom.sessionTitleInput.hidden) {
+    return;
+  }
+  const typed = dom.sessionTitleInput.value.replace(/\s+/g, ' ').trim();
+  const current = state?.conversationTitle ?? '';
+  const conversationId = state?.conversationId ?? null;
+
+  dom.sessionTitleInput.hidden = true;
+  dom.sessionTitle.hidden = false;
+
+  if (!commit || conversationId === null || typed === '' || typed === current) {
+    dom.sessionTitleText.textContent = current;
+    return;
+  }
+  // Otimista: o rótulo já mostra o nome novo, e o snapshot confirma logo.
+  dom.sessionTitleText.textContent = typed;
+  dom.sessionTitle.title = typed;
+  post({ type: 'chat.renameSession', payload: { conversationId, title: typed } });
+}
+
+dom.sessionTitle.addEventListener('click', startTitleEdit);
+
+dom.sessionTitleInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    endTitleEdit(true);
+  } else if (event.key === 'Escape') {
+    // Sem o stopPropagation, o Esc do documento fecharia popover ou modal
+    // junto — cancelar a renomeação é uma coisa só.
+    event.preventDefault();
+    event.stopPropagation();
+    endTitleEdit(false);
+  }
+});
+
+// Clicar fora grava: é o gesto que a pessoa espera de um rótulo editável.
+dom.sessionTitleInput.addEventListener('blur', () => endTitleEdit(true));
 
 dom.toggleSessions.addEventListener('click', (event) => {
   event.stopPropagation();
