@@ -227,13 +227,28 @@ function element(tag: string, content: string, className?: string): HTMLElement 
   return node;
 }
 
-/** Só `http` e `https` viram link; o resto fica como texto, à vista. */
+/**
+ * Só `http` e `https` viram link; o resto fica como texto, à vista.
+ *
+ * A checagem é feita na URL já interpretada, e não com uma expressão sobre o
+ * texto: quem decide qual é o esquema é o mesmo parser que o navegador usa ao
+ * seguir o link. Uma comparação de prefixo julga uma string que o navegador
+ * ainda vai normalizar — e é entre esses dois passos que moram os disfarces.
+ */
 function link(href: string, label: string): Node {
-  if (!/^https?:\/\//i.test(href)) {
+  let parsed: URL;
+  try {
+    parsed = new URL(href);
+  } catch {
+    // Sem base, o que não é absoluto não é endereço: fica texto.
     return document.createTextNode(label);
   }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return document.createTextNode(label);
+  }
+
   const anchor = document.createElement('a');
-  anchor.href = href;
+  anchor.href = parsed.href;
   anchor.textContent = label;
   anchor.rel = 'noreferrer';
   return anchor;

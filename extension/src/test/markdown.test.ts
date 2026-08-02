@@ -50,10 +50,27 @@ suite('Markdown da conversa', () => {
   });
 
   test('link só passa com http ou https', () => {
-    assert.match(html('[abrir](https://exemplo.com)'), /<a href="https:\/\/exemplo\.com"/);
+    assert.match(html('[abrir](https://exemplo.com)'), /<a href="https:\/\/exemplo\.com/);
     const perigoso = html('[clique](javascript:alert(1))');
     assert.ok(!perigoso.includes('<a'), perigoso);
     assert.match(perigoso, /clique/);
+  });
+
+  test('esquema disfarçado não vira link', () => {
+    // A checagem é na URL interpretada, e não no texto: maiúsculas, espaço à
+    // frente e caractere de controle no meio são normalizados pelo navegador
+    // antes de ele seguir o endereço, e é aí que uma comparação de prefixo
+    // erra.
+    for (const alvo of [
+      '[a](JavaScript:alert(1))',
+      '[a]( javascript:alert(1))',
+      '[a](java	script:alert(1))',
+      '[a](data:text/html;base64,PHNjcmlwdD4=)',
+      '[a](vbscript:msgbox)',
+      '[a](/caminho/relativo)',
+    ]) {
+      assert.ok(!html(alvo).includes('<a'), alvo);
+    }
   });
 
   test('emoji atravessa intacto', () => {
