@@ -192,8 +192,11 @@ const server = createServer(async (request, response) => {
     response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     response.end(`404: ${pathname}`);
   } catch (error) {
+    // O detalhe vai para quem está rodando o preview, não para a resposta:
+    // stack trace no corpo do HTTP conta a estrutura interna a quem pediu.
+    console.error('  Preview: falha ao servir a requisição.', error);
     response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
-    response.end(String(error && error.stack ? error.stack : error));
+    response.end('500: veja o terminal do preview.');
   }
 });
 
