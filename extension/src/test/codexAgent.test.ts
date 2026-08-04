@@ -1,6 +1,7 @@
 import * as assert from 'node:assert/strict';
 import {
   argumentsFor,
+  failureMessage,
   sandboxFor,
   translateCodexLine,
 } from '../agents/CodexAgentAdapter';
@@ -141,5 +142,35 @@ suite('Codex — status de login', () => {
     // logo depois de um login bem-sucedido — foi o que aconteceu na prática.
     const joined = ['', 'Logged in using ChatGPT'].join(' ').trim();
     assert.equal(parseLoginStatus(joined).authenticated, true);
+  });
+});
+
+suite('Worker de leitura', () => {
+  test('o Codex de leitura roda na sandbox de leitura', () => {
+    assert.equal(sandboxFor({ workMode: 'edit', autonomy: 'auto', readOnly: true }), 'read-only');
+    // Sem a marca, editar continua sendo o normal.
+    assert.equal(sandboxFor({ workMode: 'edit', autonomy: 'auto' }), 'workspace-write');
+  });
+});
+
+suite('Codex — mensagem de falha', () => {
+  test('o anúncio de leitura do prompt não é a causa da falha', () => {
+    // O Codex conta o que está fazendo pelo stderr; apresentar isso como erro
+    // manda o usuário caçar um defeito que não existe.
+    const message = failureMessage('Reading prompt from stdin...\n', 1);
+    assert.match(message, /exited with code 1/);
+    assert.ok(!message.includes('Reading prompt'), message);
+  });
+
+  test('o erro de verdade sobrevive à limpeza', () => {
+    const message = failureMessage(
+      'Reading prompt from stdin...\n\nerror: unexpected argument --foo\n',
+      2,
+    );
+    assert.equal(message, 'error: unexpected argument --foo');
+  });
+
+  test('stderr vazio vira uma frase que admite não saber', () => {
+    assert.match(failureMessage('   \n', null), /said nothing about why/);
   });
 });

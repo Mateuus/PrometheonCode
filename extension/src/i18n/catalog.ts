@@ -238,6 +238,15 @@ export const WEBVIEW_STRINGS = {
   'agents.systemPrompt': 'System prompt',
   'agents.systemPromptPlaceholder': 'How this agent should behave.',
   'agents.contextStrategy': 'Context strategy',
+  // Onde o agente é guardado: no repositório da equipe ou só nesta máquina.
+  'agents.scope': 'Where it lives',
+  'agents.scopeMachine': 'This machine',
+  'agents.scopeProject': 'This project',
+  'agents.scopeMachineHint': 'Only you have this agent. Nothing is written to the repository.',
+  'agents.scopeProjectHint':
+    'Saved in .prometheon/agents/, which goes to git — everyone who clones gets this agent. The account stays yours: each machine picks its own.',
+  'agents.scopeHint':
+    'An agent describes how the work gets done here, so it belongs with the code. What never travels is the account behind it.',
   'agents.allowedHint': 'Comma separated. Empty means the provider default.',
   'agents.deniedHint': 'Comma separated.',
   'agents.maxSessionsField': 'Max concurrent sessions',

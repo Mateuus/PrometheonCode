@@ -144,6 +144,22 @@ export interface ConversationSummary {
 
 export interface Conversation extends ConversationSummary {
   readonly messages: readonly ChatMessage[];
+  /**
+   * Identificador que o CLI usa para retomar esta conversa.
+   *
+   * O histórico completo vive do lado dele; aqui fica só a chave que o traz de
+   * volta, para a mensagem seguinte continuar de onde parou em vez de começar
+   * do zero.
+   */
+  readonly resumeId?: string;
+  /**
+   * Resumo a entregar ao CLI na próxima mensagem, quando a sessão anterior foi
+   * abandonada por estar cheia.
+   *
+   * É o que atravessa a troca de sessão: o histórico fica para trás, mas o
+   * agente recebe o que precisa saber para continuar de onde parou.
+   */
+  readonly carryOver?: string;
 }
 
 export interface CreateConversationInput {
@@ -169,6 +185,15 @@ export interface SendMessageInput {
   readonly systemPrompt?: string;
   /** Esforço de raciocínio desta mensagem, na escala canônica. */
   readonly effort?: EffortLevel;
+  /**
+   * Pasta em que o agente trabalha — a raiz aberta no editor.
+   *
+   * Sem ela, o CLI herda o diretório do processo da extensão, que não é o
+   * projeto de ninguém: o agente abre numa pasta interna do VS Code, não
+   * enxerga o repositório e pede permissão para ler o que deveria ser a casa
+   * dele.
+   */
+  readonly workspaceFolder?: string;
   /**
    * Ferramenta de delegação para o agente principal desta mensagem. O chat
    * repassa ao adaptador sem interpretar — quem decide se há a quem delegar é

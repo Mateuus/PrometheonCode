@@ -39,6 +39,7 @@ import { McpConfigStore } from './workspace/McpConfigStore';
 import { GraphService } from './workspace/GraphService';
 import { GitPolicyService } from './workspace/GitPolicyService';
 import { WorkspaceInitializer } from './workspace/WorkspaceInitializer';
+import { WorktreeService } from './workspace/WorktreeService';
 import { WorkspaceService } from './workspace/WorkspaceService';
 import { PrometheonViewProvider } from './views/PrometheonViewProvider';
 import { BypassStatusBar } from './views/BypassStatusBar';
@@ -63,6 +64,7 @@ export interface PrometheonApi {
   readonly settings: SettingsStore;
   readonly workspace: WorkspaceService;
   readonly initializer: WorkspaceInitializer;
+  readonly worktrees: WorktreeService;
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<PrometheonApi> {
@@ -83,6 +85,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
   const workspace = new WorkspaceService(settings, localState);
   const permissions = new PermissionService(logger);
   const initializer = new WorkspaceInitializer(settings, permissions, logger);
+  const worktrees = new WorktreeService(logger);
   // Ditado por voz, inteiramente local: um processo Python com faster-whisper,
   // usando a GPU da máquina quando houver. O áudio não sai daqui.
   //
@@ -205,6 +208,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
     settings,
     workspace,
     initializer,
+    worktrees,
   });
 
   const provider = new PrometheonViewProvider(context.extensionUri, core, logger);
@@ -289,6 +293,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Promet
     settings,
     workspace,
     initializer,
+    worktrees,
   };
 }
 

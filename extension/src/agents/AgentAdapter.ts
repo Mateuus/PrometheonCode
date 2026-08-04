@@ -59,6 +59,24 @@ export interface StartAgentInput {
     readonly token: string;
     readonly toolNames: readonly string[];
   };
+  /**
+   * O agente pode ler, pesquisar e executar, mas não alterar arquivos.
+   *
+   * É o que um worker de pesquisa precisa: trocar o modo de trabalho para
+   * planejamento faria o CLI apresentar um plano em vez de fazer a pesquisa.
+   * Cada adaptador traduz para o seu CLI — negando as ferramentas de escrita,
+   * ou pedindo a sandbox de leitura.
+   */
+  readonly readOnly?: boolean;
+  /**
+   * Conversa do CLI a retomar, da última vez que este agente falou aqui.
+   *
+   * Sem isto cada mensagem abre um processo novo, que nasce sem saber o que já
+   * foi dito: o chat vira uma fila de perguntas soltas, e o agente responde
+   * "esta conversa comeca na sua mensagem". Quem guarda o histórico é o próprio
+   * CLI; nós guardamos só o identificador que o traz de volta.
+   */
+  readonly resumeId?: string;
 }
 
 export interface AgentInput {
@@ -159,6 +177,11 @@ export interface AgentAdapter {
    * chegado depois de o run acabar.
    */
   answer?(sessionId: string, requestId: string, outcome: AgentQuestionOutcome): Promise<void>;
+  /**
+   * Identificador que permite retomar esta conversa num run futuro. `null`
+   * quando o CLI ainda não o informou. Adaptador sem memória omite o método.
+   */
+  resumeId?(sessionId: string): string | null;
   interrupt(sessionId: string): Promise<void>;
   dispose(sessionId: string): Promise<void>;
 }

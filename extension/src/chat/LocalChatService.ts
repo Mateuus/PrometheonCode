@@ -156,11 +156,21 @@ export class LocalChatService implements ChatService {
 
     const adapter = this.registry.require(input.mainAgentId);
     const task = sessionTitle(input.content, attachments.length);
+    // O resumo da sessão anterior vai junto da primeira mensagem da nova, e só
+    // dela: a partir daí quem lembra é o próprio CLI.
+    const carryOver = conversation.resumeId === undefined ? conversation.carryOver : undefined;
+    if (carryOver !== undefined) {
+      const { carryOver: _used, ...rest } = conversation;
+      await this.replace(rest);
+    }
     const session = await adapter.start({
       workMode: input.workMode,
       autonomy: input.autonomy,
       role: 'main',
       task,
+      ...(input.workspaceFolder === undefined ? {} : { workspaceFolder: input.workspaceFolder }),
+      // Continua a conversa que este CLI já tem, quando há uma.
+      ...(conversation.resumeId === undefined ? {} : { resumeId: conversation.resumeId }),
       ...(input.model === undefined ? {} : { model: input.model }),
       ...(input.systemPrompt === undefined ? {} : { systemPrompt: input.systemPrompt }),
       ...(input.effort === undefined ? {} : { effort: input.effort }),
@@ -241,7 +251,21 @@ export class LocalChatService implements ChatService {
 
     try {
       for await (const event of adapter.send(session.id, {
-        content: input.content,
+        // A mensagem persistida é a do usuário; a que vai ao agente carrega o
+        // resumo na frente quando a sessão é nova.
+        content:
+          carryOver === undefined
+            ? input.content
+            : [
+                '[Prometheon] The previous session filled its context window and was closed.',
+                'Here is where the work stands:',
+                '',
+                carryOver,
+                '',
+                '---',
+                '',
+                input.content,
+              ].join('\n'),
         ...(attachments.length === 0 ? {} : { attachments }),
         workMode: input.workMode,
         autonomy: input.autonomy,
@@ -450,8 +474,34 @@ export class LocalChatService implements ChatService {
       yield { type: 'run.failed', runId, error: serializeError(error) };
     } finally {
       this.runs.delete(runId);
+      // Antes de encerrar o processo, guarda a chave que retoma esta conversa:
+      // depois do `dispose` o adaptador já não sabe quem ela era.
+      const resumeId = adapter.resumeId?.(session.id) ?? null;
+      if (resumeId !== null) {
+        const current = this.find(conversation.id);
+        if (current !== undefined && current.resumeId !== resumeId) {
+          await this.replace({ ...current, resumeId });
+        }
+      }
       await adapter.dispose(session.id);
     }
+  }
+
+  /**
+   * Larga a sessão do CLI e guarda um resumo para a próxima.
+   *
+   * A janela de contexto é do processo, não da conversa: quando enche, resumir
+   * dentro dela não devolve espaço nenhum. O que devolve é começar outra e
+   * levar o resumo junto.
+   */
+  async startFreshSession(conversationId: string, summary: string): Promise<void> {
+    const conversation = this.find(conversationId);
+    if (conversation === undefined) {
+      return;
+    }
+    const { resumeId: _dropped, ...rest } = conversation;
+    await this.replace(summary.trim() === '' ? rest : { ...rest, carryOver: summary.trim() });
+    this.logger.info(`Conversa ${conversationId}: sessão do CLI reiniciada com resumo.`);
   }
 
   async cancel(runId: string): Promise<void> {

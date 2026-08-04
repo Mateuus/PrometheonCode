@@ -42,6 +42,7 @@ interface RunningSession {
   readonly systemPrompt: string | undefined;
   readonly workMode: StartAgentInput['workMode'];
   readonly autonomy: StartAgentInput['autonomy'];
+  readonly readOnly: boolean;
   /** Identificador que o CLI dá à conversa; é o que permite retomá-la. */
   threadId: string | null;
   child: ChildProcessWithoutNullStreams | null;
@@ -125,7 +126,8 @@ export class CodexAgentAdapter implements AgentAdapter {
       systemPrompt: input.systemPrompt,
       workMode: input.workMode,
       autonomy: input.autonomy,
-      threadId: null,
+      readOnly: input.readOnly ?? false,
+      threadId: input.resumeId ?? null,
       child: null,
       interrupted: false,
     });
@@ -194,10 +196,7 @@ export class CodexAgentAdapter implements AgentAdapter {
           type: 'failed',
           error: {
             name: 'CodexRunFailed',
-            message:
-              failure.stderr().trim() === ''
-                ? `The Codex CLI exited with code ${String(code)} without answering.`
-                : failure.stderr().trim(),
+            message: failureMessage(failure.stderr(), code),
             code: 'codex.run-failed',
           },
         };
@@ -208,6 +207,10 @@ export class CodexAgentAdapter implements AgentAdapter {
         child.kill();
       }
     }
+  }
+
+  resumeId(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.threadId ?? null;
   }
 
   async interrupt(sessionId: string): Promise<void> {
@@ -294,8 +297,10 @@ export function argumentsFor(session: RunningSession): string[] {
 export function sandboxFor(session: {
   workMode: StartAgentInput['workMode'];
   autonomy: StartAgentInput['autonomy'];
+  readOnly?: boolean;
 }): string {
-  if (session.workMode === 'plan') {
+  // Worker de leitura e modo de planejamento chegam no mesmo lugar: sem escrita.
+  if (session.workMode === 'plan' || session.readOnly === true) {
     return 'read-only';
   }
   // Bypass em modo de edição não passa por aqui: ele usa a flag própria do
@@ -517,6 +522,32 @@ function number(value: unknown): number | null {
 function firstLine(value: string): string {
   const line = value.split('\n', 1)[0] ?? value;
   return line.length > 80 ? `${line.slice(0, 77)}...` : line;
+}
+
+/**
+ * Linhas que o Codex escreve no stderr sem que nada tenha dado errado.
+ *
+ * Ele conta o que está fazendo por ali — "Reading prompt from stdin..." é
+ * anúncio, não defeito. Repassá-las como causa da falha faz o usuário caçar um
+ * erro que não existe, enquanto o motivo verdadeiro fica escondido.
+ */
+const CODEX_NOISE = [
+  /^Reading prompt from stdin/i,
+  /^\s*$/,
+  // Linha de log com carimbo de tempo e nivel: informacao de execucao, nao falha.
+  /^\d{4}-\d{2}-\d{2}T[\d:.]+Z?\s+(INFO|DEBUG|TRACE)/,
+];
+
+/** O que dizer quando o processo termina sem responder. */
+export function failureMessage(stderr: string, code: number | null): string {
+  const meaningful = stderr
+    .split('\n')
+    .filter((line) => !CODEX_NOISE.some((pattern) => pattern.test(line)))
+    .join('\n')
+    .trim();
+  return meaningful === ''
+    ? `The Codex CLI exited with code ${String(code)} without answering, and said nothing about why.`
+    : meaningful;
 }
 
 /** Acompanha a saída de erro e o código de término sem prender o fluxo. */

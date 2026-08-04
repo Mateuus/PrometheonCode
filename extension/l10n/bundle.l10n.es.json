@@ -486,7 +486,7 @@
   "This agent has not run any tool yet.": "Este agente todavía no ha ejecutado ninguna herramienta.",
   "This deletes local conversations, provider and agent profiles, workspace preferences and the Hub credentials stored on this machine. It cannot be undone.": "Esto borra las conversaciones locales, los perfiles de proveedor y de agente, las preferencias del espacio de trabajo y las credenciales del Hub guardadas en esta máquina. No se puede deshacer.",
   "This file lives at the root of the project and usually goes into Git. Keep tokens out of it: put the value in an environment variable and reference it by name, like ${GITHUB_TOKEN}.": "Este archivo está en la raíz del proyecto y suele ir a Git. Mantén los tokens fuera de él: pon el valor en una variable de entorno y cítala por su nombre, como ${GITHUB_TOKEN}.",
-  "This machine": "Esta máquina",
+  "This machine": "En esta máquina",
   "This output is no longer available.": "Esta salida ya no está disponible.",
   "This skill caps the agent at Manual: it asks for approval even in Auto or Bypass.": "Esta skill limita al agente a Manual: pide aprobación incluso en Auto o Bypass.",
   "This skill declares {0} and does not run here.": "Esta skill declara {0} y no se ejecuta aquí.",
@@ -542,5 +542,10 @@
   "The agent stopped: {0}.": "El agente se detuvo: {0}.",
   "The agent stopped: {0} ({1}).": "El agente se detuvo: {0} ({1}).",
   "{0} finished. The report is in the conversation.": "{0} terminó. El informe está en la conversación.",
-  "{0} failed: {1}.": "{0} falló: {1}."
+  "{0} failed: {1}.": "{0} falló: {1}.",
+  "Where it lives": "Dónde vive",
+  "This project": "En este proyecto",
+  "Only you have this agent. Nothing is written to the repository.": "Solo tú tienes este agente. No se escribe nada en el repositorio.",
+  "Saved in .prometheon/agents/, which goes to git — everyone who clones gets this agent. The account stays yours: each machine picks its own.": "Se guarda en .prometheon/agents/, que va al git: quien clone recibe este agente. La cuenta sigue siendo tuya: cada máquina elige la suya.",
+  "An agent describes how the work gets done here, so it belongs with the code. What never travels is the account behind it.": "Un agente describe cómo se hace el trabajo aquí, así que pertenece al código. Lo que nunca viaja es la cuenta detrás de él."
 }

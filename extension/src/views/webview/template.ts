@@ -68,6 +68,9 @@ const MENU_ICONS: Readonly<Record<string, string>> = {
   // Seções do modal de configuração e campos dos formulários
   person: `<circle cx="8" cy="5.4" r="2.7"/><path d="M2.9 13.4a5.1 5.1 0 0 1 10.2 0"/>`,
   folder: `<path d="M2.2 4.4a1 1 0 0 1 1-1h2.9l1.4 1.6h5.3a1 1 0 0 1 1 1v5.6a1 1 0 0 1-1 1H3.2a1 1 0 0 1-1-1Z"/>`,
+  // Escopo de um agente ou skill: o computador de quem edita, ou o repositório.
+  machine: `<rect x="2.4" y="3.4" width="11.2" height="7.2" rx="1"/><path d="M6 13h4M8 10.6V13"/>`,
+  project: `<path d="M3.4 3.2h4.2l1.2 1.4h3.8v7.8a1 1 0 0 1-1 1H3.4a1 1 0 0 1-1-1V4.2a1 1 0 0 1 1-1Z"/><path d="M6 8.6h4M6 10.6h2.6"/>`,
   plug: `<path d="M6.1 1.9v3.2M9.9 1.9v3.2"/><path d="M4.3 5.1h7.4v2.3a3.7 3.7 0 0 1-7.4 0Z"/><path d="M8 11.1v3"/>`,
   magnifier: `<circle cx="7.2" cy="7.2" r="4.3"/><path d="M10.4 10.4 13.4 13.4"/>`,
   beaker: `<path d="M6.3 2.2v4L3.1 11.6a1 1 0 0 0 .9 1.6h8a1 1 0 0 0 .9-1.6L9.7 6.2v-4"/><path d="M5.4 2.2h5.2"/><path d="M4.6 9.5h6.8"/>`,

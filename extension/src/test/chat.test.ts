@@ -32,6 +32,8 @@ class ScriptedAdapter implements AgentAdapter {
 
   /** Guarda o que o chat pediu, para o teste conferir o que chegou ao adaptador. */
   lastStart: StartAgentInput | null = null;
+  /** Chave de retomada que este CLI diria ter, como os reais dizem. */
+  resume: string | null = null;
 
   constructor(private readonly script: readonly AgentEvent[]) {}
 
@@ -44,10 +46,18 @@ class ScriptedAdapter implements AgentAdapter {
     return Promise.resolve({ id: 'scripted-session', agentId: this.id, startedAt: Date.now() });
   }
 
-  async *send(): AsyncIterable<AgentEvent> {
+  async *send(_sessionId: string, message: { content: string }): AsyncIterable<AgentEvent> {
+    this.lastSend = message.content;
     for (const event of this.script) {
       yield await Promise.resolve(event);
     }
+  }
+
+  /** Última mensagem que chegou ao adaptador, como o CLI a receberia. */
+  lastSend: string | null = null;
+
+  resumeId(): string | null {
+    return this.resume;
   }
 
   interrupt(): Promise<void> {
@@ -330,6 +340,28 @@ suite('Chat', () => {
     // Uma mensagem só de imagem também nomeia a sessão.
     const summaries = await api.localChat.listConversations();
     assert.equal(summaries.find((item) => item.id === conversation.id)?.title, '1 image');
+  });
+
+  test('a pasta do projeto chega ao adaptador', async () => {
+    // Sem isto o CLI herdava o diretorio do processo da extensao: o agente
+    // abria numa pasta interna do VS Code, nao enxergava o repositorio, e
+    // pedia permissao para ler o que deveria ser a casa dele.
+    const { chat, conversationId, adapter } = await scriptedChat([
+      { type: 'completed', text: 'ok' },
+    ]);
+
+    for await (const _event of chat.sendMessage({
+      conversationId,
+      content: 'oi',
+      workMode: 'edit',
+      autonomy: 'auto',
+      mainAgentId: 'scripted',
+      workspaceFolder: 'F:/Projects/Rust',
+    })) {
+      // so consumir
+    }
+
+    assert.equal(adapter.lastStart?.workspaceFolder, 'F:/Projects/Rust');
   });
 
   test('a ferramenta de delegação chega ao adaptador', async () => {
@@ -767,5 +799,91 @@ suite('Chat', () => {
     // de um turno, confundir os dois faria a barra encher cedo demais.
     assert.ok(lastContext > 0, 'esperava alguma estimativa de contexto');
     assert.ok(lastContext <= lastUsage, 'o contexto não pode passar da soma do run');
+  });
+});
+
+suite('Chat — continuidade da conversa', () => {
+  test('a segunda mensagem retoma a conversa que o CLI já tem', async () => {
+    // Sem isto cada mensagem abria um processo novo, que nascia sem saber o que
+    // já tinha sido dito: o agente respondia "esta conversa comeca na sua
+    // mensagem" depois de uma hora de trabalho.
+    const { chat, conversationId, adapter } = await scriptedChat([
+      { type: 'completed', text: 'ok' },
+    ]);
+    adapter.resume = 'sess-123';
+
+    const send = async (content: string): Promise<void> => {
+      for await (const _event of chat.sendMessage({
+        conversationId,
+        content,
+        workMode: 'edit',
+        autonomy: 'auto',
+        mainAgentId: 'scripted',
+      })) {
+        // só consumir
+      }
+    };
+
+    await send('primeira');
+    assert.equal(adapter.lastStart?.resumeId, undefined, 'a primeira não tem o que retomar');
+
+    await send('segunda');
+    assert.equal(adapter.lastStart?.resumeId, 'sess-123');
+  });
+
+  test('conversa sem chave de retomada não inventa uma', async () => {
+    const { chat, conversationId, adapter } = await scriptedChat([
+      { type: 'completed', text: 'ok' },
+    ]);
+    adapter.resume = null;
+
+    for (const content of ['a', 'b']) {
+      for await (const _event of chat.sendMessage({
+        conversationId,
+        content,
+        workMode: 'edit',
+        autonomy: 'auto',
+        mainAgentId: 'scripted',
+      })) {
+        // só consumir
+      }
+    }
+    assert.equal(adapter.lastStart?.resumeId, undefined);
+  });
+});
+
+suite('Chat — troca de sessão quando a janela enche', () => {
+  test('o resumo atravessa para a sessão nova, e só uma vez', async () => {
+    // A janela cheia é do processo do CLI: resumir dentro dela não devolve
+    // espaço. O que devolve é largar a sessão e levar o resumo para a próxima.
+    const { chat, conversationId, adapter } = await scriptedChat([
+      { type: 'completed', text: 'ok' },
+    ]);
+    adapter.resume = 'sess-antiga';
+
+    const send = async (content: string): Promise<string> => {
+      for await (const _event of chat.sendMessage({
+        conversationId,
+        content,
+        workMode: 'edit',
+        autonomy: 'auto',
+        mainAgentId: 'scripted',
+      })) {
+        // só consumir
+      }
+      return adapter.lastSend ?? '';
+    };
+
+    await send('primeira');
+    await chat.startFreshSession(conversationId, 'Estávamos migrando o parser.');
+
+    const first = await send('continue');
+    assert.match(first, /Estávamos migrando o parser/);
+    assert.match(first, /continue/);
+    assert.equal(adapter.lastStart?.resumeId, undefined, 'a sessão antiga foi largada');
+
+    const second = await send('e agora');
+    assert.ok(!second.includes('Estávamos migrando'), second);
+    assert.equal(adapter.lastStart?.resumeId, 'sess-antiga', 'a nova sessão já é retomável');
   });
 });

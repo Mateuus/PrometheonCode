@@ -59,6 +59,8 @@ export interface AgentProfileInput {
   readonly maxConcurrentSessions: number;
   readonly contextStrategy: AgentProfile['contextStrategy'];
   readonly enabled: boolean;
+  /** Onde guardar: `.prometheon/agents/` do projeto, ou só esta máquina. */
+  readonly scope?: AgentProfile['scope'];
 }
 
 /**
@@ -94,18 +96,40 @@ export class AgentProfileService {
   async create(input: AgentProfileInput): Promise<AgentProfile> {
     const validated = await this.validate(input);
     const id = await this.uniqueId(validated.name);
-    const profile: AgentProfile = { id, ...validated };
+    const profile: AgentProfile = {
+      id,
+      ...validated,
+      ...(input.scope === undefined ? {} : { scope: input.scope }),
+    };
     await this.store.save(profile);
     this.logger.info(`Agent Profile ${id} criado (provider ${profile.providerProfileId}).`);
     return profile;
   }
 
   async update(id: string, input: AgentProfileInput): Promise<AgentProfile> {
-    await this.require(id);
+    const current = await this.require(id);
     const validated = await this.validate(input);
-    const profile: AgentProfile = { id, ...validated };
+    // Sem escopo no pedido, o agente fica onde estava: uma edição de nome não
+    // pode mudar de lugar o que a equipe já compartilhou.
+    const scope = input.scope ?? current.scope;
+    const profile: AgentProfile = { id, ...validated, ...(scope === undefined ? {} : { scope }) };
     await this.store.save(profile);
     this.logger.info(`Agent Profile ${id} atualizado.`);
+    return profile;
+  }
+
+  /**
+   * Aponta um agente para uma conta, sem passar pela validação de edição.
+   *
+   * É o caminho de quem ainda não tem conta nenhuma: a equipe embutida na
+   * primeira execução, e os agentes que vieram do repositório. Validar aqui
+   * exigiria um formulário inteiro preenchido para trocar um campo que a
+   * própria extensão sabe qual é.
+   */
+  async bind(id: string, providerProfileId: string): Promise<AgentProfile> {
+    const current = await this.require(id);
+    const profile: AgentProfile = { ...current, providerProfileId };
+    await this.store.save(profile);
     return profile;
   }
 

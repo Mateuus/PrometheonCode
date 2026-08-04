@@ -28,6 +28,24 @@ export interface DelegatableAgent {
   readonly slots: number;
 }
 
+/**
+ * O que se espera de volta de um worker.
+ *
+ * `report` é trabalho de leitura: pesquisa, análise, revisão. O agente não
+ * altera nada e devolve texto. `changes` é trabalho de escrita: o agente recebe
+ * uma cópia isolada do repositório e devolve o que mudou nela.
+ */
+export type DelegationMode = 'report' | 'changes';
+
+/** Delegação em andamento, como o orquestrador a enxerga. */
+export interface RunningDelegation {
+  readonly ticket: string;
+  readonly agent: string;
+  readonly task: string;
+  readonly mode: DelegationMode;
+  readonly seconds: number;
+}
+
 export interface DelegationHandlers {
   /** Agentes que podem receber trabalho agora. */
   listAgents(): Promise<readonly DelegatableAgent[]>;
@@ -37,9 +55,11 @@ export interface DelegationHandlers {
    * ferramenta. Erros voltam como texto: o orquestrador precisa saber que
    * falhou para decidir o que fazer, e derrubar a ferramenta esconderia isso.
    */
-  delegate(agent: string, task: string): Promise<string>;
+  delegate(agent: string, task: string, mode: DelegationMode): Promise<string>;
   /** Troca um bilhete pelo relatório, quando ele já estiver pronto. */
   collect(ticket: string): Promise<string>;
+  /** O que ainda está rodando: ticket, agente e tarefa. */
+  running(): Promise<readonly RunningDelegation[]>;
 }
 
 export interface DelegationEndpoint {
@@ -76,10 +96,22 @@ const TOOLS = [
           description:
             'What the agent must do, with the context it needs. It does not see your conversation.',
         },
+        mode: {
+          type: 'string',
+          enum: ['report', 'changes'],
+          description:
+            'What you want back. "report" (default): the agent researches, reads and answers in text, touching no file. "changes": the agent edits files in an isolated copy of the repository, on its own branch, and reports what it changed — use this for anything that alters code.',
+        },
       },
       required: ['agent', 'task'],
       additionalProperties: false,
     },
+  },
+  {
+    name: 'prometheon_status',
+    description:
+      'List the delegations you started that are still running: ticket, agent and task. Call this before delegating something that might already be in progress — a task you send twice comes back twice, on two branches, and one of them is wasted.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'prometheon_collect',
@@ -235,8 +267,25 @@ export class DelegationServer {
         if (agent === '' || task === '') {
           return text('Both "agent" and "task" are required.', true);
         }
-        this.logger.info(`Delegação: ${agent} recebeu uma tarefa.`);
-        return text(await this.handlers.delegate(agent, task));
+        // Ausente ou desconhecido vale por `report`: o modo que não escreve em
+        // disco é o certo para errar.
+        const mode: DelegationMode = args['mode'] === 'changes' ? 'changes' : 'report';
+        this.logger.info(`Delegação: ${agent} recebeu uma tarefa (${mode}).`);
+        return text(await this.handlers.delegate(agent, task, mode));
+      }
+
+      if (name === 'prometheon_status') {
+        const running = await this.handlers.running();
+        return text(
+          running.length === 0
+            ? 'Nothing is running. Every delegation you started has already reported back.'
+            : running
+                .map(
+                  (item) =>
+                    `- ${item.ticket} — "${item.agent}" (${item.mode}), running for ${String(item.seconds)}s: ${item.task}`,
+                )
+                .join('\n'),
+        );
       }
 
       if (name === 'prometheon_collect') {
