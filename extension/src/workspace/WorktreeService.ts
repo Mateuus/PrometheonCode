@@ -89,13 +89,15 @@ export class WorktreeService {
     for (const relative of await this.dependencyFolders(folder)) {
       const source = join(folder, relative);
       const link = join(target, relative);
-      if (existsSync(link)) {
-        continue;
-      }
       try {
         await mkdir(dirname(link), { recursive: true });
+        // `symlink` já falha quando o destino existe: checar antes só criaria
+        // uma janela entre a checagem e a criação.
         await symlink(source, link, 'junction');
       } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+          continue;
+        }
         // Sem as dependências o agente ainda trabalha; ele é que não vai
         // conseguir provar que o trabalho compila, e vai dizer isso.
         this.logger.warn(`Worktree: não consegui ligar ${relative} (${String(error)}).`);
@@ -135,7 +137,11 @@ export class WorktreeService {
     const files = status
       .split('\n')
       .map((line) => line.slice(3).trim())
-      .filter((line) => line !== '');
+      .filter((line) => line !== '')
+      // As dependências que ligamos não são trabalho do agente. No Linux e no
+      // macOS o link aparece como arquivo novo, e sem isto todo relatório
+      // começaria dizendo que ele criou `node_modules`.
+      .filter((file) => !file.split('/').includes('node_modules'));
 
     return {
       files,
@@ -174,9 +180,15 @@ export class WorktreeService {
   private async hideFromGit(folder: string): Promise<void> {
     const root = join(folder, WORKTREE_ROOT);
     await mkdir(root, { recursive: true });
-    const marker = join(root, '.gitignore');
-    if (!existsSync(marker)) {
-      await writeFile(marker, '*\n', 'utf8');
+    try {
+      // `wx` cria ou falha; perguntar antes se existe abriria uma janela entre
+      // a pergunta e a escrita — e nela cabe o arquivo que alguém acabou de
+      // ajustar à mão, sobrescrito sem aviso.
+      await writeFile(join(root, '.gitignore'), '*\n', { encoding: 'utf8', flag: 'wx' });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw error;
+      }
     }
   }
 
