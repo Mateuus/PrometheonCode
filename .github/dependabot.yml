@@ -15,9 +15,11 @@ updates:
       - dependencies
       - extension
     commit-message:
+      # O prefixo já traz o escopo. `include: scope` o acrescentaria de novo, e
+      # o título saía como `chore(deps-dev)(deps-dev): …` — que não é um
+      # Conventional Commit válido e reprovava na validação do PR.
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
-      include: scope
     groups:
       # Ferramental de build/lint costuma subir junto — um PR só.
       dev-tooling:
