@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import { describeAgentFailure } from '../agents/failures';
-import { normalizeAgentName, orchestrationInstruction } from '../core/PrometheonCore';
+import { isRunning, normalizeAgentName, orchestrationInstruction } from '../core/PrometheonCore';
 
 suite('describeAgentFailure', () => {
   test('reconhece cota esgotada e manda não repetir o mesmo agente', () => {
@@ -98,5 +98,20 @@ suite('Contrato assíncrono da delegação', () => {
     assert.match(text, /Delegating never blocks/);
     assert.match(text, /Never sleep, poll, or run shell commands to wait/);
     assert.match(text, /come back to you automatically/);
+  });
+});
+
+suite('Quem continua na lista de agentes ativos', () => {
+  test('só os estados de execução contam como trabalhando', () => {
+    // O worker que ainda roda precisa sobreviver ao fim do turno de quem o
+    // delegou: delegar deixou de bloquear, então o fim do run principal não é
+    // mais o fim do trabalho. Tirá-lo da lista esconderia justamente o agente
+    // que a pessoa quer acompanhar enquanto espera.
+    for (const status of ['starting', 'working', 'waiting', 'blocked'] as const) {
+      assert.equal(isRunning(status), true, status);
+    }
+    for (const status of ['idle', 'completed', 'failed', 'stopped'] as const) {
+      assert.equal(isRunning(status), false, status);
+    }
   });
 });

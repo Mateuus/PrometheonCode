@@ -16,6 +16,11 @@ O projeto segue [SemVer](https://semver.org/lang/pt-BR/).
 
 ### Corrigido
 
+- O worker sumia de **Agentes ativos** assim que o orquestrador encerrava o
+  turno, mesmo continuando a trabalhar. A limpeza de fim de run valia quando
+  delegar bloqueava o turno; com a delegação assíncrona, ela escondia justamente
+  o agente que se quer acompanhar enquanto se espera.
+
 - O agente não conseguia executar comando nenhum: mandávamos
   `--permission-mode default`, que saiu da lista de modos do Claude Code, e um
   modo desconhecido deixa o agente sem permissão para rodar build, script ou
