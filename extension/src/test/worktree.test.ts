@@ -118,9 +118,15 @@ suite('WorktreeService — provisionamento', () => {
     await run('git', ['add', '.'], { cwd: folder });
     await run('git', ['commit', '-m', 'inicial'], { cwd: folder });
 
-    // Uma na raiz e outra num pacote, como num monorepo.
+    // Uma na raiz e outra num pacote, como num monorepo. O pacote precisa ter
+    // conteúdo versionado: uma pasta que só contém `node_modules` é colapsada
+    // pelo git como um único item novo, e isso não acontece em repositório de
+    // verdade.
     await mkdir(join(folder, 'node_modules', 'esbuild'), { recursive: true });
     await mkdir(join(folder, 'extension', 'node_modules', 'typescript'), { recursive: true });
+    await writeFile(join(folder, 'extension', 'index.ts'), 'export {};\n', 'utf8');
+    await run('git', ['add', 'extension/index.ts'], { cwd: folder });
+    await run('git', ['commit', '-m', 'pacote'], { cwd: folder });
 
     const service = new WorktreeService(new Logger());
     const worktree = await service.create(folder, 'Programador');
