@@ -189,6 +189,8 @@ export class PrometheonCore implements vscode.Disposable {
   private activeAgents: ActiveAgentSummary[] = [];
   /** Delegações já feitas no pedido em curso; zera a cada mensagem do usuário. */
   private delegationsThisRun = 0;
+  /** Mensagens escritas enquanto o agente trabalhava, na ordem em que chegaram. */
+  private queued: QueuedMessage[] = [];
   /** Vagas de execução dos workers; a reserva é feita antes de qualquer espera. */
   private readonly concurrency = new ConcurrencyGuard();
   /** Delegações longas, por bilhete, esperando coleta. */
@@ -400,6 +402,7 @@ export class PrometheonCore implements vscode.Disposable {
       messages: this.messages,
       sessions: this.sessions,
       busy: this.busy,
+      queued: this.queued.map((item) => item.content),
       pendingQuestion: this.pendingQuestion,
     };
   }
@@ -457,6 +460,12 @@ export class PrometheonCore implements vscode.Disposable {
         return;
       case 'chat.send':
         await this.send(message.payload.content, message.payload.attachments);
+        return;
+      case 'chat.sendQueued':
+        await this.sendQueuedNow();
+        return;
+      case 'chat.dropQueued':
+        await this.dropQueued(message.payload.index);
         return;
       case 'chat.cancel':
         await this.cancel(message.payload.runId);
@@ -652,6 +661,11 @@ export class PrometheonCore implements vscode.Disposable {
     author: 'user' | 'system' = 'user',
   ): Promise<void> {
     if (this.busy) {
+      // Enfileira em vez de descartar. Quem escreve enquanto o agente trabalha
+      // está complementando o pedido — lembrou de um detalhe, viu um erro
+      // passar. Engolir a mensagem faz a pessoa reescrevê-la sem saber por quê.
+      this.queued.push({ content, drafts, author });
+      await this.publish();
       return;
     }
     // Quem executa muda com o tipo de chat: no Local é o CLI desta máquina, no
@@ -809,6 +823,51 @@ export class PrometheonCore implements vscode.Disposable {
     }
 
     await this.maybeAutoCompact();
+    await this.flushQueue();
+  }
+
+  /**
+   * Envia o que ficou esperando o agente terminar.
+   *
+   * Vai tudo numa mensagem só: duas linhas que a pessoa escreveu seguidas são
+   * um pedido só, e mandá-las separadas faria o agente responder à primeira e
+   * recomeçar na segunda.
+   */
+  private async flushQueue(): Promise<void> {
+    if (this.busy || this.queued.length === 0) {
+      return;
+    }
+    const pending = this.queued.splice(0, this.queued.length);
+    const content = pending.map((item) => item.content).join('\n\n');
+    const drafts = pending.flatMap((item) => [...item.drafts]);
+    await this.send(content, drafts, pending[0]?.author ?? 'user');
+  }
+
+  /** Tira da fila uma mensagem que a pessoa desistiu de mandar. */
+  async dropQueued(index: number): Promise<void> {
+    if (index < 0 || index >= this.queued.length) {
+      return;
+    }
+    this.queued.splice(index, 1);
+    await this.publish();
+  }
+
+  /**
+   * Interrompe o que está rodando para mandar a fila agora.
+   *
+   * O CLI não aceita texto no meio de um run — a entrada dele já foi fechada.
+   * Então "agora" quer dizer parar o turno atual e começar outro, o que só é
+   * aceitável porque a conversa é retomada: o agente continua sabendo de tudo
+   * o que já foi dito.
+   */
+  async sendQueuedNow(): Promise<void> {
+    if (this.queued.length === 0) {
+      return;
+    }
+    if (this.busy && this.currentRunId !== null) {
+      await this.cancel(this.currentRunId);
+    }
+    await this.flushQueue();
   }
 
   /**
@@ -3628,6 +3687,13 @@ async function settleWithin(work: Promise<string>, ms: number): Promise<Settled 
     ),
     new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
   ]);
+}
+
+/** Mensagem escrita durante um run, guardada com o que a acompanhava. */
+interface QueuedMessage {
+  readonly content: string;
+  readonly drafts: readonly DraftAttachment[];
+  readonly author: 'user' | 'system';
 }
 
 const DEFAULT_GLOBAL_CONCURRENCY = 6;

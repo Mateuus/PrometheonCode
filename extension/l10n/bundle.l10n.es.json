@@ -547,5 +547,8 @@
   "This project": "En este proyecto",
   "Only you have this agent. Nothing is written to the repository.": "Solo tú tienes este agente. No se escribe nada en el repositorio.",
   "Saved in .prometheon/agents/, which goes to git — everyone who clones gets this agent. The account stays yours: each machine picks its own.": "Se guarda en .prometheon/agents/, que va al git: quien clone recibe este agente. La cuenta sigue siendo tuya: cada máquina elige la suya.",
-  "An agent describes how the work gets done here, so it belongs with the code. What never travels is the account behind it.": "Un agente describe cómo se hace el trabajo aquí, así que pertenece al código. Lo que nunca viaja es la cuenta detrás de él."
+  "An agent describes how the work gets done here, so it belongs with the code. What never travels is the account behind it.": "Un agente describe cómo se hace el trabajo aquí, así que pertenece al código. Lo que nunca viaja es la cuenta detrás de él.",
+  "Discard this message": "Descartar este mensaje",
+  "Send now": "Enviar ahora",
+  "Interrupt the current run and send what is waiting": "Interrumpir el trabajo actual y enviar lo que está esperando"
 }

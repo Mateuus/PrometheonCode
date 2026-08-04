@@ -184,6 +184,7 @@ const dom = {
   agentsCount: element<HTMLSpanElement>('agents-count'),
   agentsList: element<HTMLUListElement>('agents-list'),
   activity: element<HTMLDivElement>('activity'),
+  queued: element<HTMLUListElement>('queued'),
   activityLabel: element<HTMLSpanElement>('activity-label'),
   activityDetail: element<HTMLSpanElement>('activity-detail'),
   activityElapsed: element<HTMLSpanElement>('activity-elapsed'),
@@ -1402,6 +1403,51 @@ function updateEmptyState(): void {
  * indicador no topo da conversa, que toma o lugar do estado vazio enquanto o
  * trabalho corre.
  */
+/**
+ * A fila de mensagens que esperam o agente terminar.
+ *
+ * Cada uma com o texto que a pessoa escreveu, um jeito de desistir dela, e —
+ * na primeira — o botão que interrompe o trabalho atual para mandar tudo
+ * agora. Sem essa lista, a mensagem escrita no meio de um run simplesmente
+ * sumia, e quem escreveu concluía que tinha errado o envio.
+ */
+function renderQueued(queued: readonly string[]): void {
+  dom.queued.hidden = queued.length === 0;
+  dom.queued.replaceChildren(
+    ...queued.map((content, index) => {
+      const item = document.createElement('li');
+      item.className = 'queued-item';
+
+      const text = document.createElement('span');
+      text.className = 'queued-text';
+      text.textContent = content;
+      text.title = content;
+
+      const drop = document.createElement('button');
+      drop.type = 'button';
+      drop.className = 'queued-drop';
+      drop.title = s('Discard this message');
+      drop.append(...nodes(icon('close')));
+      drop.addEventListener('click', () =>
+        post({ type: 'chat.dropQueued', payload: { index } }),
+      );
+
+      item.append(text);
+      if (index === 0) {
+        const now = document.createElement('button');
+        now.type = 'button';
+        now.className = 'queued-now';
+        now.textContent = s('Send now');
+        now.title = s('Interrupt the current run and send what is waiting');
+        now.addEventListener('click', () => post({ type: 'chat.sendQueued' }));
+        item.append(now);
+      }
+      item.append(drop);
+      return item;
+    }),
+  );
+}
+
 function renderActivity(activity: PrometheonViewState['activity']): void {
   const running = activity.phase !== 'idle';
   dom.activity.hidden = !running;
@@ -6804,6 +6850,7 @@ function render(next: PrometheonViewState): void {
   }
 
   renderActivity(next.activity);
+  renderQueued(next.queued);
   renderSettings();
   renderDictation(next.speech);
   renderContextIndicator();

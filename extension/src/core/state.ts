@@ -80,6 +80,13 @@ export interface PrometheonViewState {
   /** Há um run em andamento; a UI mostra o botão de interromper. */
   readonly busy: boolean;
   /**
+   * O que a pessoa escreveu enquanto o agente trabalhava, esperando a vez.
+   *
+   * Fica à vista porque a alternativa é pior: uma mensagem que some sem
+   * explicação leva a pessoa a reescrevê-la achando que errou o envio.
+   */
+  readonly queued: readonly string[];
+  /**
    * Pergunta do agente esperando resposta. Fica no snapshot para uma view
    * reconstruída reabrir o modal — o run continua parado do outro lado.
    */

@@ -1395,6 +1395,64 @@ details.step[open] > summary .step-caret {
 
 /* O composer é um cartão único: anexos, campo e barra de ações moram dentro da
    mesma moldura, que reage ao foco com o roxo da marca. */
+/* Fila de espera: fica colada ao composer, com a barra da marca à esquerda
+   para ler como "isto ainda não foi". */
+.queued {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.queued-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 8px;
+  border-left: 2px solid var(--prom-accent);
+  border-radius: var(--am-radius);
+  background: var(--prom-surface-input);
+  font-size: 0.9em;
+}
+
+.queued-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--prom-text-dim);
+}
+
+.queued-now {
+  padding: 2px 8px;
+  border: 1px solid var(--prom-border);
+  border-radius: 999px;
+  background: none;
+  color: var(--vscode-foreground);
+  font: inherit;
+  font-size: 0.92em;
+  cursor: pointer;
+}
+
+.queued-now:hover {
+  border-color: var(--prom-accent);
+}
+
+.queued-drop {
+  display: flex;
+  padding: 2px;
+  border: none;
+  background: none;
+  color: var(--prom-text-dim);
+  cursor: pointer;
+}
+
+.queued-drop:hover {
+  color: var(--vscode-foreground);
+}
+
 .composer-card {
   display: flex;
   flex-direction: column;
