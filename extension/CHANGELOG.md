@@ -7,6 +7,18 @@ O projeto segue [SemVer](https://semver.org/lang/pt-BR/).
 
 ### Adicionado
 
+- **Tabelas no Markdown do chat**, com alinhamento, marcação dentro da célula e
+  rolagem própria quando são largas.
+
+### Corrigido
+
+- O agente não conseguia executar comando nenhum: mandávamos
+  `--permission-mode default`, que saiu da lista de modos do Claude Code, e um
+  modo desconhecido deixa o agente sem permissão para rodar build, script ou
+  teste. A autonomia **Automático** também apontava para `acceptEdits`, que
+  libera a edição de arquivo mas continua pedindo aprovação para comando — e
+  não há ninguém para aprovar numa sessão sem terminal.
+
 - **Equipe embutida**: a extensão passa a vir com Orchestrator, Coder,
   Researcher e Reviewer prontos, cada um com o próprio prompt. Eles não existem
   em disco — só viram arquivo quando alguém os edita —, a primeira conta criada

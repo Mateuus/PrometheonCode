@@ -81,6 +81,34 @@ export function renderMarkdown(source: string): DocumentFragment {
       continue;
     }
 
+    // Tabela: cabeçalho, linha de traços e o corpo. Sem isto as linhas viravam
+    // um parágrafo só, e as quebras colapsavam numa fileira de barras.
+    if (isTableRow(line) && isTableDivider(lines[at + 1] ?? '')) {
+      const alignments = alignmentsOf(lines[at + 1] ?? '');
+      const table = document.createElement('table');
+      table.className = 'md-table';
+
+      const head = document.createElement('thead');
+      head.append(tableRow(line, alignments, 'th'));
+      table.append(head);
+
+      at += 2;
+      const body = document.createElement('tbody');
+      while (at < lines.length && isTableRow(lines[at] ?? '')) {
+        body.append(tableRow(lines[at] ?? '', alignments, 'td'));
+        at += 1;
+      }
+      table.append(body);
+
+      // Tabela larga rola sozinha: alargar a coluna da conversa empurraria o
+      // resto da mensagem para fora da tela.
+      const scroller = document.createElement('div');
+      scroller.className = 'md-table-scroll';
+      scroller.append(table);
+      fragment.append(scroller);
+      continue;
+    }
+
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
     if (heading !== null) {
       const level = (heading[1] ?? '#').length;
@@ -128,7 +156,7 @@ export function renderMarkdown(source: string): DocumentFragment {
     const paragraph: string[] = [];
     while (at < lines.length) {
       const current = lines[at] ?? '';
-      if (current.trim() === '' || startsBlock(current)) {
+      if (current.trim() === '' || startsBlock(current, lines[at + 1] ?? '')) {
         break;
       }
       paragraph.push(current);
@@ -152,14 +180,86 @@ function isIndentedCode(line: string): boolean {
   return /^(?: {4}|\t)\s*\S/.test(line) && !isListItem(line);
 }
 
-function startsBlock(line: string): boolean {
+/**
+ * Uma linha que interrompe o parágrafo em curso.
+ *
+ * A tabela precisa estar aqui: um texto seguido de tabela, sem linha em branco
+ * entre eles, viraria um parágrafo só — que foi como uma tabela inteira acabou
+ * amassada numa fileira de barras.
+ */
+function startsBlock(line: string, next: string): boolean {
   return (
+    (isTableRow(line) && isTableDivider(next)) ||
     /^\s*```/.test(line) ||
     /^#{1,6}\s+/.test(line) ||
     /^\s*>\s?/.test(line) ||
     isListItem(line) ||
     /^\s*(?:[-*_]\s*){3,}$/.test(line)
   );
+}
+
+/** Linha de tabela: tem ao menos uma barra que não seja escapada. */
+function isTableRow(line: string): boolean {
+  return line.trim() !== '' && line.replace(/\\\|/g, '').includes('|');
+}
+
+/** A linha de traços que separa o cabeçalho do corpo, e declara o alinhamento. */
+function isTableDivider(line: string): boolean {
+  return line.includes('-') && /^\s*\|?(\s*:?-+:?\s*\|)*\s*:?-+:?\s*\|?\s*$/.test(line);
+}
+
+function alignmentsOf(divider: string): readonly string[] {
+  return cells(divider).map((cell) => {
+    const left = cell.startsWith(':');
+    const right = cell.endsWith(':');
+    if (left && right) {
+      return 'center';
+    }
+    return right ? 'right' : left ? 'left' : '';
+  });
+}
+
+/**
+ * Células de uma linha.
+ *
+ * As barras das pontas são moldura, não separador; uma barra escapada é
+ * conteúdo — e conteúdo com barra dentro é comum justamente em tabela que
+ * documenta comando.
+ */
+function cells(line: string): readonly string[] {
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  const parts: string[] = [];
+  let current = '';
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const char = trimmed[index] ?? '';
+    if (char === '\\' && trimmed[index + 1] === '|') {
+      current += '|';
+      index += 1;
+      continue;
+    }
+    if (char === '|') {
+      parts.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current.trim());
+  return parts;
+}
+
+function tableRow(line: string, alignments: readonly string[], tag: string): HTMLElement {
+  const row = document.createElement('tr');
+  cells(line).forEach((value, index) => {
+    const cell = document.createElement(tag);
+    const align = alignments[index] ?? '';
+    if (align !== '') {
+      cell.style.textAlign = align;
+    }
+    cell.append(inline(value));
+    row.append(cell);
+  });
+  return row;
 }
 
 function isListItem(line: string): boolean {

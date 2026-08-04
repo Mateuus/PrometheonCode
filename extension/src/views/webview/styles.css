@@ -723,6 +723,36 @@ textarea:focus-visible {
   color: var(--vscode-terminal-ansiYellow);
 }
 
+/* Tabela: a rolagem é do container, nunca do corpo da conversa. */
+.md-table-scroll {
+  margin: 0 0 8px;
+  overflow-x: auto;
+}
+
+.md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.94em;
+}
+
+.md-table th,
+.md-table td {
+  padding: 4px 10px 4px 0;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--prom-border);
+}
+
+.md-table th {
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--prom-text-dim);
+}
+
+.md-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
 .message .content a {
   color: var(--vscode-textLink-foreground);
 }

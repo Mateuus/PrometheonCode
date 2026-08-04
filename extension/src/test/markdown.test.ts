@@ -120,3 +120,63 @@ suite('Markdown — bloco indentado', () => {
     assert.ok(!out.includes('<pre'), out);
   });
 });
+
+suite('Markdown — tabelas', () => {
+  let renderMarkdown: (source: string) => DocumentFragment;
+
+  suiteSetup(async () => {
+    ({ renderMarkdown } = await import('../views/webview/markdown.js'));
+  });
+
+  const render = (source: string): HTMLElement => {
+    const host = document.createElement('div');
+    host.append(renderMarkdown(source));
+    return host;
+  };
+
+  test('cabeçalho, traços e corpo viram uma tabela', () => {
+    // Sem isto as linhas viravam um parágrafo só, e as quebras colapsavam numa
+    // fileira de barras verticais.
+    const host = render('| Porta | Protocolo |\n|---|---|\n| 28015 | UDP |\n| 28016 | TCP |');
+    assert.equal(host.querySelectorAll('table.md-table').length, 1);
+    assert.deepEqual(
+      [...host.querySelectorAll('th')].map((cell) => cell.textContent),
+      ['Porta', 'Protocolo'],
+    );
+    assert.equal(host.querySelectorAll('tbody tr').length, 2);
+    assert.equal(host.querySelector('tbody td')?.textContent, '28015');
+  });
+
+  test('texto colado acima não engole a tabela', () => {
+    const host = render('Portas:\n| a | b |\n|---|---|\n| 1 | 2 |');
+    assert.equal(host.querySelector('p')?.textContent, 'Portas:');
+    assert.equal(host.querySelectorAll('table').length, 1);
+  });
+
+  test('o alinhamento declarado nos traços é respeitado', () => {
+    const host = render('| a | b | c |\n|:---|---:|:---:|\n| 1 | 2 | 3 |');
+    assert.deepEqual(
+      [...host.querySelectorAll('th')].map((cell) => (cell as HTMLElement).style.textAlign),
+      ['left', 'right', 'center'],
+    );
+  });
+
+  test('a marcação dentro da célula é renderizada', () => {
+    const host = render('| a | b |\n|---|---|\n| **forte** | `codigo` |');
+    assert.equal(host.querySelector('td strong')?.textContent, 'forte');
+    assert.equal(host.querySelector('td code')?.textContent, 'codigo');
+  });
+
+  test('barra escapada é conteúdo, não separador', () => {
+    // Tabela que documenta comando costuma ter `a \| b` numa célula.
+    const host = render('| cmd |\n|---|\n| ls \\| grep x |');
+    assert.equal(host.querySelectorAll('tbody td').length, 1);
+    assert.equal(host.querySelector('tbody td')?.textContent, 'ls | grep x');
+  });
+
+  test('linha com barra sem traços continua sendo texto', () => {
+    const host = render('use a | b para separar');
+    assert.equal(host.querySelectorAll('table').length, 0);
+    assert.match(host.innerHTML, /<p>/);
+  });
+});
