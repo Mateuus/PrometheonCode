@@ -703,6 +703,20 @@ export class PrometheonCore implements vscode.Disposable {
         this.delegatableAgents().length > 0
           ? await this.delegationEndpoint()
           : undefined;
+      // A escolha do painel pode ser rebaixada pelo teto do perfil ou de uma
+      // skill carregada. Em silêncio isso vira mistério: a barra diz "bypass
+      // ativo" e o agente recusa comandos, sem relação visível entre as duas.
+      const effective = this.effectiveAutonomyForRun();
+      if (effective !== this.autonomy) {
+        this.deps.bus.emit('notification', {
+          level: 'warning',
+          message: t(
+            'Running as {0}, not {1}: the agent profile or a loaded skill caps it there.',
+            AUTONOMY_LABELS[effective],
+            AUTONOMY_LABELS[this.autonomy],
+          ),
+        });
+      }
       // Sem esta linha, a orquestração falha muda: o agente responde sozinho e
       // nada diz que a ferramenta não chegou até ele.
       this.deps.logger.info(
@@ -2134,7 +2148,8 @@ ${report ?? ''}`
     // Sem autonomia para executar comandos, o worker não roda typecheck nem
     // teste. Dizer isso na tarefa evita o pior desfecho: ele tentar, falhar em
     // silêncio e relatar como verificado o que ninguém verificou.
-    const verifiable = this.effectiveAutonomyForRun() === 'bypass';
+    const autonomy = this.autonomyFor(summary);
+    const verifiable = autonomy === 'bypass';
     const brief =
       mode === 'changes' && !verifiable
         ? `${task}
@@ -2149,10 +2164,10 @@ ${report ?? ''}`
       // ferramentas, não trocar o modo de trabalho.
       workMode: 'edit',
       ...(mode === 'changes' ? {} : { readOnly: true }),
-      // A mesma autonomia do run, nunca mais: um worker que recebesse bypass
-      // por conta própria poderia rodar na máquina o que o usuário não
-      // autorizou — o isolamento é da árvore de arquivos, não do sistema.
-      autonomy: this.effectiveAutonomyForRun(),
+      // Nunca acima do que a pessoa escolheu no painel: um worker que
+      // recebesse bypass por conta própria poderia rodar na máquina o que ela
+      // não autorizou — o isolamento é da árvore de arquivos, não do sistema.
+      autonomy,
       role: 'worker',
       task: brief,
       ...(cwd === undefined ? {} : { workspaceFolder: cwd }),
@@ -2197,7 +2212,7 @@ ${report ?? ''}`
       for await (const event of adapter.send(session.id, {
         content: brief,
         workMode: 'edit',
-        autonomy: this.effectiveAutonomyForRun(),
+        autonomy,
       })) {
         if (event.type === 'tool.requested') {
           await recordStep({
@@ -2486,8 +2501,22 @@ ${report ?? ''}`
    * declara `manual` e prende o agente aí — é o que faz a declaração valer
    * alguma coisa em vez de ser só metadado bonito no frontmatter.
    */
+  /**
+   * Autonomia de um run do agente principal: a escolha do painel, limitada pelo
+   * teto do perfil e das skills carregadas.
+   */
   effectiveAutonomyForRun(): Autonomy {
-    const summary = this.mainAgentProfile;
+    return this.autonomyFor(this.mainAgentProfile);
+  }
+
+  /**
+   * O mesmo cálculo para um agente qualquer.
+   *
+   * O teto que vale é o **dele**, não o de quem delegou: um worker não fica
+   * preso ao limite do orquestrador, e continua sem ultrapassar o que a pessoa
+   * escolheu no painel — que é o controle que ela enxerga.
+   */
+  private autonomyFor(summary: AgentProfileSummary | undefined): Autonomy {
     if (summary === undefined) {
       return this.autonomy;
     }

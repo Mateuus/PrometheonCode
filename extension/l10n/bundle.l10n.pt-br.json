@@ -550,5 +550,6 @@
   "An agent describes how the work gets done here, so it belongs with the code. What never travels is the account behind it.": "Um agente descreve como o trabalho é feito aqui, então ele pertence ao código. O que nunca viaja é a conta por trás dele.",
   "Discard this message": "Descartar esta mensagem",
   "Send now": "Enviar agora",
-  "Interrupt the current run and send what is waiting": "Interromper o trabalho atual e enviar o que está esperando"
+  "Interrupt the current run and send what is waiting": "Interromper o trabalho atual e enviar o que está esperando",
+  "Running as {0}, not {1}: the agent profile or a loaded skill caps it there.": "Rodando como {0}, e não {1}: o perfil do agente ou uma skill carregada limita aí."
 }

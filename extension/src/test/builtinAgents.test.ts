@@ -37,9 +37,13 @@ suite('Equipe embutida', () => {
     }
   });
 
-  test('a autonomia padrão pergunta antes de agir', () => {
+  test('o teto do perfil não estorva a escolha do painel', () => {
+    // `autonomyMode` é teto, não escolha. Em `manual`, o agente embutido
+    // ignoraria o "Ignorar permissões" que a pessoa acabou de ligar: ela veria
+    // o aviso de bypass ativo na barra e o agente recusando comandos, sem
+    // relação visível entre as duas coisas. Quem decide de fato é o seletor.
     for (const agent of BUILTIN_AGENTS) {
-      assert.equal(agent.autonomyMode, 'manual', agent.name);
+      assert.equal(agent.autonomyMode, 'bypass-temporary', agent.name);
     }
   });
 });

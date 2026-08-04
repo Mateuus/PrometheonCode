@@ -16,6 +16,12 @@ O projeto segue [SemVer](https://semver.org/lang/pt-BR/).
 
 ### Corrigido
 
+- "Ignorar permissões" não chegava aos agentes: o `autonomyMode` do perfil é um
+  teto, e os embutidos nasciam em `manual` — a barra dizia bypass ativo e o
+  agente recusava comandos, sem relação visível entre as duas coisas. O teto dos
+  embutidos passa a não estorvar, o worker usa o teto do próprio perfil em vez
+  do de quem delegou, e quando a escolha do painel é rebaixada isso é dito.
+
 - O worker sumia de **Agentes ativos** assim que o orquestrador encerrava o
   turno, mesmo continuando a trabalhar. A limpeza de fim de run valia quando
   delegar bloqueava o turno; com a delegação assíncrona, ela escondia justamente

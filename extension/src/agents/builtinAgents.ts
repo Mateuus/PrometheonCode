@@ -131,8 +131,14 @@ const REVIEWER_PROMPT = [
  */
 const BASE = {
   providerProfileId: '',
-  // Pergunta antes de agir: o padrão que não surpreende quem acabou de instalar.
-  autonomyMode: 'manual',
+  /**
+   * O campo é **teto**, não escolha: ele diz até onde este agente pode ir, e
+   * quem decide dentro disso é o seletor do painel. Deixá-lo em `manual` faria
+   * o agente ignorar o "Ignorar permissões" que a pessoa acabou de ligar — ela
+   * veria o aviso de bypass ativo na barra e o agente recusando comandos, sem
+   * relação visível entre as duas coisas.
+   */
+  autonomyMode: 'bypass-temporary',
   allowedTools: [],
   deniedTools: [],
   skills: [],
