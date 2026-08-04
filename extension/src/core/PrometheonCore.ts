@@ -89,6 +89,7 @@ import {
   AGENT_ROLE_DESCRIPTIONS,
   AGENT_ROLE_LABELS,
   WORK_MODE_LABELS,
+  type ActiveAgentStatus,
   type ActiveAgentSummary,
   type AgentSummary,
   type Autonomy,
@@ -3384,14 +3385,21 @@ ${report ?? ''}`
   }
 
   /**
-   * Fecha o ciclo de um run: workers somem e o principal fica ocioso. Uma
-   * sessão terminada continuar na lista como "trabalhando" é pior do que não
+   * Fecha o ciclo de um run: o principal fica ocioso e o que terminou sai da
+   * lista. Uma sessão terminada continuar como "trabalhando" é pior do que não
    * mostrar nada — é dizer que há trabalho acontecendo quando não há.
+   *
+   * O worker que **ainda está rodando** fica. Delegar não bloqueia mais o turno
+   * de quem delegou, então o fim do run principal deixou de significar o fim do
+   * trabalho: tirá-lo daqui esconderia justamente o agente que a pessoa quer
+   * acompanhar enquanto espera.
    */
   private settleActiveAgents(): void {
     this.activeAgents = this.activeAgents
-      .filter((agent) => agent.role === 'main')
-      .map((agent) => ({ ...agent, status: 'idle' as const, task: null }));
+      .filter((agent) => agent.role === 'main' || isRunning(agent.status))
+      .map((agent) =>
+        agent.role === 'main' ? { ...agent, status: 'idle' as const, task: null } : agent,
+      );
   }
 
   private async persistOrchestration(patch: {
@@ -3694,6 +3702,13 @@ interface QueuedMessage {
   readonly content: string;
   readonly drafts: readonly DraftAttachment[];
   readonly author: 'user' | 'system';
+}
+
+/** O agente está em execução — não terminou, não falhou, não foi parado. */
+export function isRunning(status: ActiveAgentStatus): boolean {
+  return (
+    status === 'starting' || status === 'working' || status === 'waiting' || status === 'blocked'
+  );
 }
 
 const DEFAULT_GLOBAL_CONCURRENCY = 6;
