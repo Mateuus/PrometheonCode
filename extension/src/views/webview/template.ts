@@ -238,6 +238,10 @@ export function renderWebviewHtml(webview: vscode.Webview, extensionUri: vscode.
         <span class="activity-elapsed" id="activity-elapsed"></span>
       </div>
 
+      <!-- O que a pessoa escreveu enquanto o agente trabalhava. Fica acima do
+           composer, onde ela acabou de digitar, e não no alto da conversa. -->
+      <ul class="queued" id="queued" hidden></ul>
+
       <div class="composer-card" id="composer-card">
         <div class="attachments" id="attachments" hidden></div>
         <textarea

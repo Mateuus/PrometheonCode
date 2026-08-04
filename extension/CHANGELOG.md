@@ -7,6 +7,10 @@ O projeto segue [SemVer](https://semver.org/lang/pt-BR/).
 
 ### Adicionado
 
+- **Fila de mensagens**: escrever enquanto o agente trabalha deixa de descartar
+  o texto. A mensagem fica à vista acima do composer, entra sozinha quando o
+  run termina, e há um botão para interromper o trabalho atual e enviá-la agora.
+
 - **Tabelas no Markdown do chat**, com alinhamento, marcação dentro da célula e
   rolagem própria quando são largas.
 

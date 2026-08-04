@@ -631,6 +631,10 @@ export const WEBVIEW_STRINGS = {
   'agents.openConsole': 'Open this agent’s console',
   'agents.noTools': 'This agent has not run any tool yet.',
   'agents.unnamed': 'Agent',
+  // Fila de mensagens escritas durante um run.
+  'queued.discard': 'Discard this message',
+  'queued.now': 'Send now',
+  'queued.nowHint': 'Interrupt the current run and send what is waiting',
   // Vários workers ao mesmo tempo entram dobrados numa linha só.
   'agents.bundle': '{0} delegated agents',
   'agents.bundleHide': 'Hide delegated agents',

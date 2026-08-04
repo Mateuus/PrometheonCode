@@ -132,6 +132,10 @@ export type WebviewToExtensionMessage =
       };
     }
   | { readonly type: 'chat.cancel'; readonly payload: { readonly runId: string } }
+  /** Manda agora o que está na fila, interrompendo o run em andamento. */
+  | { readonly type: 'chat.sendQueued' }
+  /** Desiste de uma mensagem que ainda não foi enviada. */
+  | { readonly type: 'chat.dropQueued'; readonly payload: { readonly index: number } }
   | { readonly type: 'chat.newLocal' }
   | { readonly type: 'chat.clearLocal' }
   | { readonly type: 'chat.openSession'; readonly payload: { readonly conversationId: string } }
@@ -1132,6 +1136,14 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
       // ao tamanho. Ficar de fora da tabela não pode impedir o uso do modelo.
       const model = payload === undefined ? '' : (nonEmptyString(payload['model'], 64) ?? '');
       return { type: 'settings.setModel', payload: { model } };
+    }
+
+    case 'chat.sendQueued':
+      return { type: 'chat.sendQueued' };
+
+    case 'chat.dropQueued': {
+      const index = payload === undefined ? null : boundedInteger(payload['index'], 0, 999);
+      return index === null ? null : { type: 'chat.dropQueued', payload: { index } };
     }
 
     case 'chat.cancel': {
