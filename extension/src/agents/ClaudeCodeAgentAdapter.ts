@@ -50,6 +50,7 @@ interface RunningSession {
   readonly systemPrompt: string | undefined;
   /** Ferramenta de delegação, quando este agente é o orquestrador. */
   readonly delegation: StartAgentInput['delegation'];
+  readonly readOnly: boolean;
   /** Identificador que o CLI dá à conversa; é o que permite retomá-la. */
   cliSessionId: string | null;
   child: ChildProcessWithoutNullStreams | null;
@@ -145,7 +146,8 @@ export class ClaudeCodeAgentAdapter implements AgentAdapter {
       systemPrompt: input.systemPrompt,
       effort: input.effort,
       delegation: input.delegation,
-      cliSessionId: null,
+      readOnly: input.readOnly ?? false,
+      cliSessionId: input.resumeId ?? null,
       child: null,
       interrupted: false,
     });
@@ -290,6 +292,10 @@ export class ClaudeCodeAgentAdapter implements AgentAdapter {
         }
       },
     };
+  }
+
+  resumeId(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.cliSessionId ?? null;
   }
 
   async interrupt(sessionId: string): Promise<void> {
@@ -697,7 +703,7 @@ const ULTRACODE_INSTRUCTION = [
   'Verify your own findings before reporting them: correctness matters more than speed here.',
 ].join(' ');
 
-function argumentsFor(session: RunningSession, message: AgentInput): string[] {
+export function argumentsFor(session: RunningSession, message: AgentInput): string[] {
   const args = [
     '--print',
     '--output-format',
@@ -746,6 +752,13 @@ function argumentsFor(session: RunningSession, message: AgentInput): string[] {
       '--allowedTools',
       ...session.delegation.toolNames,
     );
+  }
+
+  // Worker de leitura: as ferramentas de escrita saem do alcance dele. Negar a
+  // ferramenta é diferente de pedir que ele não a use — o segundo depende de o
+  // modelo obedecer.
+  if (session.readOnly) {
+    args.push('--disallowedTools', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit');
   }
 
   // `--append-system-prompt` acrescenta ao prompt do CLI em vez de substituí-lo:

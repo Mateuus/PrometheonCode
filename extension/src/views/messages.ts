@@ -39,6 +39,7 @@ import {
   type ActiveAgentSummary,
   type ActivityStatus,
   type AgentAutonomyMode,
+  type AgentProfileScope,
   type AgentRole,
   type AgentRoleScope,
   COMMIT_LANGUAGES,
@@ -101,6 +102,11 @@ export interface AgentProfileDraft {
   readonly maxConcurrentSessions: number;
   readonly contextStrategy: ContextStrategy;
   readonly enabled: boolean;
+  /**
+   * Onde guardar. `project` grava em `.prometheon/agents/`, que vai para o
+   * git; a conta escolhida fica de fora e continua sendo de cada máquina.
+   */
+  readonly scope?: AgentProfileScope;
 }
 
 /** Papel nomeado como a webview o envia: sem `id`, atribuído pela extensão. */
@@ -544,6 +550,11 @@ function parseAgentProfileDraft(raw: unknown): AgentProfileDraft | null {
     maxConcurrentSessions,
     contextStrategy,
     enabled: raw['enabled'],
+    // Escopo desconhecido cai em `machine`: guardar na máquina de quem pediu é
+    // o erro reversível; publicar no repositório da equipe, não.
+    ...(oneOf<AgentProfileScope>(raw['scope'], ['project', 'machine']) === 'project'
+      ? { scope: 'project' as const }
+      : {}),
   };
 }
 

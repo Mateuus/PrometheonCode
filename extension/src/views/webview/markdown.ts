@@ -13,6 +13,8 @@
  * quem responde não pode virar um clique.
  */
 
+import { highlight } from './highlight';
+
 /** Converte o texto do agente numa árvore pronta para inserir. */
 export function renderMarkdown(source: string): DocumentFragment {
   const fragment = document.createDocumentFragment();
@@ -171,7 +173,9 @@ function codeBlock(code: string, language: string): HTMLElement {
   if (language !== '') {
     element.dataset['language'] = language;
   }
-  element.textContent = code;
+  // Sem linguagem declarada o realce genérico ainda separa comentário, texto e
+  // número — que é o que mais ajuda a ler um trecho solto.
+  element.append(highlight(code, language));
   pre.append(element);
   return pre;
 }

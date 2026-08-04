@@ -20,17 +20,24 @@ import {
 } from '../core/types';
 import type { Logger } from '../logger';
 import { stripFrontmatter } from './AgentRoleStore';
+import { BUILTIN_AGENTS } from './builtinAgents';
 
 /**
- * Agent Profiles ficam em `~/.prometheon/agent-profiles.json`, ao lado de
- * `local-profiles.json` e no mesmo padrão do `ProviderProfileStore`: metadados
- * de configuração, nunca credenciais.
+ * Agent Profiles em dois lugares, e a divisão é o ponto.
  *
- * O documento (§16) prevê uma fase posterior em que o time compartilha os
- * agentes por `.prometheon/agents.yaml`, deixando só o vínculo com a conta
- * local em cada máquina. Isso **não** está implementado aqui: enquanto o
- * arquivo do projeto não existir, o agente e o seu binding vivem juntos nesta
- * máquina.
+ * O agente — nome, papel, modelo, skills, prompt — descreve **como o trabalho é
+ * feito neste projeto**, e por isso mora em `.prometheon/agents/agents.json`,
+ * que vai para o git: quem clona o repositório recebe a equipe pronta.
+ *
+ * O que **não** pode ir junto é o vínculo com a conta (`providerProfileId`).
+ * Ele aponta para um login desta máquina; versionado, mandaria o colega para
+ * uma conta que não é dele — ou para nenhuma. Esse vínculo fica em
+ * `~/.prometheon/agent-profiles.json`, junto dos agentes que existem só aqui.
+ *
+ * Na leitura, projeto vence máquina para o mesmo id, e o binding local é
+ * costurado por cima. Um agente do projeto sem conta escolhida aparece na
+ * interface pedindo uma — que é exatamente o primeiro passo de quem acabou de
+ * clonar o repositório.
  */
 export class AgentProfileStore {
   private profiles: AgentProfile[] | null = null;
@@ -45,14 +52,35 @@ export class AgentProfileStore {
     return vscode.Uri.joinPath(this.root, 'agent-profiles.json');
   }
 
-  /** Pasta dos prompts em arquivo, um `<id>.md` por agente. */
+  /** Pasta do projeto, quando há uma aberta. Sem workspace só existe a máquina. */
+  get projectRoot(): vscode.Uri | null {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    return folder === undefined
+      ? null
+      : vscode.Uri.joinPath(folder.uri, '.prometheon', 'agents');
+  }
+
+  get projectFile(): vscode.Uri | null {
+    const root = this.projectRoot;
+    return root === null ? null : vscode.Uri.joinPath(root, 'agents.json');
+  }
+
+  /**
+   * Pasta dos prompts, um `<id>.md` por agente. O do projeto tem precedência:
+   * é o manual que a equipe combinou, e ele acompanha o agente no git.
+   */
   get promptDir(): vscode.Uri {
     return vscode.Uri.joinPath(this.root, 'agent-prompts');
   }
 
+  get projectPromptDir(): vscode.Uri | null {
+    const root = this.projectRoot;
+    return root === null ? null : vscode.Uri.joinPath(root, 'prompts');
+  }
+
   async list(): Promise<readonly AgentProfile[]> {
     if (this.profiles === null) {
-      this.profiles = await this.read();
+      this.profiles = await this.readAll();
     }
     // O prompt em arquivo é relido a cada listagem: ele muda no editor — pela
     // pessoa ou por um agente — fora do ciclo de gravação do JSON, e um cache
@@ -72,12 +100,23 @@ export class AgentProfileStore {
    * arquivo não existe ou está vazio — aí vale o texto inline do perfil.
    */
   private async readPromptFile(id: string): Promise<string | null> {
-    let raw: string;
-    try {
-      raw = new TextDecoder().decode(
-        await vscode.workspace.fs.readFile(vscode.Uri.joinPath(this.promptDir, `${id}.md`)),
-      );
-    } catch {
+    // O do projeto primeiro: é o manual que a equipe combinou, e ele vence o
+    // que existir só nesta máquina.
+    const candidates = [this.projectPromptDir, this.promptDir].filter(
+      (dir): dir is vscode.Uri => dir !== null,
+    );
+    let raw: string | null = null;
+    for (const dir of candidates) {
+      try {
+        raw = new TextDecoder().decode(
+          await vscode.workspace.fs.readFile(vscode.Uri.joinPath(dir, `${id}.md`)),
+        );
+        break;
+      } catch {
+        // Não existe neste escopo; tenta o próximo.
+      }
+    }
+    if (raw === null) {
       return null;
     }
     const body = stripFrontmatter(raw).trim();
@@ -98,14 +137,20 @@ export class AgentProfileStore {
    * jamais sobrescrito — e devolve o caminho para abrir no editor.
    */
   async ensurePromptFile(profile: AgentProfile): Promise<vscode.Uri> {
-    const file = vscode.Uri.joinPath(this.promptDir, `${profile.id}.md`);
+    // O prompt segue o agente: o do projeto nasce versionado, ao lado da
+    // definição dele, e o da máquina continua no perfil local.
+    const dir =
+      profile.scope === 'project' && this.projectPromptDir !== null
+        ? this.projectPromptDir
+        : this.promptDir;
+    const file = vscode.Uri.joinPath(dir, `${profile.id}.md`);
     try {
       await vscode.workspace.fs.stat(file);
       return file;
     } catch {
       // Não existe: é o caminho normal da criação.
     }
-    await vscode.workspace.fs.createDirectory(this.promptDir);
+    await vscode.workspace.fs.createDirectory(dir);
     await vscode.workspace.fs.writeFile(
       file,
       new TextEncoder().encode(agentPromptTemplate(profile)),
@@ -119,12 +164,15 @@ export class AgentProfileStore {
   }
 
   async save(profile: AgentProfile): Promise<void> {
+    // Editar um embutido o traz para o disco: a partir daí é um agente como
+    // outro qualquer, e o padrão da extensão deixa de valer para ele.
+    const saved = profile.scope === 'builtin' ? { ...profile, scope: 'machine' as const } : profile;
     const profiles = [...(await this.list())];
-    const index = profiles.findIndex((item) => item.id === profile.id);
+    const index = profiles.findIndex((item) => item.id === saved.id);
     if (index === -1) {
-      profiles.push(profile);
+      profiles.push(saved);
     } else {
-      profiles[index] = profile;
+      profiles[index] = saved;
     }
     await this.write(profiles);
   }
@@ -134,9 +182,53 @@ export class AgentProfileStore {
     await this.write(profiles);
   }
 
-  private async read(): Promise<AgentProfile[]> {
+  /**
+   * Junta os dois escopos. O agente do projeto vence o de mesmo id na máquina,
+   * mas herda dela o vínculo com a conta — que é a única coisa que o projeto
+   * não tem como saber.
+   */
+  private async readAll(): Promise<AgentProfile[]> {
+    const machine = await this.read(this.file);
+    const project = await this.read(this.projectFile);
+    const bindings = await this.readBindings();
+    const saved = [...project, ...machine];
+
+    // Os embutidos entram por último e só onde não há nada gravado: assim uma
+    // versão nova da extensão nunca desfaz o que alguém editou, e quem editou
+    // um padrão passa a ver a versão dele no lugar.
+    const builtin = BUILTIN_AGENTS.filter(
+      (agent) => !saved.some((profile) => profile.id === agent.id),
+    ).map((agent) => ({
+      ...agent,
+      providerProfileId: bindings.get(agent.id) ?? agent.providerProfileId,
+    }));
+
+    if (project.length === 0) {
+      return [...machine, ...builtin];
+    }
+
+    // A conta vem da máquina: primeiro o vínculo escolhido aqui para um agente
+    // do projeto, depois o que já existia num agente local de mesmo id.
+    for (const profile of machine) {
+      if (!bindings.has(profile.id)) {
+        bindings.set(profile.id, profile.providerProfileId);
+      }
+    }
+    const shared = project.map((profile) => ({
+      ...profile,
+      scope: 'project' as const,
+      providerProfileId: bindings.get(profile.id) ?? profile.providerProfileId,
+    }));
+    const ids = new Set(shared.map((profile) => profile.id));
+    return [...shared, ...machine.filter((profile) => !ids.has(profile.id)), ...builtin];
+  }
+
+  private async read(target: vscode.Uri | null): Promise<AgentProfile[]> {
+    if (target === null) {
+      return [];
+    }
     try {
-      const bytes = await vscode.workspace.fs.readFile(this.file);
+      const bytes = await vscode.workspace.fs.readFile(target);
       const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
       if (!Array.isArray(parsed)) {
         this.logger.warn('agent-profiles.json não contém uma lista; ignorado.');
@@ -165,10 +257,66 @@ export class AgentProfileStore {
       return rest;
     });
     this.profiles = [...clean];
+    // O embutido intocado não vai para disco: gravá-lo congelaria hoje o padrão
+    // que a próxima versão da extensão deveria poder melhorar.
+    const persisted = clean.filter((item) => item.scope !== 'builtin');
+
+    const projectFile = this.projectFile;
+    const shared =
+      projectFile === null ? [] : persisted.filter((item) => item.scope === 'project');
+    const local = persisted.filter((item) => shared.every((entry) => entry.id !== item.id));
+
     await vscode.workspace.fs.createDirectory(this.root);
-    const content = `${JSON.stringify(clean, null, 2)}\n`;
-    await vscode.workspace.fs.writeFile(this.file, new TextEncoder().encode(content));
-    this.logger.info(`Agent Profiles gravados (${profiles.length}).`);
+    await this.writeJson(
+      this.file,
+      local.map(({ scope: _scope, ...rest }) => rest),
+    );
+
+    if (projectFile !== null && shared.length > 0) {
+      await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(projectFile, '..'));
+      // O agente compartilhado vai sem a conta: ela é desta máquina, e
+      // versioná-la mandaria o colega para um login que não é dele.
+      await this.writeJson(
+        projectFile,
+        shared.map(({ providerProfileId: _account, scope: _scope, ...rest }) => rest),
+      );
+      await this.writeJson(
+        this.bindingsFile,
+        Object.fromEntries(shared.map((item) => [item.id, item.providerProfileId])),
+      );
+    }
+
+    this.logger.info(
+      `Agent Profiles gravados (${String(local.length)} nesta máquina, ${String(shared.length)} no projeto).`,
+    );
+  }
+
+  /** Vínculos conta↔agente dos agentes que vieram do projeto. */
+  get bindingsFile(): vscode.Uri {
+    return vscode.Uri.joinPath(this.root, 'agent-bindings.json');
+  }
+
+  private async writeJson(target: vscode.Uri, value: unknown): Promise<void> {
+    const content = `${JSON.stringify(value, null, 2)}\n`;
+    await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(content));
+  }
+
+  /** Conta escolhida nesta máquina para cada agente do projeto. */
+  private async readBindings(): Promise<Map<string, string>> {
+    try {
+      const bytes = await vscode.workspace.fs.readFile(this.bindingsFile);
+      const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+      if (!isRecord(parsed)) {
+        return new Map();
+      }
+      return new Map(
+        Object.entries(parsed).filter(
+          (entry): entry is [string, string] => typeof entry[1] === 'string',
+        ),
+      );
+    } catch {
+      return new Map();
+    }
   }
 }
 
@@ -220,7 +368,10 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | null {
   }
   const id = text(value['id'], 128);
   const name = text(value['name'], MAX_PROFILE_NAME_LENGTH);
-  const providerProfileId = text(value['providerProfileId'], 128);
+  // Vazio é válido: o agente que vem do projeto não traz conta, porque ela é de
+  // cada máquina. Ele aparece na interface pedindo uma — que é o primeiro passo
+  // de quem acabou de clonar o repositório.
+  const providerProfileId = text(value['providerProfileId'], 128) ?? '';
   const role = oneOf<AgentRole>(value['role'], AGENT_ROLES);
   const autonomyMode = oneOf<AgentAutonomyMode>(value['autonomyMode'], AGENT_AUTONOMY_MODES);
   const contextStrategy = oneOf<ContextStrategy>(value['contextStrategy'], CONTEXT_STRATEGIES);
@@ -233,7 +384,6 @@ export function normalizeAgentProfile(value: unknown): AgentProfile | null {
   if (
     id === null ||
     name === null ||
-    providerProfileId === null ||
     role === null ||
     autonomyMode === null ||
     contextStrategy === null ||

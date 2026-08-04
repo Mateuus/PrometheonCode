@@ -1,5 +1,6 @@
 import * as assert from 'node:assert/strict';
 import {
+  argumentsFor,
   permissionModeFor,
   promptWith,
   readUsage,
@@ -316,5 +317,41 @@ suite('Claude Code — anexos de imagem', () => {
     // Alguns sistemas de arquivos recusam nomes muito longos, e o erro
     // apareceria como falha do anexo sem explicação.
     assert.ok(safeName('a'.repeat(300)).length <= 60);
+  });
+});
+
+suite('Worker de leitura — Claude Code', () => {
+  const base = {
+    threadId: null,
+    workMode: 'edit' as const,
+    autonomy: 'auto' as const,
+    model: undefined,
+    effort: undefined,
+    workspaceFolder: undefined,
+    systemPrompt: undefined,
+    delegation: undefined,
+    profile: { model: undefined } as never,
+  };
+
+  test('as ferramentas de escrita saem do alcance de quem só lê', () => {
+    // Negar a ferramenta é diferente de pedir que ele não a use: o segundo
+    // depende de o modelo obedecer.
+    const args = argumentsFor({ ...base, readOnly: true } as never, {
+      content: '',
+      workMode: 'edit',
+      autonomy: 'auto',
+    });
+    const at = args.indexOf('--disallowedTools');
+    assert.ok(at !== -1, args.join(' '));
+    assert.deepEqual(args.slice(at + 1, at + 5), ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+  });
+
+  test('quem edita não recebe restrição', () => {
+    const args = argumentsFor({ ...base, readOnly: false } as never, {
+      content: '',
+      workMode: 'edit',
+      autonomy: 'auto',
+    });
+    assert.equal(args.includes('--disallowedTools'), false);
   });
 });

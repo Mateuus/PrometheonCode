@@ -28,8 +28,13 @@ suite('Markdown da conversa', () => {
   });
 
   test('bloco de código preserva o texto e a linguagem', () => {
-    const out = html('```ts\nconst a = 1;\n```');
-    assert.match(out, /<pre class="md-code"><code data-language="ts">const a = 1;<\/code><\/pre>/);
+    // Conferido pelo conteúdo, e não pelo HTML: o realce envolve trechos em
+    // `span`, e o que precisa continuar intacto é o código.
+    const host = document.createElement('div');
+    host.append(renderMarkdown('```ts\nconst a = 1;\n```'));
+    const block = host.querySelector('pre.md-code > code');
+    assert.equal(block?.textContent, 'const a = 1;');
+    assert.equal(block?.getAttribute('data-language'), 'ts');
   });
 
   test('bloco sem fechamento vale até o fim, para o streaming não mostrar cru', () => {
@@ -94,9 +99,10 @@ suite('Markdown — bloco indentado', () => {
   test('quatro espaços viram bloco de código, como nas cercas', () => {
     // É o formato que os modelos usam sem pedir licença; sem isto o JSON de
     // exemplo caía no meio do texto como parágrafo.
-    const out = html('Config:\n\n    {\n      "type": "http"\n    }\n\ndepois');
-    assert.match(out, /<pre class="md-code"><code>\{\n {2}"type": "http"\n\}<\/code><\/pre>/);
-    assert.match(out, /<p>depois<\/p>/);
+    const host = document.createElement('div');
+    host.append(renderMarkdown('Config:\n\n    {\n      "type": "http"\n    }\n\ndepois'));
+    assert.equal(host.querySelector('pre.md-code > code')?.textContent, '{\n  "type": "http"\n}');
+    assert.match(host.innerHTML, /<p>depois<\/p>/);
   });
 
   test('linha em branco no meio do exemplo não corta o bloco', () => {

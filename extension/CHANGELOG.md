@@ -7,6 +7,39 @@ O projeto segue [SemVer](https://semver.org/lang/pt-BR/).
 
 ### Adicionado
 
+- **Equipe embutida**: a extensão passa a vir com Orchestrator, Coder,
+  Researcher e Reviewer prontos, cada um com o próprio prompt. Eles não existem
+  em disco — só viram arquivo quando alguém os edita —, a primeira conta criada
+  adota os que ainda não têm vínculo, e o Orchestrator assume como agente
+  principal quando ninguém escolheu um.
+- **Agentes do projeto**: um agente pode ser gravado em `.prometheon/agents/`,
+  que vai para o git, e assim a equipe acompanha o repositório. O vínculo com a
+  conta fica de fora e continua sendo de cada máquina: quem clona recebe os
+  agentes e escolhe a conta dele.
+- **Dois modos de delegação**. `report` é trabalho de leitura — o agente não
+  altera arquivo nenhum, porque as ferramentas de escrita saem do alcance dele.
+  `changes` dá a ele uma **cópia isolada do repositório** (`git worktree`) numa
+  branch própria, com as dependências já instaladas ligadas por junção, e o
+  relatório volta com branch, arquivos e o resumo do diff.
+- `prometheon_status`: o orquestrador passa a enxergar as delegações em
+  andamento, e deixa de redelegar o que já está sendo feito.
+- **Markdown nas respostas do chat**, com realce de sintaxe por família de
+  linguagem e cores tiradas do tema em uso. Relatório de worker chega dobrado na
+  conversa, e abre no clique.
+
+### Corrigido
+
+- O agente principal não recebia a pasta de trabalho: o CLI herdava o diretório
+  do processo da extensão, não enxergava o repositório aberto e pedia permissão
+  para ler o que deveria ser a casa dele.
+- Cada mensagem abria uma sessão nova do CLI, sem histórico — o agente respondia
+  "esta conversa começa na sua mensagem" no meio de um trabalho. A conversa passa
+  a guardar a chave de retomada do CLI e continuar de onde parou.
+- Compactar não devolvia espaço: o resumo era escrito dentro da mesma sessão
+  cheia. Agora a sessão é largada e o resumo atravessa para a nova.
+- Linha informativa do Codex no stderr (`Reading prompt from stdin...`) era
+  apresentada como a causa da falha.
+
 - **Orquestração multi-agente**: o agente principal delega tarefas a outros
   agentes por uma ferramenta MCP servida pela própria extensão em `127.0.0.1`,
   com porta efêmera e token de uso único. O worker roda em sessão própria —

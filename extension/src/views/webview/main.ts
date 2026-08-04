@@ -61,6 +61,7 @@ import {
   type AgentAutonomyMode,
   type AgentProfileSummary,
   type AgentRole,
+  type AgentProfileScope,
   type AgentRoleScope,
   type ChatType,
   type CommitLanguage,
@@ -1547,6 +1548,8 @@ interface AgentDraft {
   skills: string;
   maxConcurrentSessions: string;
   contextStrategy: ContextStrategy;
+  /** Onde o agente é guardado: no projeto (versionado) ou só nesta máquina. */
+  scope: AgentProfileScope;
   enabled: boolean;
 }
 
@@ -2785,6 +2788,7 @@ function newAgentDraft(providerProfileId: string): AgentDraft {
     skills: defaultSkillsFor('implementer', '').join(', '),
     maxConcurrentSessions: '1',
     contextStrategy: 'project',
+    scope: 'machine',
     enabled: true,
   };
 }
@@ -2809,6 +2813,7 @@ function draftFromSummary(summary: AgentProfileSummary): AgentDraft {
     skills: profile.skills.join(', '),
     maxConcurrentSessions: String(profile.maxConcurrentSessions),
     contextStrategy: profile.contextStrategy,
+    scope: profile.scope ?? 'machine',
     enabled: profile.enabled,
   };
 }
@@ -3445,6 +3450,31 @@ function renderAgentForm(
       undefined,
       s(
         'How much this agent gets to see: the task alone, the repository plus the Prometheon Brain, or the knowledge shared through the Hub.',
+      ),
+    ),
+    menuField(
+      s('Where it lives'),
+      [
+        {
+          value: 'machine',
+          label: s('This machine'),
+          description: s('Only you have this agent. Nothing is written to the repository.'),
+          icon: 'machine',
+        },
+        {
+          value: 'project',
+          label: s('This project'),
+          description: s(
+            'Saved in .prometheon/agents/, which goes to git — everyone who clones gets this agent. The account stays yours: each machine picks its own.',
+          ),
+          icon: 'project',
+        },
+      ],
+      draft.scope,
+      (value) => update({ scope: value as AgentProfileScope }, true),
+      undefined,
+      s(
+        'An agent describes how the work gets done here, so it belongs with the code. What never travels is the account behind it.',
       ),
     ),
     field(
@@ -4243,6 +4273,7 @@ function submitAgentDraft(): void {
     maxConcurrentSessions: sessions,
     contextStrategy: draft.contextStrategy,
     enabled: draft.enabled,
+    scope: draft.scope,
   };
 
   post(
@@ -6251,6 +6282,30 @@ let consoleSessionId: string | null = null;
 /** Os workers estão abertos um a um, ou dobrados numa linha só. */
 let workersExpanded = false;
 
+/**
+ * Recado do Prometheon dobrado: a primeira linha fica à vista como resumo, o
+ * resto abre no clique.
+ */
+function collapsedReport(content: string): HTMLElement {
+  const at = content.indexOf('\n');
+  const head = at === -1 ? content : content.slice(0, at);
+  const rest = at === -1 ? '' : content.slice(at + 1).trim();
+
+  const details = document.createElement('details');
+  details.className = 'report';
+  const summary = document.createElement('summary');
+  summary.append(renderMarkdown(head));
+  details.append(summary);
+
+  if (rest !== '') {
+    const inner = document.createElement('div');
+    inner.className = 'report-body';
+    inner.append(renderMarkdown(rest));
+    details.append(inner);
+  }
+  return details;
+}
+
 /** Texto cru das mensagens que ainda estão chegando, por id. */
 const streaming = new Map<string, string>();
 
@@ -6435,7 +6490,14 @@ function renderMessage(message: ChatMessage): HTMLElement {
 
   const body = document.createElement('div');
   body.className = 'content';
-  setContent(body, message.content, message.status === 'streaming');
+  if (message.author === 'system') {
+    // Relatório de worker vem inteiro, e inteiro ele é longo. Fechado, a
+    // conversa continua legível e a linha de cima já diz quem terminou; quem
+    // quiser ler o material abre.
+    body.append(collapsedReport(message.content));
+  } else {
+    setContent(body, message.content, message.status === 'streaming');
+  }
   // Enquanto não há uma palavra sequer, a mensagem inteira — cabeçalho e tudo
   // — fica fora da tela: um cartão com nome, modelo e hora sem resposta abaixo
   // é moldura vazia. Quem diz que o agente está trabalhando é a timeline de

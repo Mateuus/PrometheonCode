@@ -80,8 +80,8 @@ suite('Agent Profiles — arquivo em disco', () => {
       [],
       {},
       stored({ id: '' }),
-      stored({ providerProfileId: undefined }),
-      stored({ providerProfileId: '  ' }),
+      // `providerProfileId` ausente é válido desde que a equipe passou a ser
+      // versionada: a conta é de cada máquina, e quem clona escolhe a dele.
       stored({ role: 'destroyer' }),
       stored({ autonomyMode: 'bypass' }),
       stored({ contextStrategy: 'global' }),
@@ -416,5 +416,26 @@ suite('Janela de contexto', () => {
   test('o rótulo perde a marca de janela, que já aparece no número', () => {
     assert.equal(modelWithoutWindow('claude-opus-5[1m]'), 'claude-opus-5');
     assert.equal(modelWithoutWindow('claude-opus-5'), 'claude-opus-5');
+  });
+});
+
+suite('Agent Profiles — equipe do projeto', () => {
+  test('agente vindo do projeto é válido sem conta', () => {
+    // O arquivo versionado não traz `providerProfileId`: a conta é de cada
+    // máquina. Descartar a entrada por isso apagaria a equipe inteira de quem
+    // acabou de clonar o repositório.
+    const { providerProfileId: _conta, ...semConta } = stored();
+    const parsed = normalizeAgentProfile(semConta);
+    assert.notEqual(parsed, null);
+    assert.equal(parsed?.providerProfileId, '');
+    assert.equal(parsed?.name, 'Code Reviewer');
+  });
+
+  test('o que falta de verdade continua invalidando', () => {
+    // Sem conta ainda dá para escolher uma; sem id ou papel não há agente.
+    const { id: _id, ...semId } = stored();
+    const { role: _role, ...semPapel } = stored();
+    assert.equal(normalizeAgentProfile(semId), null);
+    assert.equal(normalizeAgentProfile(semPapel), null);
   });
 });

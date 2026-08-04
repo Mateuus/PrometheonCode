@@ -567,6 +567,41 @@ textarea:focus-visible {
   border-left-color: var(--vscode-errorForeground);
 }
 
+/* Relatório de worker: dobrado por padrão. O resumo é a linha que diz quem
+   terminou, e o corpo inteiro fica a um clique. */
+.report > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.report > summary::-webkit-details-marker {
+  display: none;
+}
+
+.report > summary::before {
+  content: '▸ ';
+  color: var(--prom-text-dim);
+}
+
+.report[open] > summary::before {
+  content: '▾ ';
+}
+
+.report > summary p {
+  display: inline;
+  margin: 0;
+}
+
+.report-body {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--prom-border);
+}
+
+.message-system .content {
+  border-left-color: var(--prom-text-dim);
+}
+
 /* ---------- Markdown da conversa ----------
    O `pre-wrap` de cima preserva as quebras do texto cru, que é o que a
    mensagem mostra enquanto chega. Depois de formatada, quem espaça são os
@@ -643,6 +678,49 @@ textarea:focus-visible {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 0.92em;
   white-space: pre;
+}
+
+/* ---------- Realce de sintaxe ----------
+   As cores saem do tema em uso, e não de uma paleta nossa: o bloco precisa
+   pertencer à janela em que está, no claro e no escuro. As variáveis de token
+   de depuração são as que o VS Code expõe à webview com significado semântico;
+   o ANSI do terminal entra como reserva. */
+.tok-comment {
+  color: var(--vscode-descriptionForeground, var(--vscode-terminal-ansiBrightBlack));
+  font-style: italic;
+}
+
+.tok-string {
+  color: var(--vscode-debugTokenExpression-string, var(--vscode-terminal-ansiRed));
+}
+
+.tok-number {
+  color: var(--vscode-debugTokenExpression-number, var(--vscode-terminal-ansiGreen));
+}
+
+.tok-keyword {
+  color: var(--vscode-debugTokenExpression-boolean, var(--vscode-terminal-ansiBlue));
+}
+
+.tok-type {
+  color: var(--vscode-symbolIcon-classForeground, var(--vscode-terminal-ansiYellow));
+}
+
+.tok-function {
+  color: var(--vscode-symbolIcon-functionForeground, var(--vscode-terminal-ansiMagenta));
+}
+
+.tok-property {
+  color: var(--vscode-debugTokenExpression-name, var(--vscode-terminal-ansiCyan));
+}
+
+.tok-variable {
+  color: var(--vscode-symbolIcon-variableForeground, var(--vscode-terminal-ansiCyan));
+}
+
+/* A opção de um comando é o que se procura ao ler a linha. */
+.tok-operator {
+  color: var(--vscode-terminal-ansiYellow);
 }
 
 .message .content a {

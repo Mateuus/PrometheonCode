@@ -502,9 +502,20 @@ export const MAX_CONCURRENT_SESSIONS = 16;
  * é credencial — a conta usada vem do `providerProfileId`, que aponta para um
  * Provider Profile local.
  */
+/**
+ * Onde o agente está definido. `project` vem de `.prometheon/agents/` e vai
+ * para o git — é a equipe do repositório; `machine` existe só neste computador.
+ */
+export type AgentProfileScope = 'project' | 'machine' | 'builtin';
+
 export interface AgentProfile {
   readonly id: string;
   readonly name: string;
+  /**
+   * Onde este agente está definido. Ausente é `machine` — o padrão de quem foi
+   * criado antes de o projeto poder ter equipe própria.
+   */
+  readonly scope?: AgentProfileScope;
   /** Binding obrigatório: um agente sem conta não executa (documento §15). */
   readonly providerProfileId: string;
   readonly role: AgentRole;
