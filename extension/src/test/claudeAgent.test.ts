@@ -270,14 +270,27 @@ suite('Claude Code — tradução do stream', () => {
     );
   });
 
-  test('cada autonomia mapeia para o modo correspondente do CLI', () => {
+  test('cada autonomia mapeia para um modo que o CLI reconhece', () => {
+    // A lista do CLI é `acceptEdits | auto | bypassPermissions | manual |
+    // dontAsk | plan`. Mandar um nome fora dela deixava o agente sem permissão
+    // para executar nada — ele respondia que o prompt de permissão o recusou,
+    // e o usuário não tinha onde aprovar.
+    const modes = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
+    for (const autonomy of ['manual', 'auto', 'bypass'] as const) {
+      const mode = permissionModeFor({ content: '', workMode: 'edit', autonomy });
+      assert.ok(modes.includes(mode), `${autonomy} virou "${mode}", que o CLI não conhece`);
+    }
+
     assert.equal(
       permissionModeFor({ content: '', workMode: 'edit', autonomy: 'manual' }),
-      'default',
+      'manual',
     );
+    // Automático precisa executar de verdade: `acceptEdits` libera a edição de
+    // arquivo mas continua pedindo aprovação para comando, e não há ninguém
+    // para aprovar numa sessão sem terminal.
     assert.equal(
       permissionModeFor({ content: '', workMode: 'edit', autonomy: 'auto' }),
-      'acceptEdits',
+      'auto',
     );
     assert.equal(
       permissionModeFor({ content: '', workMode: 'edit', autonomy: 'bypass' }),

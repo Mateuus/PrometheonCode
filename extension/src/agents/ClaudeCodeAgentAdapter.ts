@@ -795,13 +795,20 @@ export function permissionModeFor(message: AgentInput): string {
     return 'plan';
   }
 
+  // Os nomes são os que o CLI aceita hoje: `acceptEdits | auto |
+  // bypassPermissions | manual | dontAsk | plan`. Mandávamos `default`, que
+  // saiu da lista — e um modo que o CLI não reconhece deixava o agente sem
+  // permissão para executar nada, respondendo que o prompt de permissão o
+  // recusou. `acceptEdits` também não servia aqui: ele libera a edição de
+  // arquivo e continua pedindo aprovação para comando, e não há ninguém para
+  // aprovar numa sessão sem terminal.
   switch (message.autonomy) {
     case 'bypass':
       return 'bypassPermissions';
     case 'auto':
-      return 'acceptEdits';
+      return 'auto';
     default:
-      return 'default';
+      return 'manual';
   }
 }
 
