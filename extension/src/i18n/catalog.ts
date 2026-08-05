@@ -631,9 +631,15 @@ export const WEBVIEW_STRINGS = {
   'agents.openConsole': 'Open this agent’s console',
   'agents.noTools': 'This agent has not run any tool yet.',
   'agents.unnamed': 'Agent',
+  // Conversa direta com um worker, na aba dele.
+  'agents.talkPlaceholder': 'Message {0}…  (Enter to send)',
+  'agents.talkWaiting': 'Waiting for the current turn to end',
+  'agents.talkNoImages': 'Images only go to the main conversation.',
   // Fila de mensagens escritas durante um run.
   'queued.discard': 'Discard this message',
   'queued.now': 'Send now',
+  // Contagem do diff de uma edição, acima do bloco vermelho e verde.
+  'step.diffCounts': '{0} removed, {1} added',
   'queued.nowHint': 'Interrupt the current run and send what is waiting',
   // Vários workers ao mesmo tempo entram dobrados numa linha só.
   'agents.bundle': '{0} delegated agents',

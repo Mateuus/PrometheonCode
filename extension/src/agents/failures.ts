@@ -69,8 +69,12 @@ const RULES: readonly Rule[] = [
   },
   {
     kind: 'transient',
+    // `connection closed mid-response` é o caso que mais custa caro: a conexão
+    // cai depois de o worker já ter trabalhado por minutos, e sem casar aqui a
+    // falha virava "unknown" — o orquestrador desistia de um erro que passa
+    // sozinho na tentativa seguinte.
     pattern:
-      /overloaded|\b5\d\d\b|timed? ?out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|network error|temporarily unavailable/i,
+      /overloaded|\b5\d\d\b|timed? ?out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|socket hang up|network error|temporarily unavailable|api error|server_error|connection (closed|error|reset)|mid-response|stream (was )?interrupted/i,
     advice:
       'This was a temporary provider error. You may delegate the same task one more time; if it fails again, stop and report it to the user.',
     summary: 'the provider had a temporary error',

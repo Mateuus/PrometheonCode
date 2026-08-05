@@ -131,6 +131,16 @@ export type WebviewToExtensionMessage =
         readonly attachments: readonly DraftAttachment[];
       };
     }
+  /**
+   * Fala dirigida a um worker, escrita na aba dele.
+   *
+   * Não passa pelo orquestrador: é a pessoa corrigindo o rumo de quem está
+   * fazendo o trabalho. `sessionId` é a aba, e é ela que diz para quem vai.
+   */
+  | {
+      readonly type: 'chat.sendToAgent';
+      readonly payload: { readonly sessionId: string; readonly content: string };
+    }
   | { readonly type: 'chat.cancel'; readonly payload: { readonly runId: string } }
   /** Manda agora o que está na fila, interrompendo o run em andamento. */
   | { readonly type: 'chat.sendQueued' }
@@ -973,6 +983,18 @@ export function parseWebviewMessage(raw: unknown): WebviewToExtensionMessage | n
         return null;
       }
       return { type: 'chat.send', payload: { content, attachments } };
+    }
+
+    case 'chat.sendToAgent': {
+      const sessionId = payload === undefined ? null : nonEmptyString(payload['sessionId'], 128);
+      if (sessionId === null || payload === undefined || typeof payload['content'] !== 'string') {
+        return null;
+      }
+      const content = payload['content'].trim();
+      if (content === '' || content.length > MAX_MESSAGE_LENGTH) {
+        return null;
+      }
+      return { type: 'chat.sendToAgent', payload: { sessionId, content } };
     }
 
     case 'chat.openStepOutput': {

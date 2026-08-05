@@ -202,6 +202,8 @@ export class ClaudeCodeAgentAdapter implements AgentAdapter {
     yield { type: 'status', status: 'working' };
 
     const failure = collectFailure(child);
+    /** Último erro de API visto no stdout — a razão real de um exit 1 calado. */
+    let apiError: string | null = null;
 
     try {
       for await (const line of createInterface({ input: child.stdout })) {
@@ -209,13 +211,17 @@ export class ClaudeCodeAgentAdapter implements AgentAdapter {
           continue;
         }
 
-        const { events, cliSessionId } = translateLine(line);
+        const translated = translateLine(line);
 
-        if (cliSessionId !== null) {
-          session.cliSessionId = cliSessionId;
+        if (translated.cliSessionId !== null) {
+          session.cliSessionId = translated.cliSessionId;
         }
 
-        for (const event of events) {
+        if (translated.apiError !== null) {
+          apiError = translated.apiError;
+        }
+
+        for (const event of translated.events) {
           yield event;
         }
       }
@@ -232,12 +238,12 @@ export class ClaudeCodeAgentAdapter implements AgentAdapter {
         // linhas. Um rastro de pilha completo na conversa afoga a resposta, e
         // sem ele em lugar nenhum não há como investigar depois.
         this.logger.error(
-          `Claude Code terminou com código ${String(code)}: ${failure.stderr().trim()}`,
+          `Claude Code terminou com código ${String(code)}: ${failure.stderr().trim() || (apiError ?? '(sem saída de erro)')}`,
         );
 
         yield {
           type: 'failed',
-          error: describeExit(code, failure.stderr()),
+          error: describeExit(code, failure.stderr(), apiError),
         };
       }
     } finally {
@@ -342,6 +348,17 @@ export class ClaudeCodeAgentAdapter implements AgentAdapter {
 export interface TranslationResult {
   readonly events: readonly AgentEvent[];
   /**
+   * Erro de API que o CLI relatou no meio do turno, quando a linha o traz.
+   *
+   * Quando a conexão com o provedor cai, o CLI escreve uma mensagem sintética
+   * ("API Error: Connection closed mid-response.") no stdout e termina com
+   * código 1 **sem escrever nada em stderr**. Sem guardar esta linha, a única
+   * coisa que sobra é "exited with code 1" — que não diz se vale retentar, e
+   * transforma uma queda de rede de dez segundos em dez minutos de trabalho
+   * jogados fora.
+   */
+  readonly apiError: string | null;
+  /**
    * Identificador da conversa anunciado pelo CLI, quando a linha o traz.
    *
    * Guardá-lo é o que permite a segunda mensagem continuar a mesma conversa em
@@ -367,11 +384,11 @@ export function translateLine(line: string): TranslationResult {
   try {
     payload = JSON.parse(line);
   } catch {
-    return { events: [], cliSessionId: null };
+    return { events: [], cliSessionId: null, apiError: null };
   }
 
   if (typeof payload !== 'object' || payload === null) {
-    return { events: [], cliSessionId: null };
+    return { events: [], cliSessionId: null, apiError: null };
   }
 
   const event = payload as Record<string, unknown>;
@@ -402,7 +419,42 @@ export function translateLine(line: string): TranslationResult {
       break;
   }
 
-  return { events, cliSessionId };
+  return { events, cliSessionId, apiError: readApiError(event) };
+}
+
+/**
+ * A mensagem de erro de API escondida numa linha de assistente.
+ *
+ * O CLI marca a mensagem com `isApiErrorMessage`, mas o campo é dele e pode
+ * mudar de nome entre versões — então o texto também vale como pista. As duas
+ * leituras juntas custam nada e cobrem a versão que ainda não saiu.
+ */
+function readApiError(event: Record<string, unknown>): string | null {
+  const message = event['message'];
+
+  if (typeof message !== 'object' || message === null) {
+    return null;
+  }
+
+  const content = (message as Record<string, unknown>)['content'];
+
+  if (!Array.isArray(content)) {
+    return null;
+  }
+
+  const text = content
+    .map((part) =>
+      typeof part === 'object' && part !== null && typeof (part as Record<string, unknown>)['text'] === 'string'
+        ? String((part as Record<string, unknown>)['text'])
+        : '',
+    )
+    .find((part) => part !== '');
+
+  if (text === undefined) {
+    return null;
+  }
+
+  return event['isApiErrorMessage'] === true || /^API Error\b/i.test(text.trim()) ? text.trim() : null;
 }
 
 /**
@@ -515,6 +567,7 @@ function* fromContentPart(part: unknown): Generator<AgentEvent> {
 
     const input = (block['input'] ?? {}) as Record<string, unknown>;
     const detail = describeDetail(input);
+    const edit = describeEdit(input);
 
     yield {
       type: 'tool.requested',
@@ -522,6 +575,7 @@ function* fromContentPart(part: unknown): Generator<AgentEvent> {
       tool: name,
       title: describeTarget(name, input),
       ...(detail === null ? {} : { detail }),
+      ...(edit === null ? {} : { edit }),
     };
   }
 }
@@ -627,6 +681,29 @@ function describeTarget(tool: string, input: Record<string, unknown>): string {
   }
 
   return tool;
+}
+
+/**
+ * O que a ferramenta tira e põe no arquivo.
+ *
+ * `Edit` traz os dois lados; `Write` traz só o conteúdo novo, que é o arquivo
+ * inteiro — e um arquivo novo não tem lado removido. Nulo para ferramenta que
+ * não escreve: aí não há diff a mostrar.
+ */
+function describeEdit(
+  input: Record<string, unknown>,
+): { removed?: string; added?: string } | null {
+  const removed = input['old_string'];
+  const added = input['new_string'] ?? input['content'];
+  const has = (value: unknown): value is string => typeof value === 'string' && value !== '';
+
+  if (!has(removed) && !has(added)) {
+    return null;
+  }
+  return {
+    ...(has(removed) ? { removed } : {}),
+    ...(has(added) ? { added } : {}),
+  };
 }
 
 /** A linha de apoio. Nulo quando não há nada de útil a dizer. */
@@ -832,8 +909,25 @@ function collectFailure(child: ChildProcessWithoutNullStreams): {
   return { exitCode, stderr: () => stderr };
 }
 
-function describeExit(code: number | null, stderr: string): SerializedError {
+/**
+ * A frase que explica a morte do processo.
+ *
+ * O erro de API vem antes do stderr porque é o mais específico: quando ele
+ * existe, o processo subiu e falou com o provedor, e "Connection closed
+ * mid-response" diz o que "exited with code 1" nunca diria — que vale tentar de
+ * novo. O stderr fica para o que morre antes disso (CLI ausente, argumento
+ * inválido), e o código nu é o último recurso.
+ */
+function describeExit(
+  code: number | null,
+  stderr: string,
+  apiError: string | null = null,
+): SerializedError {
   const detail = stderr.trim();
+
+  if (apiError !== null && apiError !== '') {
+    return { name: 'ClaudeCodeError', message: apiError };
+  }
 
   return {
     name: 'ClaudeCodeError',

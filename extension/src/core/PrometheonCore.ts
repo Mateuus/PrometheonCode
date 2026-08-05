@@ -24,6 +24,7 @@ import type { WebChatService } from '../chat/WebChatService';
 import { UNTITLED } from '../chat/LocalChatService';
 import {
   IMAGE_MIME_TYPES,
+  truncateStepOutput,
   type AgentStep,
   type ChatMessage,
   type ConversationSummary,
@@ -91,6 +92,7 @@ import {
   WORK_MODE_LABELS,
   type ActiveAgentStatus,
   type ActiveAgentSummary,
+  type WorkerMessage,
   type AgentSummary,
   type Autonomy,
   type BypassDuration,
@@ -194,6 +196,14 @@ export class PrometheonCore implements vscode.Disposable {
   private queued: QueuedMessage[] = [];
   /** Vagas de execução dos workers; a reserva é feita antes de qualquer espera. */
   private readonly concurrency = new ConcurrencyGuard();
+  /**
+   * Workers com quem ainda dá para falar, pela chave da aba deles.
+   *
+   * Vive além do turno de propósito: quem abre a tela de um worker quer poder
+   * dizer "não é bem isso" sem passar o recado pelo orquestrador, e isso vale
+   * tanto enquanto ele trabalha quanto depois de ele entregar.
+   */
+  private readonly workers = new Map<string, WorkerHandle>();
   /** Delegações longas, por bilhete, esperando coleta. */
   private readonly delegations = new Map<string, PendingDelegation>();
   /** Relatórios que chegaram tarde e ainda não foram levados ao orquestrador. */
@@ -461,6 +471,9 @@ export class PrometheonCore implements vscode.Disposable {
         return;
       case 'chat.send':
         await this.send(message.payload.content, message.payload.attachments);
+        return;
+      case 'chat.sendToAgent':
+        await this.talkToWorker(message.payload.sessionId, message.payload.content);
         return;
       case 'chat.sendQueued':
         await this.sendQueuedNow();
@@ -1000,6 +1013,7 @@ export class PrometheonCore implements vscode.Disposable {
     this.conversationId = conversation.id;
     this.conversationTitle = conversation.title;
     this.activeAgents = [];
+    this.forgetWorkers();
     await this.setChatType('local');
     await this.publish();
   }
@@ -1024,6 +1038,7 @@ export class PrometheonCore implements vscode.Disposable {
     this.conversationId = session.id;
     this.conversationTitle = session.title;
     this.activeAgents = [];
+    this.forgetWorkers();
     await this.deps.local.setActiveConversationId(session.id);
     if (this.chatType !== session.chatType) {
       await this.setChatType(session.chatType);
@@ -1110,6 +1125,7 @@ export class PrometheonCore implements vscode.Disposable {
     await this.deps.localChat.clearConversation(this.conversationId);
     this.conversationTitle = UNTITLED;
     this.activeAgents = [];
+    this.forgetWorkers();
     this.contextTokens = 0;
     await this.publish();
   }
@@ -1173,6 +1189,7 @@ export class PrometheonCore implements vscode.Disposable {
       this.conversationId = null;
       this.messages = [];
       this.activeAgents = [];
+    this.forgetWorkers();
       this.contextTokens = 0;
       await this.ensureConversation();
     }
@@ -2015,6 +2032,230 @@ ${report ?? ''}`
     });
   }
 
+  // ---------- Conversa direta com um worker ----------
+
+  /**
+   * Entrega uma mensagem escrita na aba de um worker.
+   *
+   * Trabalhando, ele recebe assim que o turno atual fechar: o CLI executa um
+   * pedido por vez, com a entrada já fechada, e não há como enfiar texto no
+   * meio de um turno. Já entregue, a conversa é retomada num processo novo — o
+   * histórico continua com o CLI, então ele volta sabendo o que fez.
+   */
+  async talkToWorker(consoleId: string, content: string): Promise<void> {
+    const text = content.trim();
+    if (text === '') {
+      return;
+    }
+
+    const worker = this.workers.get(consoleId);
+    if (worker === undefined) {
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: t('This agent is no longer available to talk to.'),
+      });
+      return;
+    }
+
+    await this.recordWorkerSay(worker, 'user', text);
+
+    if (worker.live) {
+      worker.inbox.push(text);
+      await this.refreshWorker(worker);
+      return;
+    }
+
+    await this.resumeWorker(worker, text);
+  }
+
+  /**
+   * Sobe de novo a conversa de um worker que já entregou, para mais um turno.
+   *
+   * O relatório deste turno vai para a conversa do orquestrador pelo mesmo
+   * caminho de um worker que termina fora do turno: quem coordena precisa saber
+   * o que mudou, e a alternativa seria o trabalho existir só numa aba lateral.
+   */
+  private async resumeWorker(worker: WorkerHandle, content: string): Promise<void> {
+    if (!this.deps.registry.has(worker.adapterId)) {
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: t('This agent is no longer available to talk to.'),
+      });
+      return;
+    }
+
+    const reservation = this.concurrency.tryReserve(
+      worker.profileId,
+      worker.displayName,
+      worker.maxSessions,
+      this.globalConcurrencyLimit(),
+    );
+    if (!reservation.ok) {
+      this.deps.bus.emit('notification', { level: 'warning', message: reservation.reason });
+      return;
+    }
+
+    const adapter = this.deps.registry.require(worker.adapterId);
+    worker.live = true;
+    this.setWorkerStatus(worker, 'working');
+    await this.refreshWorker(worker);
+
+    let report = '';
+    let failure: string | null = null;
+
+    try {
+      const session = await adapter.start({
+        ...worker.start,
+        task: content,
+        // Sem a chave de retomada ele nasce sem memória do que fez, e o pedido
+        // "termina o que faltou" vira uma tarefa impossível de entender.
+        ...(worker.resumeId === null ? {} : { resumeId: worker.resumeId }),
+      });
+      worker.sessionId = session.id;
+
+      for await (const event of adapter.send(session.id, {
+        content,
+        workMode: 'edit',
+        autonomy: worker.autonomy,
+      })) {
+        if (event.type === 'tool.requested') {
+          await this.recordWorkerStep(worker, {
+            id: event.toolId,
+            sessionId: worker.consoleId,
+            kind: 'tool',
+            tool: event.tool,
+            title: event.title,
+            ...(event.detail === undefined ? {} : { detail: event.detail }),
+            ...(event.edit === undefined ? {} : { edit: event.edit }),
+            status: 'running',
+            startedAt: Date.now(),
+          });
+        } else if (event.type === 'tool.completed') {
+          const started = worker.steps.find((item) => item.id === event.toolId);
+          const startedAt = started?.startedAt ?? Date.now();
+          const detail = event.detail ?? started?.detail;
+          const output = event.output === undefined ? null : truncateStepOutput(event.output);
+          await this.recordWorkerStep(worker, {
+            id: event.toolId,
+            sessionId: worker.consoleId,
+            kind: 'tool',
+            tool: started?.tool ?? 'Tool',
+            title: started?.title ?? '',
+            ...(detail === undefined ? {} : { detail }),
+            ...(started?.edit === undefined ? {} : { edit: started.edit }),
+            ...(output === null
+              ? {}
+              : {
+                  output: output.output,
+                  outputLines: output.lines,
+                  ...(output.truncated ? { truncated: true } : {}),
+                }),
+            status: event.failed === true ? 'failed' : 'done',
+            startedAt,
+            durationMs: Date.now() - startedAt,
+          });
+        } else if (event.type === 'thought') {
+          await this.recordWorkerStep(worker, {
+            id: `${worker.consoleId}-thought-${String(worker.steps.length)}`,
+            sessionId: worker.consoleId,
+            kind: 'thought',
+            tool: 'Thought',
+            title: '',
+            status: 'done',
+            startedAt: Date.now() - event.durationMs,
+            durationMs: event.durationMs,
+          });
+        } else if (event.type === 'completed') {
+          report = event.text;
+          failure = null;
+        } else if (event.type === 'failed') {
+          failure ??= event.error.message;
+        } else if (event.type === 'usage') {
+          await this.deps.usage.record(worker.providerProfileId, event.delta);
+        }
+      }
+
+      worker.resumeId = adapter.resumeId?.(session.id) ?? worker.resumeId;
+      await adapter.dispose(session.id);
+    } catch (error) {
+      failure = String(error);
+    } finally {
+      this.concurrency.release(worker.profileId);
+      worker.live = false;
+      this.setWorkerStatus(worker, failure === null ? 'completed' : 'failed');
+      await this.refreshWorker(worker);
+    }
+
+    if (failure !== null) {
+      await this.recordWorkerSay(worker, 'agent', failure);
+      this.deps.bus.emit('notification', {
+        level: 'warning',
+        message: t('{0} failed: {1}.', worker.displayName, describeAgentFailure(failure).summary),
+      });
+      return;
+    }
+
+    if (report !== '') {
+      await this.recordWorkerSay(worker, 'agent', report);
+      // Bilhete próprio: esta entrega não nasceu de um `delegate`, e inventar o
+      // número de um que já foi coletado confundiria os dois na conversa.
+      this.publishReport(worker.displayName, newId('talk'), report, null);
+    }
+  }
+
+  /** Entrega, um a um, os pedidos que ficaram esperando um worker já parado. */
+  private async drainWorkerInbox(worker: WorkerHandle): Promise<void> {
+    while (!worker.live && worker.inbox.length > 0) {
+      const next = worker.inbox.shift() ?? '';
+      await this.refreshWorker(worker);
+      await this.resumeWorker(worker, next);
+    }
+  }
+
+  /** Guarda uma fala da conversa direta e a leva à tela. */
+  private async recordWorkerSay(
+    worker: WorkerHandle,
+    role: 'user' | 'agent',
+    text: string,
+  ): Promise<void> {
+    worker.messages.push({ role, text, at: Date.now() });
+    await this.refreshWorker(worker);
+  }
+
+  /** Guarda um passo do worker, substituindo o de mesmo id. */
+  private async recordWorkerStep(worker: WorkerHandle, step: AgentStep): Promise<void> {
+    const at = worker.steps.findIndex((item) => item.id === step.id);
+    if (at === -1) {
+      worker.steps.push(step);
+    } else {
+      worker.steps[at] = step;
+    }
+    await this.refreshWorker(worker);
+  }
+
+  private setWorkerStatus(worker: WorkerHandle, status: ActiveAgentStatus): void {
+    this.activeAgents = this.activeAgents.map((item) =>
+      item.sessionId === worker.consoleId ? { ...item, status } : item,
+    );
+  }
+
+  /** Copia o estado do worker para o snapshot da interface. */
+  private async refreshWorker(worker: WorkerHandle): Promise<void> {
+    this.activeAgents = this.activeAgents.map((item) =>
+      item.sessionId === worker.consoleId
+        ? {
+            ...item,
+            steps: [...worker.steps],
+            messages: [...worker.messages],
+            queued: [...worker.inbox],
+            talkable: true,
+          }
+        : item,
+    );
+    this.deps.bus.emit('agents.updated', this.activeAgents);
+    await this.publish();
+  }
+
   /**
    * Acorda o orquestrador quando os relatórios que ele esperava chegaram.
    *
@@ -2157,7 +2398,9 @@ ${report ?? ''}`
 [Prometheon] You cannot run shell commands in this session, so you cannot run typecheck, lint or tests. Do the work, and state plainly in your report that verification did not run.`
         : task;
 
-    const session = await adapter.start({
+    // Guardado inteiro: é o que permite subir de novo esta mesma conversa
+    // quando alguém falar com o worker depois de ele já ter entregado.
+    const start: StartAgentInput = {
       // Os dois executam de verdade; a diferença é o que podem tocar. Pôr o
       // worker de leitura em modo de planejamento faria o CLI devolver um plano
       // em vez da pesquisa — o que fecha a porta da escrita é negar as
@@ -2174,10 +2417,34 @@ ${report ?? ''}`
       ...(model === undefined || model === '' ? {} : { model }),
       ...(prompt === '' ? {} : { systemPrompt: prompt }),
       ...(summary.profile.effort === undefined ? {} : { effort: summary.profile.effort }),
-    });
+    };
+
+    const session = await adapter.start(start);
+
+    // A aba do worker é indexada pela primeira sessão dele, e continua sendo:
+    // retomar a conversa cria uma sessão nova no adaptador, e trocar a chave
+    // fecharia a tela na cara de quem estava lendo.
+    const consoleId = session.id;
+    const worker: WorkerHandle = {
+      consoleId,
+      adapterId: adapter.id,
+      profileId: summary.profile.id,
+      providerProfileId: summary.profile.providerProfileId,
+      displayName: summary.profile.name,
+      maxSessions: summary.profile.maxConcurrentSessions,
+      sessionId: session.id,
+      start,
+      autonomy,
+      resumeId: null,
+      live: true,
+      inbox: [],
+      messages: [],
+      steps: [],
+    };
+    this.workers.set(consoleId, worker);
 
     this.upsertActiveAgent({
-      sessionId: session.id,
+      sessionId: consoleId,
       agentId: adapter.id,
       displayName: summary.profile.name,
       role: 'worker',
@@ -2185,15 +2452,18 @@ ${report ?? ''}`
       task,
       roleLabel: summary.customRole?.label ?? AGENT_ROLE_LABELS[summary.profile.role],
       engine: adapter.displayName,
+      talkable: true,
       ...(model === undefined || model === '' ? {} : { model: modelWithoutWindow(model) }),
     });
     this.deps.bus.emit('agents.updated', this.activeAgents);
     await this.publish();
 
+    /** Um relatório por entrega: a tarefa, e depois cada pedido direto. */
+    const reports: string[] = [];
     let report = '';
     let failure: string | null = null;
     /** O que o worker fez, para a tela dele. Não entra na conversa. */
-    const steps: AgentStep[] = [];
+    const steps = worker.steps;
     const recordStep = async (step: AgentStep): Promise<void> => {
       const at = steps.findIndex((item) => item.id === step.id);
       if (at === -1) {
@@ -2201,27 +2471,34 @@ ${report ?? ''}`
       } else {
         steps[at] = step;
       }
-      this.activeAgents = this.activeAgents.map((item) =>
-        item.sessionId === session.id ? { ...item, steps: [...steps] } : item,
-      );
-      this.deps.bus.emit('agents.updated', this.activeAgents);
-      await this.publish();
+      await this.refreshWorker(worker);
     };
 
-    try {
-      for await (const event of adapter.send(session.id, {
-        content: brief,
+    /**
+     * Consome um turno do worker até o fim, acumulando relatório e falha.
+     *
+     * Está separado do laço de tentativas porque uma queda de conexão no meio
+     * da resposta não é o fim do trabalho: o CLI guardou o histórico e sabe
+     * retomar de onde parou.
+     */
+    const consume = async (content: string): Promise<void> => {
+      for await (const event of adapter.send(worker.sessionId, {
+        content,
         workMode: 'edit',
         autonomy,
       })) {
         if (event.type === 'tool.requested') {
           await recordStep({
             id: event.toolId,
-            sessionId: session.id,
+            sessionId: consoleId,
             kind: 'tool',
             tool: event.tool,
             title: event.title,
             ...(event.detail === undefined ? {} : { detail: event.detail }),
+            // O diff é o que faz a aba do worker valer alguma coisa: sem ele,
+            // "Edit OrigemZAgent.cs" trinta vezes seguidas não diz o que ele
+            // escreveu no arquivo — e ninguém revisa uma lista de nomes.
+            ...(event.edit === undefined ? {} : { edit: event.edit }),
             status: 'running',
             startedAt: Date.now(),
           });
@@ -2229,21 +2506,31 @@ ${report ?? ''}`
           const started = steps.find((item) => item.id === event.toolId);
           const startedAt = started?.startedAt ?? Date.now();
           const detail = event.detail ?? started?.detail;
+          const output = event.output === undefined ? null : truncateStepOutput(event.output);
           await recordStep({
             id: event.toolId,
-            sessionId: session.id,
+            sessionId: consoleId,
             kind: 'tool',
             tool: started?.tool ?? 'Tool',
             title: started?.title ?? '',
             ...(detail === undefined ? {} : { detail }),
+            // O diff veio no início; a conclusão só confirma que terminou.
+            ...(started?.edit === undefined ? {} : { edit: started.edit }),
+            ...(output === null
+              ? {}
+              : {
+                  output: output.output,
+                  outputLines: output.lines,
+                  ...(output.truncated ? { truncated: true } : {}),
+                }),
             status: event.failed === true ? 'failed' : 'done',
             startedAt,
             durationMs: Date.now() - startedAt,
           });
         } else if (event.type === 'thought') {
           await recordStep({
-            id: `${session.id}-thought-${String(steps.length)}`,
-            sessionId: session.id,
+            id: `${consoleId}-thought-${String(steps.length)}`,
+            sessionId: consoleId,
             kind: 'thought',
             tool: 'Thought',
             title: '',
@@ -2253,24 +2540,78 @@ ${report ?? ''}`
           });
         } else if (event.type === 'completed') {
           report = event.text;
+          failure = null;
         } else if (event.type === 'failed') {
-          failure = event.error.message;
+          // A primeira falha do turno é a que explica: o CLI relata o motivo
+          // ("Connection closed mid-response") e só depois morre com código 1.
+          // Deixar a segunda sobrescrever trocava a causa por um número.
+          failure ??= event.error.message;
         } else if (event.type === 'usage') {
           // O gasto do worker é do mesmo run: some no total que a conta mede.
           await this.deps.usage.record(summary.profile.providerProfileId, event.delta);
+        }
+      }
+    };
+
+    /** Um turno completo, com as retentativas que uma queda de rede merece. */
+    const turn = async (content: string): Promise<void> => {
+      for (let attempt = 0; attempt <= WORKER_RETRIES; attempt += 1) {
+        failure = null;
+        await consume(attempt === 0 ? content : RESUME_AFTER_TRANSIENT);
+
+        if (failure === null || describeAgentFailure(failure).kind !== 'transient') {
+          return;
+        }
+
+        if (attempt === WORKER_RETRIES) {
+          return;
+        }
+
+        // Retomar custa quase nada e salva o turno inteiro: o worker já gastou
+        // minutos de trabalho, e o histórico continua com o CLI. Refazer do
+        // zero seria pagar tudo de novo por uma conexão que caiu.
+        this.deps.logger.warn(
+          `Delegação: ${summary.profile.name} caiu por erro temporário (${failure}). Retomando.`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, WORKER_RETRY_DELAY_MS));
+      }
+    };
+
+    try {
+      await turn(brief);
+      if (report !== '') {
+        reports.push(report);
+        await this.recordWorkerSay(worker, 'agent', report);
+      }
+
+      // O que foi escrito para ele enquanto trabalhava entra agora: o CLI
+      // executa um pedido por vez e não aceita texto no meio do turno, então a
+      // vez da mensagem é assim que o turno anterior fecha.
+      while (failure === null && worker.inbox.length > 0) {
+        const next = worker.inbox.shift() ?? '';
+        await this.refreshWorker(worker);
+        await turn(next);
+        if (report !== '') {
+          reports.push(report);
+          await this.recordWorkerSay(worker, 'agent', report);
         }
       }
     } finally {
       // A vaga volta aconteça o que acontecer: vaga não devolvida é vaga
       // perdida até a extensão reiniciar.
       this.concurrency.release(summary.profile.id);
-      await adapter.dispose(session.id);
+      // A chave de retomada é colhida antes de encerrar: depois do `dispose` o
+      // adaptador esqueceu a sessão, e sem ela falar com este worker de novo
+      // começaria uma conversa do zero, sem nada do que ele fez.
+      worker.resumeId = adapter.resumeId?.(worker.sessionId) ?? null;
+      worker.live = false;
+      await adapter.dispose(worker.sessionId);
       // O worker fica na lista, no estado em que parou, até o pedido do usuário
       // terminar — é o `settleActiveAgents` do fim do run que o retira. Sumir
       // na hora apagava a única evidência de que ele existiu: um worker que
       // falha em um segundo aparecia e desaparecia antes de alguém ver.
       this.activeAgents = this.activeAgents.map((item) =>
-        item.sessionId === session.id
+        item.sessionId === consoleId
           ? {
               ...item,
               status: failure === null ? ('completed' as const) : ('failed' as const),
@@ -2280,13 +2621,31 @@ ${report ?? ''}`
       );
       this.deps.bus.emit('agents.updated', this.activeAgents);
       await this.publish();
+      // Turno que morreu no meio deixa para trás o que foi escrito para ele. A
+      // mensagem não pode ficar presa numa fila que ninguém mais vai ler: ela
+      // segue pelo caminho da retomada, com sessão nova.
+      if (worker.inbox.length > 0) {
+        void this.drainWorkerInbox(worker).catch((error: unknown) => {
+          this.deps.logger.error(`Delegação: fila de ${worker.displayName} (${String(error)}).`);
+        });
+      }
     }
+
+    // Cada entrega vira um trecho do relatório. Ficar só com a última perderia
+    // o trabalho da tarefa original quando alguém pediu algo a mais no meio.
+    report = reports.length <= 1 ? (reports[0] ?? report) : reports.join('\n\n---\n\n');
 
     // O trabalho de código não cabe num texto: o que importa é onde ele está.
     // Sem branch e sem lista de arquivos, o orquestrador teria de acreditar no
     // relato do worker sobre o que foi feito — e não teria como conferir.
+    /** Onde ficou o trabalho, quando o worker morreu com arquivos já mudados. */
+    let salvaged: string | null = null;
+
     if (worktree !== null && folder !== undefined) {
       const changed = await this.deps.worktrees.changes(worktree).catch(() => null);
+      if (changed !== null && changed.files.length > 0) {
+        salvaged = `The worker changed ${String(changed.files.length)} file(s) before it died; the work is on branch \`${worktree.branch}\` at \`${worktree.path}\`. Read it before deciding to redo the task from scratch.`;
+      }
       if (changed === null || changed.files.length === 0) {
         // Nada mudou: a cópia é lixo, e mantê-la encheria o disco de árvores
         // vazias. Só apagamos o que não tem trabalho dentro.
@@ -2322,8 +2681,12 @@ ${report ?? ''}`
         level: 'warning',
         message: t('Agent "{0}" failed: {1}.', summary.profile.name, diagnosis.summary),
       });
+      // O que ele alcançou a fazer antes de cair vai junto: sem esta linha o
+      // orquestrador manda refazer do zero um trabalho que está pronto em disco.
       throw new Error(
-        `Agent "${summary.profile.name}" failed: ${failure}\n\n${diagnosis.advice}`,
+        [`Agent "${summary.profile.name}" failed: ${failure}`, salvaged, diagnosis.advice]
+          .filter((part) => part !== null && part !== '')
+          .join('\n\n'),
       );
     }
     return report === ''
@@ -3422,13 +3785,31 @@ ${report ?? ''}`
    * de quem delegou, então o fim do run principal deixou de significar o fim do
    * trabalho: tirá-lo daqui esconderia justamente o agente que a pessoa quer
    * acompanhar enquanto espera.
+   *
+   * E fica também o worker com quem ainda dá para falar: quem abre a tela de um
+   * agente que acabou de entregar espera poder dizer "faltou isto" ali mesmo.
+   * Ele sai da lista quando a conversa muda — é a troca de assunto que encerra
+   * o assunto, não o fim do turno de quem delegou.
    */
   private settleActiveAgents(): void {
     this.activeAgents = this.activeAgents
-      .filter((agent) => agent.role === 'main' || isRunning(agent.status))
+      .filter(
+        (agent) =>
+          agent.role === 'main' || isRunning(agent.status) || this.workers.has(agent.sessionId),
+      )
       .map((agent) =>
         agent.role === 'main' ? { ...agent, status: 'idle' as const, task: null } : agent,
       );
+  }
+
+  /**
+   * Esquece os workers da conversa anterior.
+   *
+   * Sem isto eles se acumulariam entre sessões: abrir um chat de ontem traria
+   * de volta agentes cujo trabalho não tem nada a ver com o que está na tela.
+   */
+  private forgetWorkers(): void {
+    this.workers.clear();
   }
 
   private async persistOrchestration(patch: {
@@ -3696,6 +4077,37 @@ export function normalizeAgentName(value: string): string {
  */
 const DELEGATION_INLINE_WAIT_MS = 30 * 1000;
 
+/**
+ * Um worker com quem ainda dá para conversar.
+ *
+ * A `consoleId` é a identidade que a interface conhece e não muda nunca;
+ * `sessionId` é a sessão viva do adaptador, que troca a cada retomada. Separar
+ * as duas é o que permite falar com o worker depois de ele ter entregado sem a
+ * aba dele fechar embaixo de quem estava lendo.
+ */
+interface WorkerHandle {
+  readonly consoleId: string;
+  readonly adapterId: string;
+  /** Agent Profile, para devolver a vaga ao mesmo dono que a reservou. */
+  readonly profileId: string;
+  /** Conta do provedor, para o gasto cair onde a cobrança acontece. */
+  readonly providerProfileId: string;
+  readonly displayName: string;
+  /** Teto de sessões do perfil, para a retomada respeitar o mesmo limite. */
+  readonly maxSessions: number;
+  /** Como esta conversa foi aberta; é o molde de qualquer retomada. */
+  readonly start: StartAgentInput;
+  readonly autonomy: Autonomy;
+  sessionId: string;
+  /** Chave que o CLI reconhece para continuar a mesma conversa. */
+  resumeId: string | null;
+  /** Há um turno rodando agora; o que chegar espera a vez. */
+  live: boolean;
+  inbox: string[];
+  messages: WorkerMessage[];
+  steps: AgentStep[];
+}
+
 /** Delegação em andamento, esperando quem venha buscar. */
 interface PendingDelegation {
   readonly ticket: string;
@@ -3757,6 +4169,27 @@ const MAX_DELEGATIONS_PER_RUN = 12;
  * disto, o texto inteiro vai para arquivo e volta um resumo com o caminho.
  */
 const MAX_REPORT_CHARS = 24_000;
+
+/**
+ * Quantas vezes um worker é retomado depois de uma queda temporária.
+ *
+ * Uma só: erro de rede quase sempre passa na tentativa seguinte, e insistir
+ * além disso esconde um problema de verdade atrás de espera. Só vale para falha
+ * classificada como transitória — cota e login errado não melhoram com repetição.
+ */
+const WORKER_RETRIES = 1;
+
+/** Respiro antes de retomar: reconectar no mesmo instante costuma cair igual. */
+const WORKER_RETRY_DELAY_MS = 3_000;
+
+/**
+ * O que se diz ao worker ao retomar.
+ *
+ * Ele recebe isto com a conversa inteira ainda no CLI — a tarefa original está
+ * lá, e repeti-la faria o agente começar de novo o que já tinha metade feito.
+ */
+const RESUME_AFTER_TRANSIENT =
+  'The connection to the provider dropped mid-response. Continue from exactly where you stopped — do not restart the task, and do not redo work you already finished.';
 
 /** Um agente delegável como o orquestrador o lê no prompt. */
 export interface DelegationRoster {

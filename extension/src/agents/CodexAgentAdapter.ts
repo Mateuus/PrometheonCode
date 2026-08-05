@@ -446,6 +446,7 @@ function translateItem(raw: unknown, completed: boolean): readonly AgentEvent[] 
         .map((change) => (isRecord(change) ? text(change['path']) : null))
         .filter((path): path is string => path !== null);
       if (!completed) {
+        const edit = editFromChanges(changes);
         return [
           {
             type: 'tool.requested',
@@ -453,6 +454,7 @@ function translateItem(raw: unknown, completed: boolean): readonly AgentEvent[] 
             tool: 'Edit',
             title: paths[0] ?? 'files',
             ...(paths.length > 1 ? { detail: `${String(paths.length)} files` } : {}),
+            ...(edit === null ? {} : { edit }),
           },
         ];
       }
@@ -505,6 +507,64 @@ function readErrorMessage(raw: unknown): string | null {
     return text(raw['message']);
   }
   return text(raw);
+}
+
+/**
+ * O que a edição tira e põe, a partir do que o Codex reporta em `file_change`.
+ *
+ * Ele pode descrever a mudança de duas formas, e as duas são aceitas aqui: um
+ * diff unificado — o formato do `git diff`, com `-` e `+` no começo da linha —
+ * ou o conteúdo antigo e o novo em campos separados. Nenhuma das duas veio a
+ * ser observada numa execução real: o CLI instalado aqui não roda com esta
+ * conta, e escrever só para o formato que eu adivinhasse seria pior do que
+ * aceitar os dois. Quando nada disso vier, o passo continua como antes, sem
+ * diff — degradar para o comportamento de ontem é aceitável; inventar um diff
+ * errado não é.
+ */
+function editFromChanges(changes: readonly unknown[]): {
+  removed?: string;
+  added?: string;
+} | null {
+  const removed: string[] = [];
+  const added: string[] = [];
+
+  for (const change of changes) {
+    if (!isRecord(change)) {
+      continue;
+    }
+    const unified = text(change['diff']) ?? text(change['unified_diff']) ?? text(change['patch']);
+    if (unified !== null) {
+      for (const line of unified.split('\n')) {
+        // `---` e `+++` são cabeçalho de arquivo, não conteúdo alterado.
+        if (line.startsWith('---') || line.startsWith('+++')) {
+          continue;
+        }
+        if (line.startsWith('-')) {
+          removed.push(line.slice(1));
+        } else if (line.startsWith('+')) {
+          added.push(line.slice(1));
+        }
+      }
+      continue;
+    }
+
+    const before = text(change['old_content']) ?? text(change['before']);
+    const after = text(change['new_content']) ?? text(change['after']) ?? text(change['content']);
+    if (before !== null) {
+      removed.push(before);
+    }
+    if (after !== null) {
+      added.push(after);
+    }
+  }
+
+  if (removed.length === 0 && added.length === 0) {
+    return null;
+  }
+  return {
+    ...(removed.length === 0 ? {} : { removed: removed.join('\n') }),
+    ...(added.length === 0 ? {} : { added: added.join('\n') }),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

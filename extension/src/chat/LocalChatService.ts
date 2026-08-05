@@ -299,6 +299,7 @@ export class LocalChatService implements ChatService {
               tool: event.tool,
               title: event.title,
               ...(event.detail === undefined ? {} : { detail: event.detail }),
+              ...(event.edit === undefined ? {} : { edit: event.edit }),
               status: 'running',
               startedAt: Date.now(),
             };
@@ -326,6 +327,8 @@ export class LocalChatService implements ChatService {
               tool: started?.tool ?? 'Tool',
               title: started?.title ?? '',
               ...(detail === undefined ? {} : { detail }),
+              // O diff veio no início; a conclusão só confirma que terminou.
+              ...(started?.edit === undefined ? {} : { edit: started.edit }),
               ...(output === null
                 ? {}
                 : {

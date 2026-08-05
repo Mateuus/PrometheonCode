@@ -154,6 +154,32 @@ export interface ActiveAgentSummary {
    * quer o relatório, não o registro de cada ferramenta.
    */
   readonly steps?: readonly AgentStep[];
+  /**
+   * O que foi dito diretamente a este worker, e o que ele respondeu.
+   *
+   * A tela dele não é só um console de ferramentas: quem abre a aba de um
+   * worker quer poder corrigir o rumo sem passar recado pelo orquestrador. As
+   * falas ficam aqui, fora da conversa principal — o orquestrador recebe o
+   * relatório quando o worker entrega, e não cada troca do caminho.
+   */
+  readonly messages?: readonly WorkerMessage[];
+  /**
+   * O worker aceita mensagem agora.
+   *
+   * Falso para o agente principal (quem fala com ele é o composer normal) e
+   * para worker cuja conversa não pode ser retomada — sem isso a interface
+   * ofereceria um campo de texto que engole o que a pessoa escreve.
+   */
+  readonly talkable?: boolean;
+  /** Escrito para este worker, esperando o turno atual terminar. */
+  readonly queued?: readonly string[];
+}
+
+/** Uma fala da conversa direta com um worker. */
+export interface WorkerMessage {
+  readonly role: 'user' | 'agent';
+  readonly text: string;
+  readonly at: number;
 }
 
 export type HubState = 'local-only' | 'disconnected' | 'connecting' | 'connected' | 'error';

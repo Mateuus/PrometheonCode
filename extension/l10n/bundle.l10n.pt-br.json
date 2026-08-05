@@ -484,6 +484,10 @@
   "These settings are stored in .prometheon/prometheon.yaml, which does not exist yet.": "Esta configuração fica em .prometheon/prometheon.yaml, que ainda não existe.",
   "Thinking": "Pensando",
   "This agent has not run any tool yet.": "Este agente ainda não executou nenhuma ferramenta.",
+  "Message {0}…  (Enter to send)": "Falar com {0}…  (Enter para enviar)",
+  "Waiting for the current turn to end": "Esperando o turno atual terminar",
+  "Images only go to the main conversation.": "Imagens só vão para a conversa principal.",
+  "This agent is no longer available to talk to.": "Não dá mais para falar com este agente.",
   "This deletes local conversations, provider and agent profiles, workspace preferences and the Hub credentials stored on this machine. It cannot be undone.": "Isso apaga as conversas locais, os perfis de provedor e de agente, as preferências do workspace e as credenciais do Hub guardadas nesta máquina. Não há como desfazer.",
   "This file lives at the root of the project and usually goes into Git. Keep tokens out of it: put the value in an environment variable and reference it by name, like ${GITHUB_TOKEN}.": "Este arquivo fica na raiz do projeto e costuma ir para o Git. Mantenha tokens fora dele: coloque o valor numa variável de ambiente e cite-a pelo nome, como ${GITHUB_TOKEN}.",
   "This machine": "Nesta máquina",
@@ -551,5 +555,6 @@
   "Discard this message": "Descartar esta mensagem",
   "Send now": "Enviar agora",
   "Interrupt the current run and send what is waiting": "Interromper o trabalho atual e enviar o que está esperando",
-  "Running as {0}, not {1}: the agent profile or a loaded skill caps it there.": "Rodando como {0}, e não {1}: o perfil do agente ou uma skill carregada limita aí."
+  "Running as {0}, not {1}: the agent profile or a loaded skill caps it there.": "Rodando como {0}, e não {1}: o perfil do agente ou uma skill carregada limita aí.",
+  "{0} removed, {1} added": "{0} removidas, {1} adicionadas"
 }

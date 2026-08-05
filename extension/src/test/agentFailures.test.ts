@@ -31,6 +31,32 @@ suite('describeAgentFailure', () => {
     assert.match(failure.advice, /one more time/);
   });
 
+  test('conexão que cai no meio da resposta autoriza retomar', () => {
+    // O caso que custou dez minutos de trabalho de um worker: o CLI relatou
+    // "Connection closed mid-response" e morreu com código 1. Sem casar aqui,
+    // a falha virava "unknown" e o orquestrador desistia de um erro que passa
+    // sozinho na tentativa seguinte.
+    const failure = describeAgentFailure(
+      'API Error: Connection closed mid-response. The response above may be incomplete.',
+    );
+    assert.equal(failure.kind, 'transient');
+    assert.match(failure.advice, /one more time/);
+  });
+
+  test('erro de servidor do provedor é passageiro, não desconhecido', () => {
+    assert.equal(describeAgentFailure('server_error').kind, 'transient');
+    assert.equal(describeAgentFailure('Connection error.').kind, 'transient');
+  });
+
+  test('cota continua vencendo o padrão de erro de API', () => {
+    // "API Error" agora casa com transitório; um limite de uso que venha
+    // embrulhado nele não pode virar "tente de novo".
+    assert.equal(
+      describeAgentFailure('API Error: usage limit reached for this account').kind,
+      'quota',
+    );
+  });
+
   test('mensagem vazia é falha, e diz que não houve motivo', () => {
     const failure = describeAgentFailure('   ');
     assert.equal(failure.kind, 'unknown');

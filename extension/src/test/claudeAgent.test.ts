@@ -221,6 +221,56 @@ suite('Claude Code — tradução do stream', () => {
   });
 
   // -------------------------------------------------------------------------
+  // O erro que o CLI conta no stdout e some do stderr
+  // -------------------------------------------------------------------------
+
+  test('mensagem de erro de API é reconhecida pela marca do CLI', () => {
+    // Linha real de um worker que caiu depois de dez minutos: o CLI escreve
+    // isto no stdout e termina com código 1 sem uma palavra em stderr. É a
+    // única pista de que valia retomar em vez de refazer.
+    const { apiError } = translateLine(
+      JSON.stringify({
+        type: 'assistant',
+        isApiErrorMessage: true,
+        error: 'server_error',
+        message: {
+          model: '<synthetic>',
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'API Error: Connection closed mid-response. The response above may be incomplete.' },
+          ],
+        },
+      }),
+    );
+
+    assert.match(String(apiError), /Connection closed mid-response/);
+  });
+
+  test('o texto vale como pista mesmo sem a marca', () => {
+    // O nome do campo é do CLI e pode mudar de versão; o prefixo do texto não
+    // custa nada a mais e cobre a versão que ainda não saiu.
+    const { apiError } = translateLine(
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'API Error: 529 overloaded' }] },
+      }),
+    );
+
+    assert.match(String(apiError), /529 overloaded/);
+  });
+
+  test('resposta normal não é confundida com erro de API', () => {
+    const { apiError } = translateLine(
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Terminei a tarefa.' }] },
+      }),
+    );
+
+    assert.equal(apiError, null);
+  });
+
+  // -------------------------------------------------------------------------
   // O que importa de verdade: não quebrar com o inesperado
   // -------------------------------------------------------------------------
 
@@ -366,5 +416,36 @@ suite('Worker de leitura — Claude Code', () => {
       autonomy: 'auto',
     });
     assert.equal(args.includes('--disallowedTools'), false);
+  });
+});
+
+suite('Claude Code — diff da edição', () => {
+  const toolUse = (input: Record<string, unknown>): string =>
+    JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: 't1', name: 'Edit', input }] },
+    });
+
+  test('Edit traz os dois lados da mudança', () => {
+    // "Arquivo atualizado com sucesso" não deixa ninguém revisar nada.
+    const { events } = translateLine(
+      toolUse({ file_path: 'a.ts', old_string: 'const a = 1;', new_string: 'const a = 2;' }),
+    );
+    const step = events.find((event) => event.type === 'tool.requested');
+    assert.equal(step?.type === 'tool.requested' ? step.edit?.removed : null, 'const a = 1;');
+    assert.equal(step?.type === 'tool.requested' ? step.edit?.added : null, 'const a = 2;');
+  });
+
+  test('Write só tem lado adicionado: arquivo novo não removeu nada', () => {
+    const { events } = translateLine(toolUse({ file_path: 'novo.ts', content: 'export {};' }));
+    const step = events.find((event) => event.type === 'tool.requested');
+    assert.equal(step?.type === 'tool.requested' ? step.edit?.added : null, 'export {};');
+    assert.equal(step?.type === 'tool.requested' ? step.edit?.removed : undefined, undefined);
+  });
+
+  test('ferramenta que não escreve não tem diff', () => {
+    const { events } = translateLine(toolUse({ command: 'npm test' }));
+    const step = events.find((event) => event.type === 'tool.requested');
+    assert.equal(step?.type === 'tool.requested' ? step.edit : null, undefined);
   });
 });

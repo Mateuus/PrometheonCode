@@ -103,6 +103,14 @@ export type AgentEvent =
       readonly tool: string;
       readonly title: string;
       readonly detail?: string;
+      /**
+       * O que esta edição tira e põe no arquivo.
+       *
+       * "Arquivo atualizado com sucesso" não deixa ninguém revisar nada: quem
+       * lê a conversa precisa ver o que mudou, na hora, sem abrir o arquivo e
+       * comparar de memória.
+       */
+      readonly edit?: { readonly removed?: string; readonly added?: string };
     }
   /** Ferramenta terminou. `detail` substitui o que veio no início, quando dado. */
   | {
