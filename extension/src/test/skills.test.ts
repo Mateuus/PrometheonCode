@@ -10,6 +10,7 @@ import {
 } from '../skills/frontmatter';
 import { buildSkillIndex, effectiveAutonomy, selectSkills } from '../skills/SkillIndexBuilder';
 import { prunedMarker, resolveInside } from '../skills/SkillLoader';
+import { ceilingOf } from '../skills/SkillRegistry';
 import type { AgentProfile, CustomAgentRole, SkillSummary } from '../core/types';
 
 function skill(overrides: Partial<SkillSummary> = {}): SkillSummary {
@@ -256,7 +257,7 @@ suite('Skills', () => {
   test('uma skill nunca amplia a autonomia do agente — só a restringe', () => {
     const bypass = profile({ autonomyMode: 'bypass-temporary' });
 
-    assert.equal(effectiveAutonomy(bypass, [skill()]), 'auto');
+    assert.equal(effectiveAutonomy(bypass, [skill({ autonomyCeiling: 'auto' })]), 'auto');
     assert.equal(effectiveAutonomy(bypass, [skill({ autonomyCeiling: 'manual' })]), 'manual');
     assert.equal(
       effectiveAutonomy(profile({ autonomyMode: 'manual' }), [
@@ -264,6 +265,37 @@ suite('Skills', () => {
       ]),
       'manual',
       'o teto da skill não promove o agente',
+    );
+  });
+
+  test('skill que não declara teto não rebaixa quem está em bypass', () => {
+    // Nenhuma das 33 skills instaladas declarava `autonomy_ceiling`, e o padrão
+    // era `auto`: qualquer skill anexada derrubava para `auto` um agente posto
+    // em bypass de propósito, com confirmação, e o aviso não dizia qual delas
+    // tinha feito isso. O silêncio da skill não vale por uma opinião.
+    assert.equal(ceilingOf({}), 'bypass-temporary');
+    assert.equal(ceilingOf({ category: 'software-development' }), 'bypass-temporary');
+
+    const bypass = profile({ autonomyMode: 'bypass-temporary' });
+    assert.equal(
+      effectiveAutonomy(bypass, [skill({ autonomyCeiling: ceilingOf({}) })]),
+      'bypass-temporary',
+      'o bypass escolhido no painel precisa sobreviver a uma skill calada',
+    );
+  });
+
+  test('o que a skill declara continua valendo, e segredo vem antes de tudo', () => {
+    assert.equal(ceilingOf({ autonomy_ceiling: 'manual' }), 'manual');
+    assert.equal(ceilingOf({ autonomy_ceiling: 'auto' }), 'auto');
+    assert.equal(
+      ceilingOf({ autonomy_ceiling: 'bypass-temporary', risk: { handles_secrets: true } }),
+      'manual',
+      'skill que mexe com segredo não roda sozinha, diga o que disser o teto',
+    );
+    assert.equal(
+      ceilingOf({ autonomy_ceiling: 'coisa-inventada' }),
+      'bypass-temporary',
+      'valor fora da escala é declaração nenhuma',
     );
   });
 

@@ -103,6 +103,23 @@ export type AgentEvent =
       readonly tool: string;
       readonly title: string;
       readonly detail?: string;
+      /**
+       * O que esta edição tira e põe no arquivo.
+       *
+       * "Arquivo atualizado com sucesso" não deixa ninguém revisar nada: quem
+       * lê a conversa precisa ver o que mudou, na hora, sem abrir o arquivo e
+       * comparar de memória.
+       */
+      readonly edit?: { readonly removed?: string; readonly added?: string };
+      /**
+       * A linha de comando inteira, quando a ferramenta executa uma.
+       *
+       * O título mostra só o começo, porque precisa caber numa linha — e um
+       * `cd "F:/…/worktrees/…" && npm run x` cortado no meio esconde justamente
+       * a parte que diz o que foi rodado. O comando completo fica aqui, e a
+       * interface o mostra acima do resultado.
+       */
+      readonly command?: string;
     }
   /** Ferramenta terminou. `detail` substitui o que veio no início, quando dado. */
   | {

@@ -174,3 +174,40 @@ suite('Codex — mensagem de falha', () => {
     assert.match(failureMessage('   \n', null), /said nothing about why/);
   });
 });
+
+suite('Codex — diff da edição', () => {
+  const change = (fields: Record<string, unknown>): string =>
+    JSON.stringify({
+      type: 'item.started',
+      item: { id: 'i1', type: 'file_change', changes: [{ path: 'a.ts', ...fields }] },
+    });
+
+  const editOf = (line: string): { removed?: string; added?: string } | undefined => {
+    const step = translateCodexLine(line).events.find(
+      (event) => event.type === 'tool.requested',
+    );
+    return step?.type === 'tool.requested' ? step.edit : undefined;
+  };
+
+  test('diff unificado vira os dois lados', () => {
+    // O formato do `git diff`: `-` sai, `+` entra, e o cabeçalho de arquivo
+    // (`---`/`+++`) não é conteúdo alterado.
+    const edit = editOf(
+      change({ diff: '--- a/a.ts\n+++ b/a.ts\n@@\n-const a = 1;\n+const a = 2;\n contexto' }),
+    );
+    assert.equal(edit?.removed, 'const a = 1;');
+    assert.equal(edit?.added, 'const a = 2;');
+  });
+
+  test('conteúdo antigo e novo em campos separados também serve', () => {
+    const edit = editOf(change({ old_content: 'antes', new_content: 'depois' }));
+    assert.equal(edit?.removed, 'antes');
+    assert.equal(edit?.added, 'depois');
+  });
+
+  test('sem nenhum dos formatos, o passo segue sem diff', () => {
+    // Degradar para o comportamento anterior é aceitável; inventar um diff
+    // errado não é.
+    assert.equal(editOf(change({ kind: 'update' })), undefined);
+  });
+});

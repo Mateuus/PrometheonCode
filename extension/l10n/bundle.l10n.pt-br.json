@@ -103,6 +103,8 @@
   "{0} skills could not be read": "{0} skills não puderam ser lidas",
   "{0} today · {1} total · {2} runs": "{0} hoje · {1} no total · {2} execuções",
   "{0} tool output": "Saída da ferramenta {0}",
+  "Output": "Saída",
+  "Output ({0} lines)": "Saída ({0} linhas)",
   "{0} tool output ({1} lines)": "Saída da ferramenta {0} ({1} linhas)",
   "~{0} tokens": "~{0} tokens",
   "1 day ago": "há 1 dia",
@@ -484,6 +486,10 @@
   "These settings are stored in .prometheon/prometheon.yaml, which does not exist yet.": "Esta configuração fica em .prometheon/prometheon.yaml, que ainda não existe.",
   "Thinking": "Pensando",
   "This agent has not run any tool yet.": "Este agente ainda não executou nenhuma ferramenta.",
+  "Message {0}…  (Enter to send)": "Falar com {0}…  (Enter para enviar)",
+  "Waiting for the current turn to end": "Esperando o turno atual terminar",
+  "Images only go to the main conversation.": "Imagens só vão para a conversa principal.",
+  "This agent is no longer available to talk to.": "Não dá mais para falar com este agente.",
   "This deletes local conversations, provider and agent profiles, workspace preferences and the Hub credentials stored on this machine. It cannot be undone.": "Isso apaga as conversas locais, os perfis de provedor e de agente, as preferências do workspace e as credenciais do Hub guardadas nesta máquina. Não há como desfazer.",
   "This file lives at the root of the project and usually goes into Git. Keep tokens out of it: put the value in an environment variable and reference it by name, like ${GITHUB_TOKEN}.": "Este arquivo fica na raiz do projeto e costuma ir para o Git. Mantenha tokens fora dele: coloque o valor numa variável de ambiente e cite-a pelo nome, como ${GITHUB_TOKEN}.",
   "This machine": "Nesta máquina",
@@ -550,5 +556,8 @@
   "An agent describes how the work gets done here, so it belongs with the code. What never travels is the account behind it.": "Um agente descreve como o trabalho é feito aqui, então ele pertence ao código. O que nunca viaja é a conta por trás dele.",
   "Discard this message": "Descartar esta mensagem",
   "Send now": "Enviar agora",
-  "Interrupt the current run and send what is waiting": "Interromper o trabalho atual e enviar o que está esperando"
+  "Interrupt the current run and send what is waiting": "Interromper o trabalho atual e enviar o que está esperando",
+  "Running as {0}, not {1}: the skill \"{2}\" caps it there.": "Rodando como {0}, e não {1}: a skill \"{2}\" limita aí.",
+  "Running as {0}, not {1}: the autonomy of the agent \"{2}\" caps it there.": "Rodando como {0}, e não {1}: a autonomia do agente \"{2}\" limita aí.",
+  "{0} removed, {1} added": "{0} removidas, {1} adicionadas"
 }

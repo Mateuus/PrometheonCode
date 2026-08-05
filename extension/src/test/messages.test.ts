@@ -95,6 +95,38 @@ suite('Validação das mensagens da webview', () => {
     );
   });
 
+  test('chat.sendToAgent exige a aba de destino e um texto', () => {
+    // A mensagem escrita na tela de um worker vai para ele, e o `sessionId` é
+    // a única coisa que diz para quem. Sem ele, a fala iria parar no
+    // orquestrador — que é justamente o engano que esta rota existe para evitar.
+    assert.deepEqual(
+      parseWebviewMessage({
+        type: 'chat.sendToAgent',
+        payload: { sessionId: 'sess-1', content: '  refaz o parser  ' },
+      }),
+      { type: 'chat.sendToAgent', payload: { sessionId: 'sess-1', content: 'refaz o parser' } },
+    );
+
+    assert.equal(parseWebviewMessage({ type: 'chat.sendToAgent' }), null);
+    assert.equal(
+      parseWebviewMessage({ type: 'chat.sendToAgent', payload: { content: 'oi' } }),
+      null,
+      'sem sessão não há destino',
+    );
+    assert.equal(
+      parseWebviewMessage({ type: 'chat.sendToAgent', payload: { sessionId: 's', content: ' ' } }),
+      null,
+      'mensagem vazia não vira turno',
+    );
+    assert.equal(
+      parseWebviewMessage({
+        type: 'chat.sendToAgent',
+        payload: { sessionId: 's', content: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) },
+      }),
+      null,
+    );
+  });
+
   test('anexos: só imagem declarada, base64 válido e dentro do limite', () => {
     const parsed = parseWebviewMessage({
       type: 'chat.send',

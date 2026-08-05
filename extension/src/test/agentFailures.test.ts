@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import { describeAgentFailure } from '../agents/failures';
-import { normalizeAgentName, orchestrationInstruction } from '../core/PrometheonCore';
+import { isRunning, normalizeAgentName, orchestrationInstruction } from '../core/PrometheonCore';
 
 suite('describeAgentFailure', () => {
   test('reconhece cota esgotada e manda não repetir o mesmo agente', () => {
@@ -29,6 +29,32 @@ suite('describeAgentFailure', () => {
     const failure = describeAgentFailure('Error 529: the model is overloaded');
     assert.equal(failure.kind, 'transient');
     assert.match(failure.advice, /one more time/);
+  });
+
+  test('conexão que cai no meio da resposta autoriza retomar', () => {
+    // O caso que custou dez minutos de trabalho de um worker: o CLI relatou
+    // "Connection closed mid-response" e morreu com código 1. Sem casar aqui,
+    // a falha virava "unknown" e o orquestrador desistia de um erro que passa
+    // sozinho na tentativa seguinte.
+    const failure = describeAgentFailure(
+      'API Error: Connection closed mid-response. The response above may be incomplete.',
+    );
+    assert.equal(failure.kind, 'transient');
+    assert.match(failure.advice, /one more time/);
+  });
+
+  test('erro de servidor do provedor é passageiro, não desconhecido', () => {
+    assert.equal(describeAgentFailure('server_error').kind, 'transient');
+    assert.equal(describeAgentFailure('Connection error.').kind, 'transient');
+  });
+
+  test('cota continua vencendo o padrão de erro de API', () => {
+    // "API Error" agora casa com transitório; um limite de uso que venha
+    // embrulhado nele não pode virar "tente de novo".
+    assert.equal(
+      describeAgentFailure('API Error: usage limit reached for this account').kind,
+      'quota',
+    );
   });
 
   test('mensagem vazia é falha, e diz que não houve motivo', () => {
@@ -98,5 +124,20 @@ suite('Contrato assíncrono da delegação', () => {
     assert.match(text, /Delegating never blocks/);
     assert.match(text, /Never sleep, poll, or run shell commands to wait/);
     assert.match(text, /come back to you automatically/);
+  });
+});
+
+suite('Quem continua na lista de agentes ativos', () => {
+  test('só os estados de execução contam como trabalhando', () => {
+    // O worker que ainda roda precisa sobreviver ao fim do turno de quem o
+    // delegou: delegar deixou de bloquear, então o fim do run principal não é
+    // mais o fim do trabalho. Tirá-lo da lista esconderia justamente o agente
+    // que a pessoa quer acompanhar enquanto espera.
+    for (const status of ['starting', 'working', 'waiting', 'blocked'] as const) {
+      assert.equal(isRunning(status), true, status);
+    }
+    for (const status of ['idle', 'completed', 'failed', 'stopped'] as const) {
+      assert.equal(isRunning(status), false, status);
+    }
   });
 });

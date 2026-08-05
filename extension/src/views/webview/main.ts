@@ -58,6 +58,7 @@ import {
   WORK_MODE_DESCRIPTIONS,
   WORK_MODE_LABELS,
   type ActiveAgentSummary,
+  type WorkerMessage,
   type AgentAutonomyMode,
   type AgentProfileSummary,
   type AgentRole,
@@ -419,6 +420,16 @@ class OptionMenu {
     if (disabled) {
       this.close();
     }
+  }
+
+  /**
+   * Escreve no pill um rótulo que não está na lista de opções.
+   *
+   * Serve ao caso em que o botão deixa de ser um seletor e passa a informar:
+   * com a aba de um worker aberta, ele mostra para quem a mensagem vai.
+   */
+  setLabel(label: string): void {
+    this.labelSlot.textContent = label;
   }
 
   /** Um menu descartado junto com a seção não pode continuar registrado. */
@@ -6184,6 +6195,136 @@ function submitAnswers(): void {
  * Item de timeline de um passo do agente. Tudo entra por `textContent`: o bloco
  * de saída é texto monoespaçado, sem destaque de sintaxe e sem `innerHTML`.
  */
+/**
+ * Passo de edição, com o diff dobrado.
+ *
+ * Vermelho o que saiu, verde o que entrou — a convenção do git, que quem lê
+ * código já sabe ler sem legenda. Fica fechado por padrão: uma conversa com
+ * cinco edições abertas vira um arquivo inteiro rolando na tela.
+ */
+function editStep(
+  step: AgentStep,
+  dot: HTMLElement,
+  tool: HTMLElement,
+  target: HTMLElement,
+  detail: HTMLElement,
+): HTMLElement {
+  const removed = step.edit?.removed ?? '';
+  const added = step.edit?.added ?? '';
+
+  const item = document.createElement('details');
+  item.className = `step step-tool-item status-${step.status}`;
+
+  const summary = document.createElement('summary');
+  summary.className = 'step-row';
+  const caret = document.createElement('span');
+  caret.className = 'step-caret';
+  caret.append(...nodes(icon('chevronRight')));
+  summary.append(dot, tool, target, detail, caret);
+
+  const counts = document.createElement('div');
+  counts.className = 'step-output-caption';
+  const out = removed === '' ? 0 : removed.split('\n').length;
+  const inn = added === '' ? 0 : added.split('\n').length;
+  counts.textContent = sf('{0} removed, {1} added', out, inn);
+
+  const diff = document.createElement('pre');
+  diff.className = 'step-diff';
+  for (const [text, kind] of [
+    [removed, 'del'],
+    [added, 'ins'],
+  ] as const) {
+    if (text === '') {
+      continue;
+    }
+    for (const line of text.split('\n')) {
+      const row = document.createElement('span');
+      row.className = `diff-line diff-${kind}`;
+      // O sinal é conteúdo, não enfeite: copiar o bloco tem de sair como um
+      // patch legível.
+      row.textContent = `${kind === 'del' ? '-' : '+'} ${line}`;
+      diff.append(row);
+    }
+  }
+
+  item.append(summary, counts, diff);
+  return item;
+}
+
+/**
+ * Passo de comando: o comando num bloco, o resultado em outro logo abaixo.
+ *
+ * É a forma do Claude Code, e ela existe por um motivo prático: comando e
+ * saída são duas coisas para ler, não uma linha resumida. Enquanto roda, o
+ * bloco do comando já está na tela — quem acompanha vê o que está sendo
+ * executado antes de existir resultado nenhum.
+ */
+function commandStep(
+  step: AgentStep,
+  dot: HTMLElement,
+  tool: HTMLElement,
+  detail: HTMLElement,
+): HTMLElement {
+  const item = document.createElement('div');
+  item.className = `step step-command status-${step.status}`;
+
+  const head = document.createElement('div');
+  head.className = 'step-row';
+  head.append(dot, tool, detail);
+
+  const command = document.createElement('pre');
+  command.className = 'step-command-line';
+  command.textContent = step.command ?? '';
+
+  item.append(head, command);
+
+  const output = step.output ?? '';
+  if (output === '') {
+    // Sem saída ainda: o comando está rodando, ou terminou calado. Um bloco
+    // vazio embaixo pareceria resultado, e não a falta dele.
+    return item;
+  }
+
+  const lines = step.outputLines ?? 0;
+  const caption = document.createElement('div');
+  caption.className = 'step-output-caption';
+  caption.textContent = lines > 0 ? sf('Output ({0} lines)', lines) : s('Output');
+
+  const body = document.createElement('pre');
+  body.className = 'step-output step-command-output';
+  body.textContent = output;
+  item.append(caption, body);
+
+  if (step.truncated === true) {
+    item.append(truncationNote(step));
+  }
+  return item;
+}
+
+/** O aviso de corte, com o botão que abre a cópia integral quando ela existe. */
+function truncationNote(step: AgentStep): HTMLElement {
+  const note = document.createElement('div');
+  note.className = 'step-truncated';
+  note.textContent = sf('Showing the first {0} KB.', Math.round(MAX_STEP_OUTPUT_CHARS / 1024));
+
+  // O botão só aparece quando a cópia integral existe de fato. Oferecer uma
+  // aba que abriria vazia seria pior do que não oferecer nada.
+  if (step.fullOutput === true) {
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'link';
+    open.textContent = s('Open full output');
+    open.addEventListener('click', () =>
+      post({
+        type: 'chat.openStepOutput',
+        payload: { stepId: step.id, label: `${step.tool}-${step.title}` },
+      }),
+    );
+    note.append(' ', open);
+  }
+  return note;
+}
+
 function renderStep(step: AgentStep): HTMLElement {
   const dot = document.createElement('span');
   dot.className = 'step-dot';
@@ -6212,7 +6353,24 @@ function renderStep(step: AgentStep): HTMLElement {
   // do detalhe vem do agente e passa intacto.
   detail.textContent = step.kind === 'question' ? s(step.detail ?? '') : (step.detail ?? '');
 
+  // A edição tem prioridade sobre a saída da ferramenta: "arquivo atualizado
+  // com sucesso" não deixa ninguém revisar nada, e o que mudou é justamente o
+  // que a pessoa quer ver sem sair da conversa.
+  if (step.edit !== undefined) {
+    return editStep(step, dot, tool, target, detail);
+  }
+
   const hasOutput = step.output !== undefined && step.output !== '';
+  const hasCommand = step.command !== undefined && step.command !== '';
+
+  // Comando executado: o que foi rodado em cima, o que voltou embaixo. O
+  // título corta na primeira linha porque precisa caber numa, e um
+  // `cd "…/worktrees/…" && npm run x` truncado esconde justamente o que
+  // interessa — ver o comando inteiro não pode depender de abrir o passo.
+  if (hasCommand) {
+    return commandStep(step, dot, tool, detail);
+  }
+
   if (!hasOutput) {
     const item = document.createElement('div');
     item.className = `step step-tool-item step-row status-${step.status}`;
@@ -6247,29 +6405,7 @@ function renderStep(step: AgentStep): HTMLElement {
   item.append(output);
 
   if (step.truncated === true) {
-    const note = document.createElement('div');
-    note.className = 'step-truncated';
-    note.textContent = sf(
-      'Showing the first {0} KB.',
-      Math.round(MAX_STEP_OUTPUT_CHARS / 1024),
-    );
-
-    // O botão só aparece quando a cópia integral existe de fato. Oferecer uma
-    // aba que abriria vazia seria pior do que não oferecer nada.
-    if (step.fullOutput === true) {
-      const open = document.createElement('button');
-      open.type = 'button';
-      open.className = 'link';
-      open.textContent = s('Open full output');
-      open.addEventListener('click', () =>
-        post({
-          type: 'chat.openStepOutput',
-          payload: { stepId: step.id, label: `${step.tool}-${step.title}` },
-        }),
-      );
-      note.append(' ', open);
-    }
-    item.append(note);
+    item.append(truncationNote(step));
   }
   return item;
 }
@@ -6371,6 +6507,7 @@ function openAgentConsole(sessionId: string | null): void {
   consoleSessionId = sessionId;
   renderAgentViews();
   renderAgentConsole();
+  renderTalkTarget();
   applyConsoleVisibility();
   scrollToEnd();
 }
@@ -6433,6 +6570,36 @@ function renderAgentViews(): void {
   dom.agentViews.replaceChildren(main, current);
 }
 
+/**
+ * O worker para quem o composer está falando agora, se houver.
+ *
+ * Só existe com a aba de um worker aberta e a conversa dele viva. Sem os dois,
+ * o composer volta ao seu destino de sempre: o agente principal.
+ */
+function talkTarget(): ActiveAgentSummary | null {
+  const agent = consoleAgent();
+  if (agent === null || agent.role === 'main' || agent.talkable !== true) {
+    return null;
+  }
+  return agent;
+}
+
+/** Diz no composer com quem se está falando: o worker aberto, ou o principal. */
+function renderTalkTarget(): void {
+  const target = talkTarget();
+  dom.input.placeholder =
+    target === null
+      ? s('Ask Prometheon…  (Enter to send · paste to attach an image)')
+      : sf('Message {0}…  (Enter to send)', target.displayName);
+  dom.composerCard.classList.toggle('talking-to-agent', target !== null);
+  // Trocar o agente principal enquanto se fala com um worker mudaria quem
+  // responde na outra aba, sem nada na tela ligando uma coisa à outra.
+  menus.mainAgent.setDisabled(target !== null || state?.chatType === 'web');
+  if (target !== null) {
+    menus.mainAgent.setLabel(target.displayName);
+  }
+}
+
 /** Passos de uma sessão, na ordem em que aconteceram. */
 function stepsOfSession(sessionId: string): readonly AgentStep[] {
   // Worker traz os passos consigo: o trabalho dele nunca entrou na conversa do
@@ -6479,16 +6646,74 @@ function renderAgentConsole(): void {
   const steps = stepsOfSession(agent.sessionId);
   const list = document.createElement('div');
   list.className = 'steps';
-  if (steps.length === 0) {
+  if (steps.length === 0 && (agent.messages ?? []).length === 0) {
     const empty = document.createElement('p');
     empty.className = 'settings-empty';
     empty.textContent = s('This agent has not run any tool yet.');
     list.append(empty);
   } else {
-    list.append(...steps.map(renderStep));
+    // Passos e falas numa linha do tempo só, na ordem em que aconteceram: o
+    // pedido feito no meio do trabalho só faz sentido lido entre o que veio
+    // antes e o que veio depois dele.
+    const timeline: { at: number; node: HTMLElement }[] = [
+      ...steps.map((step) => ({ at: step.startedAt, node: renderStep(step) })),
+      ...(agent.messages ?? []).map((message) => ({
+        at: message.at,
+        node: renderWorkerMessage(message),
+      })),
+    ];
+    timeline.sort((left, right) => left.at - right.at);
+    list.append(...timeline.map((item) => item.node));
   }
 
-  dom.agentConsole.replaceChildren(header, list);
+  const parts: HTMLElement[] = [header, list];
+
+  // O que já foi escrito e ainda não teve vez. Sem isto a mensagem parece
+  // perdida: o worker segue no turno anterior e nada na tela diz por quê.
+  const queued = agent.queued ?? [];
+  if (queued.length > 0) {
+    const waiting = document.createElement('ul');
+    waiting.className = 'queued agent-queued';
+    waiting.append(
+      ...queued.map((content) => {
+        const item = document.createElement('li');
+        item.className = 'queued-item';
+        const text = document.createElement('span');
+        text.className = 'queued-text';
+        text.textContent = content;
+        text.title = content;
+        const note = document.createElement('span');
+        note.className = 'queued-note';
+        note.textContent = s('Waiting for the current turn to end');
+        item.append(text, note);
+        return item;
+      }),
+    );
+    parts.push(waiting);
+  }
+
+  dom.agentConsole.replaceChildren(...parts);
+}
+
+/** Uma fala da conversa direta com o worker: a sua, ou a resposta dele. */
+function renderWorkerMessage(message: WorkerMessage): HTMLElement {
+  const item = document.createElement('article');
+  item.className = `message message-${message.role === 'user' ? 'user' : 'agent'} worker-message`;
+
+  const header = document.createElement('header');
+  const author = document.createElement('span');
+  author.className = 'author';
+  author.textContent = message.role === 'user' ? s('You') : (consoleAgent()?.displayName ?? '');
+  const time = document.createElement('time');
+  time.textContent = formatTime(message.at);
+  header.append(author, time);
+
+  const body = document.createElement('div');
+  body.className = 'content';
+  body.append(renderMarkdown(message.text));
+
+  item.append(header, body);
+  return item;
 }
 
 // ---------- Mensagens ----------
@@ -6868,7 +7093,9 @@ function render(next: PrometheonViewState): void {
   // isso é o Hub, e um seletor que não muda nada mentiria sobre o que faz.
   menus.workMode.setDisabled(isWeb);
   menus.autonomy.setDisabled(isWeb);
-  menus.mainAgent.setDisabled(isWeb);
+  // Depois do `update`, que repõe o rótulo do agente principal: com um worker
+  // aberto, quem manda no pill é para quem a mensagem vai.
+  renderTalkTarget();
   // Limpar apaga só a conversa local; no Web isso exigiria apagar no Hub.
   dom.clearChat.disabled = isWeb || next.messages.length === 0;
   dom.stopRun.hidden = !next.busy;
@@ -7003,6 +7230,28 @@ function send(): void {
     return;
   }
   if (content === '' && drafts.length === 0) {
+    return;
+  }
+
+  // Com a aba de um worker aberta, o que se escreve vai para ele. Mandar para
+  // o orquestrador o que foi escrito olhando a tela de outro agente é o tipo de
+  // engano que só aparece depois, quando a resposta não tem nada a ver.
+  const target = talkTarget();
+  if (target !== null) {
+    if (content === '') {
+      return;
+    }
+    if (drafts.length > 0) {
+      showNotification(s('Images only go to the main conversation.'), 'warning');
+    }
+    if (isListening()) {
+      stopDictation();
+    }
+    dictationAnchor = null;
+    post({ type: 'chat.sendToAgent', payload: { sessionId: target.sessionId, content } });
+    dom.input.value = '';
+    autoGrow();
+    persistUi();
     return;
   }
 

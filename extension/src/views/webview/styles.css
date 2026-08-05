@@ -1050,6 +1050,36 @@ details.step[open] > summary .step-caret {
   }
 }
 
+/* Diff de uma edição: a convenção do git, que quem lê código já sabe ler sem
+   legenda. As cores saem do tema, para pertencerem à janela em que estão. */
+.step-diff {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 6px 0;
+  overflow-x: auto;
+  border-radius: var(--am-radius);
+  background: var(--vscode-textCodeBlock-background, var(--prom-surface-input));
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.86em;
+  line-height: 1.45;
+}
+
+.diff-line {
+  padding: 0 10px;
+  white-space: pre;
+}
+
+.diff-del {
+  color: var(--vscode-gitDecoration-deletedResourceForeground, var(--vscode-errorForeground));
+  background: var(--vscode-diffEditor-removedLineBackground, transparent);
+}
+
+.diff-ins {
+  color: var(--vscode-gitDecoration-addedResourceForeground, var(--vscode-terminal-ansiGreen));
+  background: var(--vscode-diffEditor-insertedLineBackground, transparent);
+}
+
 .step-output {
   margin: 3px 0 6px;
   padding: 6px 8px;
@@ -1077,6 +1107,33 @@ details.step[open] > summary .step-caret {
   margin: 2px 0 4px;
   color: var(--prom-text-dim);
   font-size: 0.85em;
+}
+
+/* Comando executado: o comando num bloco, o resultado em outro. Os dois ficam
+   abertos — comando e saída são duas coisas para ler, e esconder uma delas
+   atrás de um clique é o que fazia a timeline virar uma lista de nomes. */
+.step-command {
+  margin: 4px 0;
+}
+
+.step-command-line {
+  margin: 3px 0 0;
+  padding: 6px 8px;
+  border-radius: var(--am-radius);
+  background: var(--prom-surface);
+  border: 1px solid var(--prom-border);
+  border-left: 2px solid var(--prom-accent-soft);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.94em;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.step-command-output {
+  margin-top: 0;
 }
 
 .step-truncated .link {
@@ -1240,6 +1297,30 @@ details.step[open] > summary .step-caret {
   flex: 1 1 100%;
   color: var(--prom-text-dim);
   font-size: 0.9em;
+}
+
+/* Fala da conversa direta, no meio da timeline de passos. Recuada dos passos
+   para que a linha do tempo continue legível como uma coisa só. */
+.worker-message {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--prom-border);
+  background: var(--prom-surface-raised, transparent);
+}
+
+.worker-message.message-user {
+  border-color: var(--prom-accent-soft);
+}
+
+.agent-queued {
+  margin-top: 8px;
+}
+
+.queued-note {
+  color: var(--prom-text-dim);
+  font-size: 0.85em;
+  white-space: nowrap;
 }
 
 .agent-role,
@@ -1478,6 +1559,13 @@ details.step[open] > summary .step-caret {
 .composer-card.dropping {
   border-color: var(--prom-accent);
   border-style: dashed;
+}
+
+/* Falando com um worker, e não com o orquestrador. A borda muda de dono para
+   que a diferença seja vista antes de a mensagem sair, e não depois. */
+.composer-card.talking-to-agent {
+  border-color: var(--prom-activity);
+  box-shadow: inset 3px 0 0 var(--prom-activity);
 }
 
 textarea {
