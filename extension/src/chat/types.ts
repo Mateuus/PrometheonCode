@@ -70,6 +70,8 @@ export interface AgentStep {
   readonly output?: string;
   /** O que a edição tirou e pôs, para a conversa mostrar o diff. */
   readonly edit?: { readonly removed?: string; readonly added?: string };
+  /** A linha de comando inteira, quando a ferramenta executa uma. */
+  readonly command?: string;
   /** A saída foi cortada em `MAX_STEP_OUTPUT_CHARS`; a interface avisa. */
   readonly truncated?: boolean;
   /** Linhas da saída **inteira**, contadas antes do corte. */

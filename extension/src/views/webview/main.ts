@@ -6251,6 +6251,80 @@ function editStep(
   return item;
 }
 
+/**
+ * Passo de comando: o comando num bloco, o resultado em outro logo abaixo.
+ *
+ * É a forma do Claude Code, e ela existe por um motivo prático: comando e
+ * saída são duas coisas para ler, não uma linha resumida. Enquanto roda, o
+ * bloco do comando já está na tela — quem acompanha vê o que está sendo
+ * executado antes de existir resultado nenhum.
+ */
+function commandStep(
+  step: AgentStep,
+  dot: HTMLElement,
+  tool: HTMLElement,
+  detail: HTMLElement,
+): HTMLElement {
+  const item = document.createElement('div');
+  item.className = `step step-command status-${step.status}`;
+
+  const head = document.createElement('div');
+  head.className = 'step-row';
+  head.append(dot, tool, detail);
+
+  const command = document.createElement('pre');
+  command.className = 'step-command-line';
+  command.textContent = step.command ?? '';
+
+  item.append(head, command);
+
+  const output = step.output ?? '';
+  if (output === '') {
+    // Sem saída ainda: o comando está rodando, ou terminou calado. Um bloco
+    // vazio embaixo pareceria resultado, e não a falta dele.
+    return item;
+  }
+
+  const lines = step.outputLines ?? 0;
+  const caption = document.createElement('div');
+  caption.className = 'step-output-caption';
+  caption.textContent = lines > 0 ? sf('Output ({0} lines)', lines) : s('Output');
+
+  const body = document.createElement('pre');
+  body.className = 'step-output step-command-output';
+  body.textContent = output;
+  item.append(caption, body);
+
+  if (step.truncated === true) {
+    item.append(truncationNote(step));
+  }
+  return item;
+}
+
+/** O aviso de corte, com o botão que abre a cópia integral quando ela existe. */
+function truncationNote(step: AgentStep): HTMLElement {
+  const note = document.createElement('div');
+  note.className = 'step-truncated';
+  note.textContent = sf('Showing the first {0} KB.', Math.round(MAX_STEP_OUTPUT_CHARS / 1024));
+
+  // O botão só aparece quando a cópia integral existe de fato. Oferecer uma
+  // aba que abriria vazia seria pior do que não oferecer nada.
+  if (step.fullOutput === true) {
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'link';
+    open.textContent = s('Open full output');
+    open.addEventListener('click', () =>
+      post({
+        type: 'chat.openStepOutput',
+        payload: { stepId: step.id, label: `${step.tool}-${step.title}` },
+      }),
+    );
+    note.append(' ', open);
+  }
+  return note;
+}
+
 function renderStep(step: AgentStep): HTMLElement {
   const dot = document.createElement('span');
   dot.className = 'step-dot';
@@ -6287,6 +6361,16 @@ function renderStep(step: AgentStep): HTMLElement {
   }
 
   const hasOutput = step.output !== undefined && step.output !== '';
+  const hasCommand = step.command !== undefined && step.command !== '';
+
+  // Comando executado: o que foi rodado em cima, o que voltou embaixo. O
+  // título corta na primeira linha porque precisa caber numa, e um
+  // `cd "…/worktrees/…" && npm run x` truncado esconde justamente o que
+  // interessa — ver o comando inteiro não pode depender de abrir o passo.
+  if (hasCommand) {
+    return commandStep(step, dot, tool, detail);
+  }
+
   if (!hasOutput) {
     const item = document.createElement('div');
     item.className = `step step-tool-item step-row status-${step.status}`;
@@ -6321,29 +6405,7 @@ function renderStep(step: AgentStep): HTMLElement {
   item.append(output);
 
   if (step.truncated === true) {
-    const note = document.createElement('div');
-    note.className = 'step-truncated';
-    note.textContent = sf(
-      'Showing the first {0} KB.',
-      Math.round(MAX_STEP_OUTPUT_CHARS / 1024),
-    );
-
-    // O botão só aparece quando a cópia integral existe de fato. Oferecer uma
-    // aba que abriria vazia seria pior do que não oferecer nada.
-    if (step.fullOutput === true) {
-      const open = document.createElement('button');
-      open.type = 'button';
-      open.className = 'link';
-      open.textContent = s('Open full output');
-      open.addEventListener('click', () =>
-        post({
-          type: 'chat.openStepOutput',
-          payload: { stepId: step.id, label: `${step.tool}-${step.title}` },
-        }),
-      );
-      note.append(' ', open);
-    }
-    item.append(note);
+    item.append(truncationNote(step));
   }
   return item;
 }

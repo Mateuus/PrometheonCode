@@ -424,7 +424,7 @@ function translateItem(raw: unknown, completed: boolean): readonly AgentEvent[] 
             toolId: id,
             tool: 'Bash',
             title: firstLine(command),
-            ...(command === '' ? {} : { detail: command }),
+            ...(command === '' ? {} : { command }),
           },
         ];
       }

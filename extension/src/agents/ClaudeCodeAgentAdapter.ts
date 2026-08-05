@@ -568,6 +568,7 @@ function* fromContentPart(part: unknown): Generator<AgentEvent> {
     const input = (block['input'] ?? {}) as Record<string, unknown>;
     const detail = describeDetail(input);
     const edit = describeEdit(input);
+    const command = input['command'];
 
     yield {
       type: 'tool.requested',
@@ -576,6 +577,7 @@ function* fromContentPart(part: unknown): Generator<AgentEvent> {
       title: describeTarget(name, input),
       ...(detail === null ? {} : { detail }),
       ...(edit === null ? {} : { edit }),
+      ...(typeof command === 'string' && command !== '' ? { command } : {}),
     };
   }
 }

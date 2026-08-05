@@ -1109,6 +1109,33 @@ details.step[open] > summary .step-caret {
   font-size: 0.85em;
 }
 
+/* Comando executado: o comando num bloco, o resultado em outro. Os dois ficam
+   abertos — comando e saída são duas coisas para ler, e esconder uma delas
+   atrás de um clique é o que fazia a timeline virar uma lista de nomes. */
+.step-command {
+  margin: 4px 0;
+}
+
+.step-command-line {
+  margin: 3px 0 0;
+  padding: 6px 8px;
+  border-radius: var(--am-radius);
+  background: var(--prom-surface);
+  border: 1px solid var(--prom-border);
+  border-left: 2px solid var(--prom-accent-soft);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.94em;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.step-command-output {
+  margin-top: 0;
+}
+
 .step-truncated .link {
   padding: 0;
   border: 0;

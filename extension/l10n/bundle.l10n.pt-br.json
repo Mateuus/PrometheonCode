@@ -103,6 +103,8 @@
   "{0} skills could not be read": "{0} skills não puderam ser lidas",
   "{0} today · {1} total · {2} runs": "{0} hoje · {1} no total · {2} execuções",
   "{0} tool output": "Saída da ferramenta {0}",
+  "Output": "Saída",
+  "Output ({0} lines)": "Saída ({0} linhas)",
   "{0} tool output ({1} lines)": "Saída da ferramenta {0} ({1} linhas)",
   "~{0} tokens": "~{0} tokens",
   "1 day ago": "há 1 dia",
@@ -555,6 +557,7 @@
   "Discard this message": "Descartar esta mensagem",
   "Send now": "Enviar agora",
   "Interrupt the current run and send what is waiting": "Interromper o trabalho atual e enviar o que está esperando",
-  "Running as {0}, not {1}: the agent profile or a loaded skill caps it there.": "Rodando como {0}, e não {1}: o perfil do agente ou uma skill carregada limita aí.",
+  "Running as {0}, not {1}: the skill \"{2}\" caps it there.": "Rodando como {0}, e não {1}: a skill \"{2}\" limita aí.",
+  "Running as {0}, not {1}: the autonomy of the agent \"{2}\" caps it there.": "Rodando como {0}, e não {1}: a autonomia do agente \"{2}\" limita aí.",
   "{0} removed, {1} added": "{0} removidas, {1} adicionadas"
 }

@@ -11,7 +11,7 @@ import { describeAgentFailure } from '../agents/failures';
 import { DEFAULT_MAIN_AGENT_ID } from '../agents/builtinAgents';
 import type { StartAgentInput } from '../agents/AgentAdapter';
 import type { AgentRoleService } from '../agents/AgentRoleService';
-import { buildSkillIndex, effectiveAutonomy, selectSkills } from '../skills/SkillIndexBuilder';
+import { buildSkillIndex, selectSkills } from '../skills/SkillIndexBuilder';
 import type { SkillRegistry } from '../skills/SkillRegistry';
 import {
   answerValues,
@@ -92,6 +92,7 @@ import {
   WORK_MODE_LABELS,
   type ActiveAgentStatus,
   type ActiveAgentSummary,
+  type AgentAutonomyMode,
   type WorkerMessage,
   type AgentSummary,
   type Autonomy,
@@ -719,15 +720,25 @@ export class PrometheonCore implements vscode.Disposable {
       // A escolha do painel pode ser rebaixada pelo teto do perfil ou de uma
       // skill carregada. Em silêncio isso vira mistério: a barra diz "bypass
       // ativo" e o agente recusa comandos, sem relação visível entre as duas.
-      const effective = this.effectiveAutonomyForRun();
-      if (effective !== this.autonomy) {
+      const cap = this.autonomyCapFor(this.mainAgentProfile);
+      const effective = cap.autonomy;
+      if (cap.cappedBy !== null) {
         this.deps.bus.emit('notification', {
           level: 'warning',
-          message: t(
-            'Running as {0}, not {1}: the agent profile or a loaded skill caps it there.',
-            AUTONOMY_LABELS[effective],
-            AUTONOMY_LABELS[this.autonomy],
-          ),
+          message:
+            cap.cappedBy.kind === 'skill'
+              ? t(
+                  'Running as {0}, not {1}: the skill "{2}" caps it there.',
+                  AUTONOMY_LABELS[effective],
+                  AUTONOMY_LABELS[this.autonomy],
+                  cap.cappedBy.name,
+                )
+              : t(
+                  'Running as {0}, not {1}: the autonomy of the agent "{2}" caps it there.',
+                  AUTONOMY_LABELS[effective],
+                  AUTONOMY_LABELS[this.autonomy],
+                  cap.cappedBy.name,
+                ),
         });
       }
       // Sem esta linha, a orquestração falha muda: o agente responde sozinho e
@@ -2127,6 +2138,7 @@ ${report ?? ''}`
             title: event.title,
             ...(event.detail === undefined ? {} : { detail: event.detail }),
             ...(event.edit === undefined ? {} : { edit: event.edit }),
+            ...(event.command === undefined ? {} : { command: event.command }),
             status: 'running',
             startedAt: Date.now(),
           });
@@ -2143,6 +2155,7 @@ ${report ?? ''}`
             title: started?.title ?? '',
             ...(detail === undefined ? {} : { detail }),
             ...(started?.edit === undefined ? {} : { edit: started.edit }),
+            ...(started?.command === undefined ? {} : { command: started.command }),
             ...(output === null
               ? {}
               : {
@@ -2499,6 +2512,7 @@ ${report ?? ''}`
             // "Edit OrigemZAgent.cs" trinta vezes seguidas não diz o que ele
             // escreveu no arquivo — e ninguém revisa uma lista de nomes.
             ...(event.edit === undefined ? {} : { edit: event.edit }),
+            ...(event.command === undefined ? {} : { command: event.command }),
             status: 'running',
             startedAt: Date.now(),
           });
@@ -2516,6 +2530,7 @@ ${report ?? ''}`
             ...(detail === undefined ? {} : { detail }),
             // O diff veio no início; a conclusão só confirma que terminou.
             ...(started?.edit === undefined ? {} : { edit: started.edit }),
+            ...(started?.command === undefined ? {} : { command: started.command }),
             ...(output === null
               ? {}
               : {
@@ -2880,8 +2895,23 @@ ${report ?? ''}`
    * escolheu no painel — que é o controle que ela enxerga.
    */
   private autonomyFor(summary: AgentProfileSummary | undefined): Autonomy {
+    return this.autonomyCapFor(summary).autonomy;
+  }
+
+  /**
+   * A autonomia do run e, quando ela ficou abaixo do escolhido, quem a segurou.
+   *
+   * Saber **quem** é a diferença entre um aviso e um recado inútil: "o perfil
+   * ou uma skill limita aí" manda a pessoa procurar entre dezenas de arquivos
+   * qual deles foi, e o mais comum é ela desistir e achar que o botão de bypass
+   * está quebrado.
+   */
+  private autonomyCapFor(summary: AgentProfileSummary | undefined): {
+    autonomy: Autonomy;
+    cappedBy: { kind: 'skill' | 'profile'; name: string } | null;
+  } {
     if (summary === undefined) {
-      return this.autonomy;
+      return { autonomy: this.autonomy, cappedBy: null };
     }
     // Delegar só existe no modo de equipe; fora dele o índice não anuncia o que
     // este run não tem como entregar a ninguém.
@@ -2891,13 +2921,35 @@ ${report ?? ''}`
       this.skillCatalog.skills,
       this.workMode === 'agent-team',
     );
-    const fromProfile = effectiveAutonomy(summary.profile, selection.loadable);
+
+    const modes: readonly AgentAutonomyMode[] = ['manual', 'auto', 'bypass-temporary'];
+    let index = modes.indexOf(summary.profile.autonomyMode);
+    let skill: string | null = null;
+    for (const loaded of selection.loadable) {
+      const at = modes.indexOf(loaded.autonomyCeiling);
+      if (at !== -1 && at < index) {
+        index = at;
+        skill = loaded.name;
+      }
+    }
+    const fromProfile = modes[Math.max(index, 0)] ?? 'manual';
     const ceiling: Autonomy = fromProfile === 'bypass-temporary' ? 'bypass' : fromProfile;
 
     const order: readonly Autonomy[] = ['manual', 'auto', 'bypass'];
     const chosen = order.indexOf(this.autonomy);
     const allowed = order.indexOf(ceiling);
-    return order[Math.min(chosen === -1 ? 0 : chosen, allowed === -1 ? 0 : allowed)] ?? 'manual';
+    const autonomy =
+      order[Math.min(chosen === -1 ? 0 : chosen, allowed === -1 ? 0 : allowed)] ?? 'manual';
+
+    return {
+      autonomy,
+      cappedBy:
+        autonomy === this.autonomy
+          ? null
+          : skill === null
+            ? { kind: 'profile', name: summary.profile.name }
+            : { kind: 'skill', name: skill },
+    };
   }
 
   /**

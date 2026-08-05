@@ -336,10 +336,6 @@ export class SkillRegistry {
 
     const extension = prometheonMetadata(frontmatter);
     const risk = isRecord(extension['risk']) ? extension['risk'] : {};
-    // Uma skill que manipula segredo nunca roda sozinha, diga o que disser o
-    // `autonomy_ceiling` — a regra de segredos do repositório vem antes.
-    const handlesSecrets = risk['handles_secrets'] === true;
-    const declaredCeiling = oneOf(extension['autonomy_ceiling'], AGENT_AUTONOMY_MODES);
     const platforms = stringList(frontmatter['platforms']);
 
     return {
@@ -354,13 +350,35 @@ export class SkillRegistry {
       author: text(frontmatter['author']),
       platforms,
       requiresMcp: stringList(isRecord(extension['mcp']) ? extension['mcp']['requires'] : []),
-      autonomyCeiling: handlesSecrets ? 'manual' : (declaredCeiling ?? 'auto'),
+      autonomyCeiling: ceilingOf(extension),
       bodyTokensEstimate: estimateTokens(body),
       supportFiles: await this.listSupportFiles(vscode.Uri.joinPath(file, '..')),
       path: file.fsPath,
       supported: platforms.length === 0 || platforms.includes(currentPlatform()),
     };
   }
+}
+
+/**
+ * O teto de autonomia declarado no bloco `prometheon` de uma skill.
+ *
+ * Sem declaração, o teto é o mais alto: a skill não tem opinião sobre
+ * autonomia, e o silêncio dela não pode valer por uma. O padrão era `auto`, e
+ * como o que vale é o teto mais apertado entre o perfil e as skills carregadas,
+ * **qualquer** skill anexada rebaixava para `auto` um agente que a pessoa tinha
+ * posto em bypass de propósito, confirmando um aviso — sem nada na tela ligando
+ * a queda à skill. Restringir é o que uma skill faz quando **diz** que
+ * restringe.
+ *
+ * `handles_secrets` continua vindo antes de tudo: skill que mexe com segredo
+ * não roda sozinha, diga o que disser o `autonomy_ceiling`.
+ */
+export function ceilingOf(metadata: Record<string, unknown>): AgentAutonomyMode {
+  const risk = isRecord(metadata['risk']) ? metadata['risk'] : {};
+  if (risk['handles_secrets'] === true) {
+    return 'manual';
+  }
+  return oneOf(metadata['autonomy_ceiling'], AGENT_AUTONOMY_MODES) ?? 'bypass-temporary';
 }
 
 /** `metadata.prometheon`, com `metadata.hermes` aceito na leitura de importados. */

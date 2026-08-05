@@ -111,6 +111,15 @@ export type AgentEvent =
        * comparar de memória.
        */
       readonly edit?: { readonly removed?: string; readonly added?: string };
+      /**
+       * A linha de comando inteira, quando a ferramenta executa uma.
+       *
+       * O título mostra só o começo, porque precisa caber numa linha — e um
+       * `cd "F:/…/worktrees/…" && npm run x` cortado no meio esconde justamente
+       * a parte que diz o que foi rodado. O comando completo fica aqui, e a
+       * interface o mostra acima do resultado.
+       */
+      readonly command?: string;
     }
   /** Ferramenta terminou. `detail` substitui o que veio no início, quando dado. */
   | {

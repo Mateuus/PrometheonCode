@@ -647,6 +647,8 @@ export const WEBVIEW_STRINGS = {
   'agents.bundleWorking': '{0} working',
 
   // Saída das ferramentas no chat
+  'step.commandOutput': 'Output',
+  'step.commandOutputLines': 'Output ({0} lines)',
   'step.output': '{0} tool output',
   'step.outputLines': '{0} tool output ({1} lines)',
   'step.outputTruncated': 'Showing the first {0} KB.',
