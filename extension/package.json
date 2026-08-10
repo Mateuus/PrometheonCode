@@ -293,7 +293,7 @@
     "eslint": "^9.39.0",
     "jsdom": "^30.0.1",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.46.4"
+    "typescript-eslint": "^8.66.0"
   },
   "l10n": "./l10n"
 }
