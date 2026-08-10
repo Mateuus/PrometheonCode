@@ -40,7 +40,7 @@ jobs:
           cache-dependency-path: extension/package-lock.json
 
       - name: Inicializar CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           # security-extended cobre mais padrões de injeção e de fluxo de dados.
@@ -60,6 +60,6 @@ jobs:
         run: npm run compile
 
       - name: Analisar
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: /language:${{ matrix.language }}
